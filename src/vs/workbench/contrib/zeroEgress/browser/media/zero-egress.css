@@ -1,0 +1,184 @@
+/*--------------------------------------------------------------------------------------
+ *  Copyright 2025 Glass Devtools, Inc. All rights reserved.
+ *  Licensed under the Apache License, Version 2.0. See LICENSE.txt for more information.
+ *--------------------------------------------------------------------------------------*/
+
+.monaco-editor .ze-sweepIdxBG {
+	background-color: var(--vscode-zeroEgress-sweepIdxBG);
+}
+
+.ze-sweepBG {
+	background-color: var(--vscode-zeroEgress-sweepBG);
+}
+
+.ze-highlightBG {
+	background-color: var(--vscode-zeroEgress-highlightBG);
+}
+
+.ze-greenBG {
+	background-color: var(--vscode-zeroEgress-greenBG);
+}
+
+.ze-redBG {
+	background-color: var(--vscode-zeroEgress-redBG);
+}
+
+
+/* Renamed from ze-watermark-button to ze-openfolder-button */
+.ze-openfolder-button {
+    padding: 8px 20px;
+    background-color: #34d399;
+    color: #111827;
+    border: none;
+    border-radius: 4px;
+    outline: none !important;
+	box-shadow: none !important;
+	cursor: pointer;
+	transition: background-color 0.2s ease;
+}
+.ze-openfolder-button:hover {
+    background-color: #10b981;
+}
+.ze-openfolder-button:active {
+    background-color: #059669;
+}
+
+.ze-settings-watermark-button {
+	margin: 8px 0;
+	padding: 8px 20px;
+	background-color: var(--vscode-input-background);
+	color: var(--vscode-input-foreground);
+	border: none;
+	border-radius: 4px;
+	outline: none !important;
+	box-shadow: none !important;
+	cursor: pointer;
+	transition: all 0.2s ease;
+}
+
+.ze-settings-watermark-button:hover {
+	filter: brightness(1.1);
+}
+
+.ze-settings-watermark-button:active {
+	filter: brightness(1.1);
+}
+
+.ze-link {
+	color: #3b82f6;
+	cursor: pointer;
+	transition: all 0.2s ease;
+}
+
+.ze-link:hover {
+	opacity: 80%;
+}
+
+/* styles for all ZeroEgress containers */
+.ze-scope {
+	--scrollbar-vertical-width: 8px;
+	--scrollbar-horizontal-height: 6px;
+}
+
+/* Target both ze-scope and all its descendants with scrollbars */
+.ze-scope,
+.ze-scope * {
+	scrollbar-width: thin !important;
+	scrollbar-color: var(--ze-bg-1) var(--ze-bg-3) !important;
+	/* For Firefox */
+}
+
+.ze-scope::-webkit-scrollbar,
+.ze-scope *::-webkit-scrollbar {
+	width: var(--scrollbar-vertical-width) !important;
+	height: var(--scrollbar-horizontal-height) !important;
+	background-color: var(--ze-bg-3) !important;
+}
+
+.ze-scope::-webkit-scrollbar-thumb,
+.ze-scope *::-webkit-scrollbar-thumb {
+	background-color: var(--ze-bg-1) !important;
+	border-radius: 4px !important;
+	border: none !important;
+	-webkit-box-shadow: none !important;
+	box-shadow: none !important;
+}
+
+.ze-scope::-webkit-scrollbar-thumb:hover,
+.ze-scope *::-webkit-scrollbar-thumb:hover {
+	background-color: var(--ze-bg-1) !important;
+	filter: brightness(1.1) !important;
+}
+
+.ze-scope::-webkit-scrollbar-thumb:active,
+.ze-scope *::-webkit-scrollbar-thumb:active {
+	background-color: var(--ze-bg-1) !important;
+	filter: brightness(1.2) !important;
+}
+
+.ze-scope::-webkit-scrollbar-track,
+.ze-scope *::-webkit-scrollbar-track {
+	background-color: var(--ze-bg-3) !important;
+	border: none !important;
+}
+
+.ze-scope::-webkit-scrollbar-corner,
+.ze-scope *::-webkit-scrollbar-corner {
+	background-color: var(--ze-bg-3) !important;
+}
+
+/* Add ze-scrollable-element styles to match */
+.ze-scrollable-element {
+	background-color: var(--vscode-editor-background);
+	--scrollbar-vertical-width: 14px;
+	--scrollbar-horizontal-height: 6px;
+	overflow: auto;
+	/* Ensure scrollbars are shown when needed */
+}
+
+.ze-scrollable-element,
+.ze-scrollable-element * {
+	scrollbar-width: thin !important;
+	/* For Firefox */
+	scrollbar-color: var(--ze-bg-1) var(--ze-bg-3) !important;
+	/* For Firefox */
+}
+
+.ze-scrollable-element::-webkit-scrollbar,
+.ze-scrollable-element *::-webkit-scrollbar {
+	width: var(--scrollbar-vertical-width) !important;
+	height: var(--scrollbar-horizontal-height) !important;
+	background-color: var(--ze-bg-3) !important;
+}
+
+.ze-scrollable-element::-webkit-scrollbar-thumb,
+.ze-scrollable-element *::-webkit-scrollbar-thumb {
+	background-color: var(--ze-bg-1) !important;
+	border-radius: 4px !important;
+	border: none !important;
+	-webkit-box-shadow: none !important;
+	box-shadow: none !important;
+}
+
+.ze-scrollable-element::-webkit-scrollbar-thumb:hover,
+.ze-scrollable-element *::-webkit-scrollbar-thumb:hover {
+	background-color: var(--ze-bg-1) !important;
+	filter: brightness(1.1) !important;
+}
+
+.ze-scrollable-element::-webkit-scrollbar-thumb:active,
+.ze-scrollable-element *::-webkit-scrollbar-thumb:active {
+	background-color: var(--ze-bg-1) !important;
+	filter: brightness(1.2) !important;
+}
+
+.ze-scrollable-element::-webkit-scrollbar-track,
+.ze-scrollable-element *::-webkit-scrollbar-track {
+	background-color: var(--ze-bg-3) !important;
+	border: none !important;
+}
+
+.ze-scrollable-element::-webkit-scrollbar-corner,
+.ze-scrollable-element *::-webkit-scrollbar-corner {
+	background-color: var(--ze-bg-3) !important;
+}

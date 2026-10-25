@@ -1,0 +1,41 @@
+# Reviewed exceptions for check-brand.sh. Entries must not contain brand words in plain text.
+#   <path>               exempt that whole file (or path) from all checks
+#   <path>:<base64 ERE>  ignore matches of that regex on lines of that file
+# Every entry below is an upstream (VS Code / vendored / grammar / test-fixture) false positive.
+
+# upstream TypeScript checker used as a colorizer perf fixture: compiler identifiers (void expressions, loop labels)
+extensions/vscode-colorize-perf-tests/test/colorize-fixtures/test-checker.ts
+# upstream URI perf data: lib.dom identifiers and file names containing the word void
+src/vs/base/test/node/uri.perf.data.txt
+# upstream Apple API names in the C++ grammar (e.g. animation loop count)
+extensions/cpp/syntaxes/platform.tmLanguage.json:Xkxvb3BbQS1aYS16XSok
+# upstream Cocoa constant names in the Objective-C grammars
+extensions/objective-c/syntaxes/objective-c.tmLanguage.json:XihMb29wRXJyb3J8Vm9pZFR5cGUpJA==
+extensions/objective-c/syntaxes/objective-c++.tmLanguage.json:XihMb29wRXJyb3J8Vm9pZFR5cGUpJA==
+# upstream HTML empty-element (self-closing tag) rules in the Razor grammar
+extensions/razor/syntaxes/cshtml.tmLanguage.json:XnZvaWQtdCQ=
+# upstream for-loop snippet names and descriptions
+extensions/javascript/snippets/javascript.code-snippets:Xkxvb3Ak
+extensions/typescript-basics/snippets/typescript.code-snippets:Xkxvb3Ak
+extensions/vb/snippets/vb.code-snippets:Xkxvb3Ak
+# upstream VB keyword / PHP SPL class names in grammars and colorizer fixtures
+extensions/vb/syntaxes/asp-vb-net.tmLanguage.json:Xkxvb3Ak
+extensions/php/syntaxes/php.tmLanguage.json:Xkxvb3Ak
+extensions/vscode-colorize-tests/test/colorize-fixtures/test.vb:Xkxvb3Ak
+extensions/vscode-colorize-tests/test/colorize-results/test_vb.json:Xkxvb3Ak
+# upstream media-preview setting label (video looping)
+extensions/media-preview/package.nls.json:Xkxvb3Ak
+# vendored marked parser: doc comment on its parse loop
+src/vs/base/common/marked/marked.d.ts:Xkxvb3Ak
+src/vs/base/common/marked/marked.js:Xkxvb3Ak
+# upstream filter perf data: lib.dom identifiers
+src/vs/base/test/common/filters.perf.data.js:XihMT09QX1tBLVpdK3xWb2lkRnVuY3Rpb24pJA==
+# upstream comments/strings using the English word (loop over/through/backwards, read-eval-print loop)
+src/vs/base/node/cpuUsage.sh:Xkxvb3Ak
+src/vs/editor/browser/viewParts/minimap/minimap.ts:Xkxvb3Ak
+src/vs/workbench/api/browser/mainThreadEditorTabs.ts:Xkxvb3Ak
+src/vs/workbench/api/common/extHostTelemetry.ts:Xkxvb3Ak
+src/vs/workbench/contrib/debug/browser/replAccessibilityHelp.ts:Xkxvb3Ak
+src/vs/workbench/contrib/notebook/browser/view/notebookCellListView.ts:Xkxvb3Ak
+src/vs/workbench/services/textMate/common/TMHelper.ts:Xkxvb3Ak
+src/vs/workbench/services/views/browser/viewDescriptorService.ts:Xkxvb3Ak

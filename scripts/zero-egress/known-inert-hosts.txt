@@ -1,0 +1,9 @@
+# Known-inert bundled hosts.
+#
+# These host strings legitimately remain in the packaged app but are never
+# contacted, so a denied-host hit against one of them is downgraded to an
+# informational "KNOWN-INERT (allowed)" line instead of failing the audit.
+# See EGRESS.md for the one-line reason each is inert.
+api.openai.com
+dc.services.visualstudio.com
+mobile.events.data.microsoft.com

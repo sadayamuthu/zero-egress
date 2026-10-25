@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=ZeroEgress - URL Handler
+Comment=Open source AI code editor.
+GenericName=Text Editor
+Exec=zero-egress --open-url %U
+Icon=zero-egress
+Type=Application
+NoDisplay=true
+StartupNotify=true
+Categories=Utility;TextEditor;Development;IDE;
+MimeType=x-scheme-handler/zero-egress;
+Keywords=zero-egress;
