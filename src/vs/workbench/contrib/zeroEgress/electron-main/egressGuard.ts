@@ -10,7 +10,8 @@
 import { createRequire } from 'node:module';
 import { Emitter, Event } from '../../../../base/common/event.js';
 import { Disposable, IDisposable } from '../../../../base/common/lifecycle.js';
-import { BlockedAttempt, EgressSource, IEgressGuardService } from '../common/egressGuardService.js';
+import { IServerChannel } from '../../../../base/parts/ipc/common/ipc.js';
+import { BlockedAttempt, EgressSource } from '../common/egressGuardService.js';
 import { collectEgressTargets, EgressTarget, isAllowed } from '../common/egressPolicy.js';
 import { installEgressNodeHooks } from '../node/egressNodeHooks.js';
 
@@ -18,9 +19,14 @@ const require = createRequire(import.meta.url);
 
 const MAX_RECENT_BLOCKED = 100;
 
+/** Client key used when electron-main itself sets the 'settings' source. */
+const MAIN_CLIENT = 'main';
+
 export class EgressGuard extends Disposable {
 
-	private readonly urls: Record<EgressSource, readonly string[]> = { settings: [], mcp: [], audit: [] };
+	/** 'settings' is per client (window): every window holds its own copy of the settings state. */
+	private readonly settingsByClient = new Map<string, readonly string[]>();
+	private readonly urls: Record<Exclude<EgressSource, 'settings'>, readonly string[]> = { mcp: [], audit: [] };
 	private _targets: EgressTarget[] = [];
 	private readonly _recentBlocked: BlockedAttempt[] = [];
 
@@ -36,9 +42,30 @@ export class EgressGuard extends Disposable {
 
 	/** Replaces this source's list; other sources are untouched. */
 	setTargets(source: EgressSource, urls: readonly string[]): void {
-		this.urls[source] = [...urls];
+		if (source === 'settings') {
+			this.setSettingsTargets(MAIN_CLIENT, urls);
+		} else {
+			this.urls[source] = [...urls];
+			this.update();
+		}
+	}
+
+	/** Replaces one client's 'settings' list. The effective 'settings' list is the union over clients. */
+	setSettingsTargets(client: string, urls: readonly string[]): void {
+		this.settingsByClient.set(client, [...urls]);
+		this.update();
+	}
+
+	/** Drops a client's 'settings' list (its window closed or reloaded). */
+	removeSettingsClient(client: string): void {
+		if (this.settingsByClient.delete(client)) {
+			this.update();
+		}
+	}
+
+	private update(): void {
 		this._targets = collectEgressTargets({
-			providerEndpoints: this.urls.settings,
+			providerEndpoints: [...this.settingsByClient.values()].flat(),
 			mcpServerUrls: this.urls.mcp,
 			auditCollectorUrl: this.urls.audit[0],
 		});
@@ -54,7 +81,7 @@ export class EgressGuard extends Disposable {
 		return false;
 	}
 
-	/** Records a block decided elsewhere (the extension host enforces with its own copy of the targets). */
+	/** Records a block decided elsewhere (extension host, shared process). */
 	reportBlocked(url: string, origin: BlockedAttempt['origin']): void {
 		const attempt: BlockedAttempt = { url, origin, time: Date.now() };
 		this._recentBlocked.push(attempt);
@@ -70,40 +97,46 @@ export class EgressGuard extends Disposable {
 			http: require('http'),
 			https: require('https'),
 			net: require('net'),
-			tls: require('tls'),
 		});
 	}
 }
 
-/** The guard as seen over IPC by renderers. Only the 'settings' source may be set from there. */
-export class EgressGuardMainService extends Disposable implements IEgressGuardService {
-	declare readonly _serviceBrand: undefined;
+/**
+ * The 'zero-egress-channel-egress' channel (renderer side: IEgressGuardService). Hand-written rather than
+ * ProxyChannel.fromService so 'settings' can be keyed by the calling window (`ctx`).
+ * - `canSetSettings`: windows may set 'settings' (their own entry only); nothing may set 'mcp' or 'audit'.
+ * - `reportOrigin`: the origin recorded for reportBlocked from this channel's clients.
+ */
+export class EgressGuardChannel implements IServerChannel<string> {
 
-	readonly onDidBlock: Event<BlockedAttempt>;
-	readonly onDidChangeTargets: Event<EgressTarget[]>;
+	constructor(
+		private readonly guard: EgressGuard,
+		private readonly options: { readonly canSetSettings: boolean; readonly reportOrigin: BlockedAttempt['origin'] },
+	) { }
 
-	constructor(private readonly guard: EgressGuard) {
-		super();
-		this.onDidBlock = guard.onDidBlock;
-		this.onDidChangeTargets = guard.onDidChangeTargets;
-	}
-
-	async setTargets(source: 'settings', urls: string[]): Promise<void> {
-		if (source !== 'settings') {
-			throw new Error(`ZeroEgress: egress source '${source}' cannot be set from a renderer`);
+	listen(_ctx: string, event: string): Event<any> {
+		switch (event) {
+			case 'onDidBlock': return this.guard.onDidBlock;
+			case 'onDidChangeTargets': return this.guard.onDidChangeTargets;
 		}
-		this.guard.setTargets('settings', urls.filter(u => typeof u === 'string'));
+		throw new Error(`Event not found: ${event}`);
 	}
 
-	async getTargets(): Promise<EgressTarget[]> {
-		return this.guard.targets;
-	}
-
-	async reportBlocked(url: string): Promise<void> {
-		this.guard.reportBlocked(url, 'extensionHost');
-	}
-
-	async getRecentBlocked(): Promise<BlockedAttempt[]> {
-		return [...this.guard.recentBlocked];
+	async call(ctx: string, command: string, arg?: any): Promise<any> {
+		const args: unknown[] = Array.isArray(arg) ? arg : [];
+		switch (command) {
+			case 'setTargets': {
+				const [source, urls] = args;
+				if (!this.options.canSetSettings || source !== 'settings') {
+					throw new Error(`ZeroEgress: egress source '${String(source)}' cannot be set over IPC`);
+				}
+				this.guard.setSettingsTargets(ctx, Array.isArray(urls) ? urls.filter((u): u is string => typeof u === 'string') : []);
+				return;
+			}
+			case 'getTargets': return this.guard.targets;
+			case 'reportBlocked': this.guard.reportBlocked(String(args[0]), this.options.reportOrigin); return;
+			case 'getRecentBlocked': return [...this.guard.recentBlocked];
+		}
+		throw new Error(`Call not found: ${command}`);
 	}
 }

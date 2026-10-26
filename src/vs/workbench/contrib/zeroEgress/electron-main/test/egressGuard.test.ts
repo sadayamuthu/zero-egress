@@ -8,10 +8,10 @@ import * as http from 'http';
 import * as https from 'https';
 import * as net from 'net';
 import * as tls from 'tls';
-import { DisposableStore } from '../../../../../base/common/lifecycle.js';
+import { Event } from '../../../../../base/common/event.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { BlockedAttempt } from '../../common/egressGuardService.js';
-import { EgressGuard, EgressGuardMainService } from '../egressGuard.js';
+import { EgressGuard, EgressGuardChannel } from '../egressGuard.js';
 
 const blockedMessage = (hostPort: string) => `ZeroEgress blocked connection to ${hostPort} (not a configured server)`;
 
@@ -79,7 +79,7 @@ suite('EgressGuard', () => {
 	test('node hooks', async () => {
 		const guard = createGuard();
 		const realFetch = globalThis.fetch;
-		const originals = [http.request, http.get, https.request, https.get, net.connect, net.createConnection, tls.connect];
+		const originals = [http.request, http.get, https.request, https.get, net.Socket.prototype.connect];
 		const stubCalls: string[] = [];
 		const stub = (async (input: string | URL | Request) => { stubCalls.push(String(input)); return new Response('ok'); }) as typeof fetch;
 		globalThis.fetch = stub;
@@ -107,7 +107,7 @@ suite('EgressGuard', () => {
 				hooks.dispose();
 			}
 			assert.strictEqual(globalThis.fetch, stub);
-			assert.deepStrictEqual([http.request, http.get, https.request, https.get, net.connect, net.createConnection, tls.connect], originals);
+			assert.deepStrictEqual([http.request, http.get, https.request, https.get, net.Socket.prototype.connect], originals);
 		} finally {
 			globalThis.fetch = realFetch;
 		}
@@ -129,26 +129,53 @@ suite('EgressGuard', () => {
 		}
 	});
 
-	suite('EgressGuardMainService', () => {
-		test('renderer may only set settings targets', async () => {
+	suite('EgressGuardChannel', () => {
+		const windows = { canSetSettings: true, reportOrigin: 'extensionHost' } as const;
+		const fmt = (guard: EgressGuard) => guard.targets.map(x => `${x.host}:${x.port}`);
+
+		test('settings are kept per window; the allow-list is their union', async () => {
 			const guard = createGuard();
-			const service = store.add(new EgressGuardMainService(guard));
-			await service.setTargets('settings', ['http://10.0.0.5:8000']);
+			const channel = new EgressGuardChannel(guard, windows);
+			await channel.call('window:1', 'setTargets', ['settings', ['http://10.0.0.5:8000']]);
+			await channel.call('window:2', 'setTargets', ['settings', ['http://10.0.0.7:8000']]);
+			assert.deepStrictEqual(fmt(guard), ['10.0.0.5:8000', '10.0.0.7:8000']);
+			// a stale window re-sending its own list does not drop the other window's endpoint
+			await channel.call('window:2', 'setTargets', ['settings', ['http://10.0.0.7:8000']]);
 			assert.strictEqual(guard.check('http://10.0.0.5:8000/'), true);
-			await assert.rejects(service.setTargets('mcp' as 'settings', ['http://evil.example:80']));
-			assert.strictEqual(guard.check('http://evil.example/'), false);
+			// a window replacing its list removes its old endpoint
+			await channel.call('window:1', 'setTargets', ['settings', []]);
+			assert.deepStrictEqual(fmt(guard), ['10.0.0.7:8000']);
 		});
 
-		test('extension host reports are recorded with their origin', async () => {
+		test('a closed window\'s settings are dropped', async () => {
 			const guard = createGuard();
-			const service = store.add(new EgressGuardMainService(guard));
+			const channel = new EgressGuardChannel(guard, windows);
+			await channel.call('window:1', 'setTargets', ['settings', ['http://10.0.0.5:8000']]);
+			await channel.call('window:2', 'setTargets', ['settings', ['http://10.0.0.5:8000', 'http://gpubox:8000']]);
+			guard.removeSettingsClient('window:2');
+			assert.deepStrictEqual(fmt(guard), ['10.0.0.5:8000']);
+			guard.removeSettingsClient('window:1');
+			assert.strictEqual(guard.check('http://10.0.0.5:8000/'), false);
+		});
+
+		test('only settings may be set, and only where allowed', async () => {
+			const guard = createGuard();
+			await assert.rejects(new EgressGuardChannel(guard, windows).call('window:1', 'setTargets', ['mcp', ['http://evil.example:80']]));
+			await assert.rejects(new EgressGuardChannel(guard, { canSetSettings: false, reportOrigin: 'sharedProcess' }).call('main', 'setTargets', ['settings', ['http://evil.example:80']]));
+			assert.strictEqual(guard.check('http://evil.example/'), false);
+			await new EgressGuardChannel(guard, windows).call('window:1', 'setTargets', ['settings', ['http://10.0.0.5:8000', 42]]);
+			assert.deepStrictEqual(fmt(guard), ['10.0.0.5:8000']);
+		});
+
+		test('reports are recorded with the channel origin, and buffered', async () => {
+			const guard = createGuard();
 			const seen: BlockedAttempt[] = [];
-			const listeners = new DisposableStore();
-			listeners.add(service.onDidBlock(e => seen.push(e)));
-			await service.reportBlocked('https://example.com/');
-			assert.deepStrictEqual(seen.map(e => [e.url, e.origin]), [['https://example.com/', 'extensionHost']]);
-			assert.deepStrictEqual((await service.getRecentBlocked()).map(e => e.url), ['https://example.com/']);
-			listeners.dispose();
+			store.add((new EgressGuardChannel(guard, windows).listen('window:1', 'onDidBlock') as Event<BlockedAttempt>)(e => seen.push(e)));
+			await new EgressGuardChannel(guard, windows).call('window:1', 'reportBlocked', ['https://example.com/']);
+			await new EgressGuardChannel(guard, { canSetSettings: false, reportOrigin: 'sharedProcess' }).call('main', 'reportBlocked', ['https://marketplace.example/']);
+			assert.deepStrictEqual(seen.map(e => [e.url, e.origin]), [['https://example.com/', 'extensionHost'], ['https://marketplace.example/', 'sharedProcess']]);
+			const recent = await new EgressGuardChannel(guard, windows).call('window:1', 'getRecentBlocked') as BlockedAttempt[];
+			assert.deepStrictEqual(recent.map(e => e.url), ['https://example.com/', 'https://marketplace.example/']);
 		});
 	});
 });

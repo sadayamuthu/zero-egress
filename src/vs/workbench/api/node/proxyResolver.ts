@@ -5,10 +5,10 @@
 
 import { IExtHostWorkspaceProvider } from '../common/extHostWorkspace.js';
 import { ConfigurationInspect, ExtHostConfigProvider } from '../common/extHostConfiguration.js';
-import { ExtHostEgressGuardContext, ExtHostEgressGuardShape, MainContext, MainThreadEgressGuardShape, MainThreadTelemetryShape } from '../common/extHost.protocol.js';
+import { ExtHostEgressGuardContext, MainContext, MainThreadTelemetryShape } from '../common/extHost.protocol.js';
 import { IExtHostRpcService } from '../common/extHostRpcService.js';
-import { EgressTarget, isAllowed } from '../../contrib/zeroEgress/common/egressPolicy.js';
 import { installEgressNodeHooks } from '../../contrib/zeroEgress/node/egressNodeHooks.js';
+import { ExtHostEgressGuard } from './extHostEgressGuard.js';
 import { IExtensionHostInitData } from '../../services/extensions/common/extensionHostProtocol.js';
 import { ExtHostExtensionService } from './extHostExtensionService.js';
 import { URI } from '../../../base/common/uri.js';
@@ -31,37 +31,6 @@ const net = require('net');
 
 const systemCertificatesV2Default = false;
 const useElectronFetchDefault = false;
-
-// ZeroEgress: the extension host's copy of the egress allow-list. The renderer's MainThreadEgressGuard
-// relays it from the main-process guard; blocks are reported back there for the "ZeroEgress: Network" log.
-class ExtHostEgressGuard implements ExtHostEgressGuardShape {
-	private targets: EgressTarget[] = [];
-	private pushed = false;
-
-	constructor(private readonly mainThread: MainThreadEgressGuardShape, private readonly log: ILogService) { }
-
-	async init(): Promise<void> {
-		try {
-			const targets = await this.mainThread.$getTargets();
-			if (!this.pushed) { this.targets = targets; } // a push that raced the reply is newer
-		} catch (e) {
-			this.log.error('ZeroEgress: could not load egress targets; only loopback is reachable', e);
-		}
-	}
-
-	$setTargets(targets: EgressTarget[]): void {
-		this.pushed = true;
-		this.targets = targets;
-	}
-
-	readonly check = (url: string): boolean => {
-		if (isAllowed(url, this.targets)) {
-			return true;
-		}
-		this.mainThread.$reportBlocked(url);
-		return false;
-	};
-}
 
 export async function connectProxyResolver(
 	extHostRpc: IExtHostRpcService,
@@ -136,11 +105,12 @@ export async function connectProxyResolver(
 	const lookup = createPatchedModules(params, resolveProxyWithRequest);
 
 	// ZeroEgress: enforce on top of the proxy patches, before any extension can load http/https/net/tls.
-	// The module objects are the ones handed to extensions (see configureModuleLoading), so they get the guard too.
+	// The module objects are the ones handed to extensions (see configureModuleLoading), so they get the guard too;
+	// net.Socket.prototype.connect is the choke point under proxy-agent's own agents and sockets.
 	const egressGuard = new ExtHostEgressGuard(extHostRpc.getProxy(MainContext.MainThreadEgressGuard), extHostLogService);
 	extHostRpc.set(ExtHostEgressGuardContext, egressGuard);
 	await egressGuard.init();
-	disposables.add(installEgressNodeHooks(egressGuard.check, { global: globalThis, http, https, net, tls }));
+	disposables.add(installEgressNodeHooks(egressGuard.check, { global: globalThis, http, https, net }));
 
 	return configureModuleLoading(extensionService, lookup);
 }

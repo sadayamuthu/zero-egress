@@ -3,9 +3,11 @@
  *  Licensed under the Apache License, Version 2.0. See LICENSE.txt for more information.
  *--------------------------------------------------------------------------------------*/
 
-// Feeds the configured model endpoints to the main-process egress guard, and writes every blocked
+// Feeds this window's configured model endpoints to the main-process egress guard (main keeps one list per
+// window and allows their union, dropping a window's list when it closes), and writes every blocked
 // connection to the "ZeroEgress: Network" output channel (host and caller; never the path or query).
 
+import { onUnexpectedError } from '../../../../base/common/errors.js';
 import { Disposable } from '../../../../base/common/lifecycle.js';
 import { Registry } from '../../../../platform/registry/common/platform.js';
 import { IWorkbenchContribution, registerWorkbenchContribution2, WorkbenchPhase } from '../../../common/contributions.js';
@@ -36,7 +38,7 @@ class EgressTargetsContribution extends Disposable implements IWorkbenchContribu
 
 		// Subscribe before reading the backlog; a block landing in between may show twice, never zero times.
 		this._register(this.egressGuardService.onDidBlock(e => this.log(e)));
-		this.egressGuardService.getRecentBlocked().then(recent => recent.forEach(e => this.log(e)));
+		this.egressGuardService.getRecentBlocked().then(recent => recent.forEach(e => this.log(e)), onUnexpectedError);
 
 		// The settings service fires onDidChangeState synchronously when its stored state is first read,
 		// ahead of anything awaiting waitForInitState (e.g. model refresh), so endpoints reach main first.
@@ -53,7 +55,7 @@ class EgressTargetsContribution extends Disposable implements IWorkbenchContribu
 			return;
 		}
 		this.lastSent = key;
-		void this.egressGuardService.setTargets('settings', endpoints);
+		this.egressGuardService.setTargets('settings', endpoints).catch(onUnexpectedError);
 	}
 
 	private log(e: BlockedAttempt): void {

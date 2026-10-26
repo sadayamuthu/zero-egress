@@ -137,7 +137,7 @@ import { resolveAuditConfig } from '../../workbench/contrib/zeroEgress/electron-
 import { ZeroEgressSCMService } from '../../workbench/contrib/zeroEgress/electron-main/zeroEgressSCMMainService.js';
 import { IZeroEgressSCMService } from '../../workbench/contrib/zeroEgress/common/zeroEgressSCMTypes.js';
 import { MCPChannel } from '../../workbench/contrib/zeroEgress/electron-main/mcpChannel.js';
-import { EgressGuard, EgressGuardMainService } from '../../workbench/contrib/zeroEgress/electron-main/egressGuard.js';
+import { EgressGuard, EgressGuardChannel } from '../../workbench/contrib/zeroEgress/electron-main/egressGuard.js';
 import { EGRESS_GUARD_CHANNEL } from '../../workbench/contrib/zeroEgress/common/egressGuardService.js';
 import { describeDestination } from '../../workbench/contrib/zeroEgress/common/egressPolicy.js';
 /**
@@ -1262,8 +1262,11 @@ export class CodeApplication extends Disposable {
 		const zeroEgressUpdatesChannel = ProxyChannel.fromService(accessor.get(IZeroEgressUpdateService), disposables);
 		mainProcessElectronServer.registerChannel('zero-egress-channel-update', zeroEgressUpdatesChannel);
 
-		const egressGuardChannel = ProxyChannel.fromService(disposables.add(new EgressGuardMainService(this.egressGuard)), disposables);
-		mainProcessElectronServer.registerChannel(EGRESS_GUARD_CHANNEL, egressGuardChannel);
+		// Windows: each sets its own 'settings' list (dropped when it disconnects) and relays its extension host's blocks.
+		mainProcessElectronServer.registerChannel(EGRESS_GUARD_CHANNEL, new EgressGuardChannel(this.egressGuard, { canSetSettings: true, reportOrigin: 'extensionHost' }));
+		disposables.add(mainProcessElectronServer.onDidRemoveConnection(connection => this.egressGuard.removeSettingsClient(connection.ctx)));
+		// Shared process: loopback-only Node hooks there; it only reports its blocks.
+		sharedProcessClient.then(client => client.registerChannel(EGRESS_GUARD_CHANNEL, new EgressGuardChannel(this.egressGuard, { canSetSettings: false, reportOrigin: 'sharedProcess' })));
 
 		// Chat audit pipeline (electron-main only). Config from product.json; policy override optional.
 		// The chat channel is registered SYNCHRONOUSLY here with a disabled audit service, BEFORE any await,

@@ -89,7 +89,6 @@ import { TextSearchCompleteMessage } from '../../services/search/common/searchEx
 import { ISaveProfileResult } from '../../services/userDataProfile/common/userDataProfile.js';
 import { TerminalShellExecutionCommandLineConfidence } from './extHostTypes.js';
 import * as tasks from './shared/tasks.js';
-import { EgressTarget } from '../../contrib/zeroEgress/common/egressPolicy.js';
 
 export interface IWorkspaceData extends IStaticWorkspaceData {
 	folders: { uri: UriComponents; name: string; index: number }[];
@@ -728,15 +727,18 @@ export interface MainThreadTelemetryShape extends IDisposable {
 	$publicLog2<E extends ClassifiedEvent<OmitMetadata<T>> = never, T extends IGDPRProperty = never>(eventName: string, data?: StrictPropertyCheck<T, E>): void;
 }
 
-// ZeroEgress: the extension host enforces the egress allow-list itself (see api/node/proxyResolver.ts).
+// ZeroEgress: the extension host enforces the egress allow-list itself (see api/node/extHostEgressGuard.ts).
+/** Same shape as contrib/zeroEgress/common/egressPolicy EgressTarget (declared here to keep api/common free of contrib). */
+export interface EgressTargetDto { readonly host: string; readonly port: number }
+
 export interface MainThreadEgressGuardShape extends IDisposable {
 	/** Current allow-list; after the first call, changes are pushed with ExtHostEgressGuardShape.$setTargets. */
-	$getTargets(): Promise<EgressTarget[]>;
+	$getTargets(): Promise<EgressTargetDto[]>;
 	$reportBlocked(url: string): void;
 }
 
 export interface ExtHostEgressGuardShape {
-	$setTargets(targets: EgressTarget[]): void;
+	$setTargets(targets: EgressTargetDto[]): Promise<void>;
 }
 
 export interface MainThreadEditorInsetsShape extends IDisposable {

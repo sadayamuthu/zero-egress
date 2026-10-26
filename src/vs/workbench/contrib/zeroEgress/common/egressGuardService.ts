@@ -15,7 +15,7 @@ export type EgressSource = 'settings' | 'mcp' | 'audit';
 
 export interface BlockedAttempt {
 	readonly url: string;
-	readonly origin: 'renderer' | 'main' | 'extensionHost';
+	readonly origin: 'renderer' | 'main' | 'extensionHost' | 'sharedProcess';
 	readonly time: number;
 }
 
@@ -30,7 +30,7 @@ export interface IEgressGuardService {
 	setTargets(source: 'settings', urls: string[]): Promise<void>;
 	/** The merged allow-list (all sources), for pushing to the extension host. */
 	getTargets(): Promise<EgressTarget[]>;
-	/** Records a block that happened in the extension host. */
+	/** Records a block that happened in this client's extension host (or, from the shared process, there). */
 	reportBlocked(url: string): Promise<void>;
 	/** Blocks that happened before this window subscribed (bounded). */
 	getRecentBlocked(): Promise<BlockedAttempt[]>;
@@ -40,7 +40,7 @@ export interface IEgressGuardService {
 
 export const IEgressGuardService = createDecorator<IEgressGuardService>('zeroEgressGuardService');
 
-// implemented by calling the channel registered in app.ts (served by EgressGuardMainService)
+// implemented by calling the channel registered in app.ts (served by EgressGuardChannel)
 export class EgressGuardService implements IEgressGuardService {
 	readonly _serviceBrand: undefined;
 	private readonly proxy: IEgressGuardService;

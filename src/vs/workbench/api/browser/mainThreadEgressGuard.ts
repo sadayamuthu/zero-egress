@@ -3,11 +3,11 @@
  *  Licensed under the Apache License, Version 2.0. See LICENSE.txt for more information.
  *--------------------------------------------------------------------------------------*/
 
+import { onUnexpectedError } from '../../../base/common/errors.js';
 import { Disposable } from '../../../base/common/lifecycle.js';
 import { IEgressGuardService } from '../../contrib/zeroEgress/common/egressGuardService.js';
-import { EgressTarget } from '../../contrib/zeroEgress/common/egressPolicy.js';
 import { extHostNamedCustomer, IExtHostContext } from '../../services/extensions/common/extHostCustomers.js';
-import { ExtHostEgressGuardContext, ExtHostEgressGuardShape, MainContext, MainThreadEgressGuardShape } from '../common/extHost.protocol.js';
+import { EgressTargetDto, ExtHostEgressGuardContext, ExtHostEgressGuardShape, MainContext, MainThreadEgressGuardShape } from '../common/extHost.protocol.js';
 
 // ZeroEgress: relays the main-process egress allow-list to the extension host, and its blocks back.
 @extHostNamedCustomer(MainContext.MainThreadEgressGuard)
@@ -25,15 +25,15 @@ export class MainThreadEgressGuard extends Disposable implements MainThreadEgres
 	}
 
 	// Only push once the extension host has asked: by then its ExtHostEgressGuard actor is registered.
-	$getTargets(): Promise<EgressTarget[]> {
+	$getTargets(): Promise<EgressTargetDto[]> {
 		if (!this.subscribed) {
 			this.subscribed = true;
-			this._register(this.egressGuardService.onDidChangeTargets(targets => this.proxy.$setTargets(targets)));
+			this._register(this.egressGuardService.onDidChangeTargets(targets => this.proxy.$setTargets(targets).catch(onUnexpectedError)));
 		}
 		return this.egressGuardService.getTargets();
 	}
 
 	$reportBlocked(url: string): void {
-		void this.egressGuardService.reportBlocked(url);
+		this.egressGuardService.reportBlocked(url).catch(onUnexpectedError);
 	}
 }
