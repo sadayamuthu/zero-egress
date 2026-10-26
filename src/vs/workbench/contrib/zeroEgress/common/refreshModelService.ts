@@ -49,6 +49,8 @@ const refreshBasedOn: { [k in RefreshableProviderName]: (keyof SettingsOfProvide
 	lmStudio: ['_didFillInProviderSettings', 'endpoint'],
 }
 const REFRESH_INTERVAL = 5_000
+// The endpoint field saves on every keystroke; probe only a value that has stood this long, never "https://gp".
+const ENDPOINT_SETTLE_MS = 800
 // const COOLDOWN_TIMEOUT = 300
 
 const autoOptions = { enableProviderOnSuccess: true, doNotFire: true }
@@ -86,6 +88,13 @@ export class RefreshModelService extends Disposable implements IRefreshModelServ
 
 
 		const disposables: Set<IDisposable> = new Set()
+		this._register({
+			dispose: () => {
+				this._clearAllTimeouts()
+				disposables.forEach(d => d.dispose())
+				disposables.clear()
+			}
+		})
 
 		const initializeAutoPollingAndOnChange = () => {
 			this._clearAllTimeouts()
@@ -109,6 +118,13 @@ export class RefreshModelService extends Disposable implements IRefreshModelServ
 
 							const prevEnabled = prevVals[0] as boolean
 							const enabled = newVals[0] as boolean
+
+							if (prevVals[1] !== newVals[1]) {
+								// the endpoint is being edited: no probe (and no poll) until it settles, then probe it
+								prevVals = newVals
+								this._settleEndpoint(providerName)
+								return
+							}
 
 							// if it was just enabled, or there was a change and it wasn't to the enabled state, refresh
 							if ((enabled && !prevEnabled) || (!enabled && !prevEnabled)) {
@@ -155,8 +171,8 @@ export class RefreshModelService extends Disposable implements IRefreshModelServ
 
 		const autoPoll = () => {
 			if (this.zeroEgressSettingsService.state.globalSettings.autoRefreshModels) {
-				// resume auto-polling
-				const timeoutId = setTimeout(() => this.startRefreshingModels(providerName, autoOptions), REFRESH_INTERVAL)
+				// resume auto-polling (an endpoint still settling restarts it when it settles)
+				const timeoutId = setTimeout(() => { if (!this._settleTimeouts[providerName]) { this.startRefreshingModels(providerName, autoOptions) } }, REFRESH_INTERVAL)
 				this._setTimeoutId(providerName, timeoutId)
 			}
 		}
@@ -192,9 +208,22 @@ export class RefreshModelService extends Disposable implements IRefreshModelServ
 
 	}
 
+	private readonly _settleTimeouts: Partial<Record<RefreshableProviderName, ReturnType<typeof setTimeout>>> = {}
+
+	private _settleEndpoint(providerName: RefreshableProviderName) {
+		this._clearProviderTimeout(providerName)
+		clearTimeout(this._settleTimeouts[providerName])
+		this._settleTimeouts[providerName] = setTimeout(() => {
+			delete this._settleTimeouts[providerName]
+			this.startRefreshingModels(providerName, autoOptions)
+		}, ENDPOINT_SETTLE_MS)
+	}
+
 	_clearAllTimeouts() {
 		for (const providerName of refreshableProviderNames) {
 			this._clearProviderTimeout(providerName)
+			clearTimeout(this._settleTimeouts[providerName])
+			delete this._settleTimeouts[providerName]
 		}
 	}
 
