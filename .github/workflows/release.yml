@@ -8,7 +8,8 @@ name: Release
 #
 # Run it manually (Actions -> Release -> Run workflow) to build the installers
 # and upload them as workflow artifacts (kept 7 days) without publishing
-# anything. The "platforms" input limits a manual run to some platforms.
+# anything, even when run on a tag ref. The "platforms" input limits a manual
+# run to some platforms.
 #
 # Artifacts (<v> = zeroEgressVersion; unsigned builds add "-unsigned" before
 # the extension of the macOS and Windows files):
@@ -115,15 +116,15 @@ jobs:
     name: build-mac (${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 180
+    # Secrets go only to the steps that use them, never to npm ci, whose
+    # dependency install scripts would otherwise see them. Step conditions
+    # test this boolean instead.
     env:
-      APPLE_CERT_P12_BASE64: ${{ secrets.APPLE_CERT_P12_BASE64 }}
-      APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
-      APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-      APPLE_ID: ${{ secrets.APPLE_ID }}
-      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-      APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+      HAS_APPLE_CERT: ${{ secrets.APPLE_CERT_P12_BASE64 != '' }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version-file: .nvmrc
@@ -139,7 +140,10 @@ jobs:
       - name: Restore @parcel/watcher prebuild
         run: bash build/zero-egress/restore-parcel-watcher.sh ${{ matrix.watcher }}
       - name: Import signing certificate
-        if: env.APPLE_CERT_P12_BASE64 != ''
+        if: env.HAS_APPLE_CERT == 'true'
+        env:
+          APPLE_CERT_P12_BASE64: ${{ secrets.APPLE_CERT_P12_BASE64 }}
+          APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
         run: |
           set -euo pipefail
           kc="$RUNNER_TEMP/signing.keychain-db"
@@ -158,6 +162,10 @@ jobs:
         run: bash build/zero-egress/build-mac.sh ${{ matrix.arch }}
         env:
           NODE_OPTIONS: --max-old-space-size=8192
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
       - uses: actions/upload-artifact@v4
         with:
           name: mac-${{ matrix.arch }}
@@ -176,17 +184,14 @@ jobs:
     defaults:
       run:
         shell: bash
+    # As in build-mac: secrets reach only the steps that use them.
     env:
-      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-      AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
-      AZURE_TS_ENDPOINT: ${{ secrets.AZURE_TS_ENDPOINT }}
-      AZURE_TS_ACCOUNT: ${{ secrets.AZURE_TS_ACCOUNT }}
-      AZURE_TS_PROFILE: ${{ secrets.AZURE_TS_PROFILE }}
-      WIN_CERT_PFX_BASE64: ${{ secrets.WIN_CERT_PFX_BASE64 }}
-      WIN_CERT_PASSWORD: ${{ secrets.WIN_CERT_PASSWORD }}
+      HAS_AZURE: ${{ secrets.AZURE_TENANT_ID != '' }}
+      HAS_PFX: ${{ secrets.WIN_CERT_PFX_BASE64 != '' }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version-file: .nvmrc
@@ -198,11 +203,13 @@ jobs:
       - name: Restore @parcel/watcher prebuild
         run: bash build/zero-egress/restore-parcel-watcher.sh win32-x64
       - name: Signing mode
+        env:
+          WIN_CERT_PFX_BASE64: ${{ secrets.WIN_CERT_PFX_BASE64 }}
         run: |
-          if [ -n "$AZURE_TENANT_ID" ]; then
+          if [ "$HAS_AZURE" = true ]; then
             echo "ZE_WIN_SIGNED=1" >> "$GITHUB_ENV"
             echo "Signing with Azure Trusted Signing"
-          elif [ -n "$WIN_CERT_PFX_BASE64" ]; then
+          elif [ "$HAS_PFX" = true ]; then
             echo "$WIN_CERT_PFX_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.pfx"
             echo "WIN_CERT_PFX=$RUNNER_TEMP/cert.pfx" >> "$GITHUB_ENV"
             echo "Signing with the OV certificate (signtool)"
@@ -215,16 +222,17 @@ jobs:
         run: bash build/zero-egress/build-win.sh x64 app
         env:
           NODE_OPTIONS: --max-old-space-size=8192
+          WIN_CERT_PASSWORD: ${{ secrets.WIN_CERT_PASSWORD }}
       - name: Sign the app binaries (Azure Trusted Signing)
-        if: env.AZURE_TENANT_ID != ''
-        uses: azure/artifact-signing-action@v2.0.0
+        if: env.HAS_AZURE == 'true'
+        uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
         with:
-          azure-tenant-id: ${{ env.AZURE_TENANT_ID }}
-          azure-client-id: ${{ env.AZURE_CLIENT_ID }}
-          azure-client-secret: ${{ env.AZURE_CLIENT_SECRET }}
-          endpoint: ${{ env.AZURE_TS_ENDPOINT }}
-          signing-account-name: ${{ env.AZURE_TS_ACCOUNT }}
-          certificate-profile-name: ${{ env.AZURE_TS_PROFILE }}
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: ${{ secrets.AZURE_TS_ENDPOINT }}
+          signing-account-name: ${{ secrets.AZURE_TS_ACCOUNT }}
+          certificate-profile-name: ${{ secrets.AZURE_TS_PROFILE }}
           files-folder: ${{ github.workspace }}\..\VSCode-win32-x64
           files-folder-filter: exe,dll,node
           files-folder-recurse: true
@@ -235,16 +243,17 @@ jobs:
         run: bash build/zero-egress/build-win.sh x64 setup
         env:
           NODE_OPTIONS: --max-old-space-size=8192
+          WIN_CERT_PASSWORD: ${{ secrets.WIN_CERT_PASSWORD }}
       - name: Sign the installers (Azure Trusted Signing)
-        if: env.AZURE_TENANT_ID != ''
-        uses: azure/artifact-signing-action@v2.0.0
+        if: env.HAS_AZURE == 'true'
+        uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
         with:
-          azure-tenant-id: ${{ env.AZURE_TENANT_ID }}
-          azure-client-id: ${{ env.AZURE_CLIENT_ID }}
-          azure-client-secret: ${{ env.AZURE_CLIENT_SECRET }}
-          endpoint: ${{ env.AZURE_TS_ENDPOINT }}
-          signing-account-name: ${{ env.AZURE_TS_ACCOUNT }}
-          certificate-profile-name: ${{ env.AZURE_TS_PROFILE }}
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: ${{ secrets.AZURE_TS_ENDPOINT }}
+          signing-account-name: ${{ secrets.AZURE_TS_ACCOUNT }}
+          certificate-profile-name: ${{ secrets.AZURE_TS_PROFILE }}
           files-folder: ${{ github.workspace }}\dist
           files-folder-filter: exe
           file-digest: SHA256
@@ -268,6 +277,8 @@ jobs:
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version-file: .nvmrc
@@ -363,11 +374,6 @@ jobs:
           for f in "${expected[@]}"; do [ -s "$f" ] || { echo "::error::missing $f"; missing=1; }; done
           [ "$(ls | wc -l)" -eq "${#expected[@]}" ] || { echo "::error::unexpected files in dist"; missing=1; }
           exit "$missing"
-      - name: Checksums
-        run: |
-          cd dist
-          sha256sum * > SHA256SUMS
-          cat SHA256SUMS
       # CycloneDX SBOM of the production npm dependency tree, from the lockfile.
       - name: SBOM
         env:
@@ -376,6 +382,12 @@ jobs:
           npx --yes @cyclonedx/cyclonedx-npm@6.0.1 --omit dev --package-lock-only \
             --output-format JSON --output-file "dist/zero-egress-${V}.cdx.json"
           node -e "const b=require('./dist/zero-egress-${V}.cdx.json'); console.log(b.bomFormat, b.specVersion, (b.components||[]).length + ' components')"
+      - name: Checksums
+        run: |
+          cd dist
+          # Covers the installers and the SBOM.
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
       - name: Render the Homebrew cask
         env:
           V: ${{ needs.test.outputs.version }}
@@ -400,9 +412,11 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  # Tag pushes only: a manual run on a tag ref (gh workflow run --ref v0.1.0)
+  # has a tag GITHUB_REF too, and must not publish.
   publish:
     needs: [test, release-files]
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -434,7 +448,7 @@ jobs:
   # prereleases, and with a warning when HOMEBREW_TAP_TOKEN is unset.
   homebrew:
     needs: [publish]
-    if: startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-')
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
