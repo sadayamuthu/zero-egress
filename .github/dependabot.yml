@@ -1,0 +1,15 @@
+# Weekly update pull requests for workflow actions, grouped in one pull
+# request. npm is left out on purpose: updates to a VS Code fork's
+# dependencies would flood pull requests and could pull in code that
+# talks to the network.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ['*']
+    commit-message:
+      prefix: ci

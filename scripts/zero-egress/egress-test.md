@@ -7,11 +7,17 @@ An unconfigured private IP is blocked, and the block shows in the Output channel
 ## Scripted session (both methods)
 1. Start the app (fresh `--user-data-dir` and `--extensions-dir`) and wait for the workbench.
 2. Open the chat sidebar.
-3. Open Settings, then Providers. Only Ollama, vLLM and LM Studio appear.
+3. Open ZeroEgress Settings, then Local Providers. Only Ollama, vLLM and LM Studio appear.
 4. Open the Extensions view and search. No gallery results, no outbound attempt.
 5. Install a local `.vsix`. It installs (local, allowed).
 6. Configure vLLM at `http://10.255.255.1:8000` and send one message.
-7. Quit.
+7. Make one request to an unconfigured private IP. Open Help → Toggle Developer Tools, and in the
+   Console run `fetch('https://10.255.255.2:1234/')`. It rejects with `Failed to fetch`, and the
+   Output channel "ZeroEgress: Network" shows `<time> blocked 10.255.255.2:1234 (caller: renderer)`.
+   (Use `https:`; the workbench's content security policy refuses a plain `http:` fetch from the
+   page before the guard sees it. Don't use a provider endpoint field for this: an address entered
+   there is configured, and so allowed.)
+8. Quit.
 
 ## Method A: OS firewall
 Run the session with an outbound-deny firewall that logs blocked attempts for the app's process
