@@ -11,12 +11,8 @@
   "icon": "images/icon.png",
   "activationEvents": [
     "onProfile",
-    "onProfile:github",
     "onLanguage:json",
     "onLanguage:jsonc"
-  ],
-  "enabledApiProposals": [
-    "profileContentHandlers"
   ],
   "main": "./out/configurationEditingMain",
   "browser": "./dist/browser/configurationEditingMain",
@@ -25,9 +21,7 @@
     "watch": "gulp watch-extension:configuration-editing"
   },
   "dependencies": {
-    "@octokit/rest": "^21.1.1",
-    "jsonc-parser": "^3.2.0",
-    "tunnel": "^0.0.6"
+    "jsonc-parser": "^3.2.0"
   },
   "capabilities": {
     "virtualWorkspaces": true,
