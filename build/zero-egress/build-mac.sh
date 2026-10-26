@@ -55,15 +55,22 @@ bash "$ROOT/scripts/zero-egress/audit-urls.sh" "$APP"
 if [ -n "$SIGN_ID" ]; then
   mark "codesign (Developer ID, hardened runtime) start"
   sign() { codesign --force --timestamp --options runtime --entitlements "$ENTITLEMENTS" --sign "$SIGN_ID" "$@"; }
-  # Inside out: loose Mach-O files, then frameworks, then helper apps, then the app.
+  # NUL-separated paths in, the same paths out, deepest first.
+  deepest_first() {
+    local p d l
+    while IFS= read -r -d '' p; do d="${p//[^\/]/}"; printf '%d\t%s\0' "${#d}" "$p"; done \
+      | sort -z -t "$(printf '\t')" -k1,1nr \
+      | while IFS= read -r -d '' l; do printf '%s\0' "${l#*	}"; done
+  }
+  # Inside out. 1: every Mach-O file, including those nested in frameworks
+  # (Electron Framework's Libraries/*.dylib and Helpers/chrome_crashpad_handler,
+  # Squirrel's ShipIt), deepest first. Symlinks are skipped (-type f).
   while IFS= read -r -d '' f; do
     if file -b "$f" | grep -q 'Mach-O'; then sign "$f"; fi
-  done < <(find "$APP/Contents" -type f \( -name '*.dylib' -o -name '*.node' -o -perm -u+x \) \
-             -not -path '*.framework/*' -print0)
-  while IFS= read -r -d '' fw; do sign "$fw"; done \
-    < <(find "$APP/Contents/Frameworks" -maxdepth 1 -name '*.framework' -print0)
-  while IFS= read -r -d '' helper; do sign "$helper"; done \
-    < <(find "$APP/Contents/Frameworks" -maxdepth 1 -name '*.app' -print0)
+  done < <(find "$APP/Contents" -type f \( -name '*.dylib' -o -name '*.so' -o -name '*.node' -o -perm -u+x \) -print0 | deepest_first)
+  # 2: every framework and helper app bundle, deepest first. 3: the app.
+  while IFS= read -r -d '' bundle; do sign "$bundle"; done \
+    < <(find "$APP/Contents" -type d \( -name '*.framework' -o -name '*.app' \) -print0 | deepest_first)
   sign "$APP"
   codesign --verify --deep --strict --verbose=2 "$APP"
 else
