@@ -13,6 +13,7 @@ import { URI } from '../../../../../../../base/common/uri.js'
 import { ModelDropdown } from './ModelDropdown.js'
 import { ChatMarkdownRender } from '../markdown/ChatMarkdownRender.js'
 import { WarningBox } from './WarningBox.js'
+import { endpointWarning } from '../../../../common/egressPolicy.js'
 import { os } from '../../../../common/helpers/systemInfo.js'
 import { IconLoading } from '../sidebar-tsx/SidebarChat.js'
 import { ToolApprovalType, toolApprovalTypes } from '../../../../common/toolsServiceTypes.js'
@@ -633,6 +634,7 @@ const ProviderSetting = ({ providerName, settingName, subTextMd }: { providerNam
 				passwordBlur={isPasswordField}
 				compact={true}
 			/>
+			{settingName === 'endpoint' && endpointWarning(settingValue) ? <WarningBox className='py-1 px-3' text={endpointWarning(settingValue)!} /> : null}
 			{!subTextMd ? null : <div className='py-1 px-3 opacity-50 text-sm'>
 				{subTextMd}
 			</div>}

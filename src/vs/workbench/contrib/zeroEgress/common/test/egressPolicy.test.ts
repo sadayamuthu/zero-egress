@@ -5,7 +5,7 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { collectEgressTargets, describeDestination, isAllowed, isLoopbackHost, isNetworkUrl, isPrivateHost, targetFromUrl } from '../egressPolicy.js';
+import { collectEgressTargets, describeDestination, endpointWarning, isAllowed, isLoopbackHost, isNetworkUrl, isPrivateHost, targetFromUrl } from '../egressPolicy.js';
 
 suite('egressPolicy', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
@@ -114,5 +114,12 @@ suite('egressPolicy', () => {
 		assert.strictEqual(describeDestination('http://[::1]:8000/'), '[::1]:8000');
 		assert.strictEqual(describeDestination('ftp://user:pw@evil.com/f'), 'ftp://evil.com');
 		assert.strictEqual(describeDestination('not a url'), 'unparseable URL');
+	});
+
+	test('endpointWarning warns only for public network hosts', () => {
+		assert.strictEqual(endpointWarning('https://api.openai.com'), 'This server is on the internet; code you send will leave your network.');
+		for (const u of ['http://127.0.0.1:11434', 'http://gpubox:11434', 'http://192.168.1.9:8000', '', 'localhost:11434']) {
+			assert.strictEqual(endpointWarning(u), undefined, JSON.stringify(u));
+		}
 	});
 });

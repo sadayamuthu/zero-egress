@@ -143,3 +143,10 @@ export function collectEgressTargets(s: EgressSources): EgressTarget[] {
 	}
 	return out;
 }
+
+/** One-line Settings warning for a model endpoint that is not loopback or private; undefined otherwise. Never blocks saving. */
+export function endpointWarning(url: string): string | undefined {
+	const t = targetFromUrl(url);
+	if (!t || isLoopbackHost(t.host) || isPrivateHost(t.host)) { return undefined; }
+	return 'This server is on the internet; code you send will leave your network.';
+}
