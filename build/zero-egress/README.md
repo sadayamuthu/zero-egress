@@ -56,7 +56,7 @@ target (`compile-build-without-mangling`, `compile-extensions-build`,
 `compile-extension-media-build`, `minify-vscode`,
 `vscode-<platform>-<arch>-min-ci`) except that the TypeScript compile skips
 the identifier mangler, as VSCodium does. The mangler runs four TypeScript
-language-service workers that outgrow 16 GB GitHub-hosted runners: it was
+language-service workers that outgrow the 7 GB GitHub-hosted runners a private repo gets: it was
 OOM-killed on Linux and stalled for hours on Windows. Mangling only shortens
 private names, so the app is the same apart from a few MB of size.
 `ZE_MANGLE=1` runs the upstream target with mangling instead.

@@ -10,6 +10,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.getDependencies = getDependencies;
 const child_process_1 = require("child_process");
 const path_1 = __importDefault(require("path"));
+const fs_1 = require("fs");
 const install_sysroot_1 = require("./debian/install-sysroot");
 const calculate_deps_1 = require("./debian/calculate-deps");
 const calculate_deps_2 = require("./rpm/calculate-deps");
@@ -58,8 +59,11 @@ async function getDependencies(packageType, buildDir, applicationName, arch) {
     const appPath = path_1.default.join(buildDir, applicationName);
     // Add the native modules
     const files = findResult.stdout.toString().trimEnd().split('\n');
-    // Add the tunnel binary.
-    files.push(path_1.default.join(buildDir, 'bin', product.tunnelApplicationName));
+    // Add the tunnel binary. ZeroEgress: only if built; the release build ships no CLI.
+    const tunnelPath = path_1.default.join(buildDir, 'bin', product.tunnelApplicationName);
+    if ((0, fs_1.existsSync)(tunnelPath)) {
+        files.push(tunnelPath);
+    }
     // Add the main executable.
     files.push(appPath);
     // Add chrome sandbox and crashpad handler.

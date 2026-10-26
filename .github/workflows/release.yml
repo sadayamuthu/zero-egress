@@ -267,7 +267,7 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: npm
-      # The minified build's mangler step outgrows the runner's 16 GB of RAM,
+      # The build is tight in this runner's 7 GB of RAM (private repo),
       # and the root disk is too small for both the build and a swap file, so
       # drop preinstalled toolchains this job doesn't use, then add swap on the
       # roomier of / and /mnt (leaving 25 GB for the build).

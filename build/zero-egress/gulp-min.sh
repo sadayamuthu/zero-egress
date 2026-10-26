@@ -5,7 +5,7 @@
 # upstream's vscode-<platform>-<arch>-min target, except that the TypeScript
 # compile skips the identifier mangler (compile-build-without-mangling, as
 # VSCodium does): the mangler runs four TypeScript language-service workers
-# that outgrow 16 GB GitHub-hosted runners (OOM-killed on Linux, stalled for
+# that outgrow the 7 GB GitHub-hosted runners private repos get (OOM-killed on Linux, stalled for
 # hours on Windows). Mangling only shortens private names; the shipped code
 # is otherwise the same, just a few MB larger.
 # ZE_MANGLE=1 runs the upstream target (with mangling) instead.
