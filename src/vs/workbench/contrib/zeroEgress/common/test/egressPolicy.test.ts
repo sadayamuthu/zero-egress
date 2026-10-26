@@ -87,4 +87,25 @@ suite('egressPolicy', () => {
 		const t = collectEgressTargets({ providerEndpoints: ['http://a.lan:1/x', 'HTTP://A.LAN:1/'], mcpServerUrls: ['http://a.lan:1'], auditCollectorUrl: 'https://audit.lan:9443/ingest' });
 		assert.deepStrictEqual(t, [{ host: 'a.lan', port: 1 }, { host: 'audit.lan', port: 9443 }]);
 	});
+
+	test('control characters cannot hide a network scheme', () => {
+		for (const u of ['\x01http://evil.com/', '\x00https://evil.com', 'ht\ttp://evil.com/', 'h\nttps://evil.com/', 'http\r://evil.com']) {
+			assert.strictEqual(isNetworkUrl(u), true, JSON.stringify(u));
+			assert.strictEqual(isAllowed(u, []), false, JSON.stringify(u));
+		}
+		assert.ok(isAllowed('\x01http://127.0.0.1:11434/', []));
+		assert.ok(isAllowed('HTTP://LOCALHOST:11434', []));
+	});
+
+	test('unknown schemes and unparseable strings are denied', () => {
+		for (const u of ['ftp://evil.com/', 'gopher://evil.com/', '//evil.com', 'evil.com', 'localhost:11434', '']) {
+			assert.strictEqual(isAllowed(u, []), false, JSON.stringify(u));
+		}
+	});
+
+	test('explicit non-network schemes are allowed', () => {
+		for (const u of ['about:blank', 'javascript:void 0', 'chrome-extension://x/y', 'vscode-webview://abc/index.html', 'data:text/plain,hi', 'blob:vscode-file://x/uuid', 'file:///tmp/x']) {
+			assert.strictEqual(isAllowed(u, []), true, u);
+		}
+	});
 });

@@ -6,6 +6,14 @@
 // Pure egress policy: which network destinations the app may reach.
 // Loopback plus the hosts the user configured, and nothing else. No DNS, no I/O.
 // Matching is host+port only; scheme and path are ignored.
+//
+// Contract for callers (e.g. the Task 13 runtime guard):
+// - Pass absolute URLs. Classification uses the WHATWG URL parser (the same one fetch/WebSocket use),
+//   never the raw string. Anything that does not parse is denied.
+// - Deny by default: only http/https/ws/wss (loopback or exact host+port match) and the explicit
+//   NON_NETWORK_PROTOCOLS list are allowed. Unknown schemes are denied.
+// - Build targets only via targetFromUrl / collectEgressTargets. Hosts passed straight to
+//   isLoopbackHost / isPrivateHost are expected in targetFromUrl-normalized form.
 
 export interface EgressTarget { readonly host: string; readonly port: number }
 
@@ -16,6 +24,9 @@ export interface EgressSources {
 }
 
 const NETWORK_PROTOCOLS: Readonly<Record<string, number>> = { 'http:': 80, 'https:': 443, 'ws:': 80, 'wss:': 443 };
+
+/** Parsed protocols that never leave the machine and are allowed; any `vscode-*` scheme is also allowed. */
+const NON_NETWORK_PROTOCOLS: readonly string[] = ['file:', 'data:', 'blob:', 'devtools:', 'chrome-extension:', 'chrome:', 'about:', 'javascript:'];
 
 function parseNetworkUrl(url: string): URL | undefined {
 	let u: URL;
@@ -39,9 +50,15 @@ export function targetFromUrl(url: string): EgressTarget | undefined {
 	return { host, port };
 }
 
-/** Scheme-based, so a malformed `http://...` still counts as network (and is then denied by isAllowed). */
+/** True only for URLs whose parsed scheme is http/https/ws/wss. */
 export function isNetworkUrl(url: string): boolean {
-	return /^\s*(https?|wss?):/i.test(url);
+	return parseNetworkUrl(url) !== undefined;
+}
+
+function isExplicitNonNetwork(url: string): boolean {
+	let protocol: string;
+	try { protocol = new URL(url).protocol; } catch { return false; }
+	return NON_NETWORK_PROTOCOLS.includes(protocol) || protocol.startsWith('vscode-');
 }
 
 function parseIPv4(host: string): number[] | undefined {
@@ -97,9 +114,8 @@ export function isPrivateHost(host: string): boolean {
 }
 
 export function isAllowed(url: string, targets: readonly EgressTarget[]): boolean {
-	if (!isNetworkUrl(url)) { return true; }
 	const t = targetFromUrl(url);
-	if (!t) { return false; }
+	if (!t) { return isExplicitNonNetwork(url); }
 	if (isLoopbackHost(t.host)) { return true; }
 	return targets.some(x => x.host === t.host && x.port === t.port);
 }
