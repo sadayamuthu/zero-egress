@@ -8,6 +8,7 @@ import type * as httpType from 'http';
 import type * as netType from 'net';
 import type * as tlsType from 'tls';
 import { createRequire } from 'node:module';
+import * as nodeUrl from 'url';
 import * as proxyAgent from '@vscode/proxy-agent';
 import { IDisposable } from '../../../../../base/common/lifecycle.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
@@ -21,6 +22,17 @@ const net: typeof netType = require('net');
 const tls: typeof tlsType = require('tls');
 
 const blockedMessage = (hostPort: string) => `ZeroEgress blocked connection to ${hostPort} (not a configured server)`;
+
+/** What Electron's net.request dials for `options`: its ClientRequest parseOptions, as in the bundled Electron. */
+function electronDial(options: unknown): string {
+	const t: any = typeof options === 'string' ? nodeUrl.parse(options) : { ...(options as object) };
+	if (t.url) { return String(t.url); }
+	const e: any = { protocol: t.protocol || 'http:' };
+	if (t.host) { e.host = t.host; } else { e.hostname = t.hostname || 'localhost'; if (t.port) { e.port = t.port; } }
+	const path = nodeUrl.parse(t.path || '/');
+	e.pathname = path.pathname; e.search = path.search; e.hash = path.hash;
+	return nodeUrl.format(e);
+}
 
 /** Resolves with the first 'error' (or 'response'/'connect', reported as REACHED) of a request or socket. */
 function outcome(emitter: NodeJS.EventEmitter): Promise<string> {
@@ -270,6 +282,119 @@ suite('egressNodeHooks', () => {
 		]);
 		assert.strictEqual(await outcome(net.connect(port, '127.0.0.1')), blockedMessage(`127.0.0.1:${port}`));
 		assert.strictEqual(connections, 0);
+	});
+
+	// Time-of-check/time-of-use: a caller-supplied field read by the hook and again by the original must give both
+	// the same value. Each test flips a getter/toString after the first read and asserts the original received the
+	// value that was checked (and never an example-class destination).
+
+	/** A value whose getter returns `first` for the first `reads` reads, then `then` (a flipping getter). */
+	const flipping = <T>(first: T, then: T, reads = 1) => { let n = 0; return { get() { return ++n > reads ? then : first; } }; };
+	const withFlippingProp = (base: object, prop: string, first: unknown, then: unknown, reads = 1): any => Object.defineProperty({ ...base }, prop, { ...flipping(first, then, reads), enumerable: true });
+	const flippingToString = (first: string, then: string) => { let n = 0; return { toString() { return ++n > 1 ? then : first; } }; };
+	/** `obj` with an own `prop` accessor shadowing the class getter (still instanceof its class). */
+	const lying = <O extends object>(obj: O, prop: string, value: unknown) => Object.defineProperty(obj, prop, { get: () => value });
+	const closedPort = async () => { const s = net.createServer(); await new Promise<void>(r => s.listen(0, '127.0.0.1', r)); const p = (s.address() as netType.AddressInfo).port; await new Promise(r => s.close(r)); return p; };
+
+	test('electron net.request: options are read once and the checked snapshot is passed on', () => {
+		const received: unknown[] = [];
+		const fakeNet = { request: (o: unknown) => { received.push(electronDial(o)); return 'req'; } };
+		hooks = installEgressNodeHooks(url => isAllowed(url, [{ host: '10.0.0.5', port: 8000 }]), { global: globalThis, http, https, net, electronNet: fakeNet });
+		const cases: [string, unknown][] = [
+			...[1, 2, 3, 4, 5, 6].map((reads): [string, unknown] => [`url getter flipping after ${reads} reads`, withFlippingProp({}, 'url', 'http://localhost/', 'https://example.com/', reads)]),
+			['url object with flipping toString', { url: flippingToString('http://localhost/', 'https://example.com/') }],
+			['host getter', withFlippingProp({}, 'host', 'localhost', 'example.com')],
+			['hostname getter', withFlippingProp({ port: 1 }, 'hostname', 'localhost', 'example.com')],
+			['port with flipping toString on a configured host', { hostname: '10.0.0.5', port: flippingToString('8000', '22') }],
+			['protocol getter', withFlippingProp({ host: 'localhost' }, 'protocol', 'http:', 'https:')],
+		];
+		for (const [name, options] of cases) {
+			received.length = 0;
+			let result: string;
+			try { result = String(fakeNet.request(options)); } catch (e) { result = (e as Error).message; }
+			if (received.length) {
+				assert.strictEqual(result, 'req', name);
+				const dialed = new URL(received[0] as string);
+				assert.ok(dialed.hostname === 'localhost' || dialed.host === '10.0.0.5:8000', `${name}: Electron would dial ${dialed.href}`);
+				assert.notStrictEqual(dialed.protocol, 'https:', `${name}: protocol flipped`);
+			} else {
+				assert.ok(result.startsWith('ZeroEgress blocked'), `${name}: ${result}`);
+			}
+		}
+	});
+
+	test('electron net.fetch and global fetch: the input is normalized once and the normalized value is passed on', async () => {
+		const received: unknown[] = [];
+		const fakeFetch = async (input: unknown) => { received.push(input); return 'res'; };
+		const fakeGlobal = { fetch: fakeFetch as unknown as typeof fetch };
+		const fakeNet = { request: () => 'req', fetch: fakeFetch };
+		hooks = installEgressNodeHooks(loopbackOnly, { global: fakeGlobal, http, https, net, electronNet: fakeNet });
+		for (const [name, doFetch] of [['global fetch', (i: unknown) => fakeGlobal.fetch(i as string)], ['electron net.fetch', (i: unknown) => fakeNet.fetch(i)]] as const) {
+			received.length = 0;
+			// an object whose stringification flips: the original gets the string we checked
+			assert.strictEqual(await doFetch(flippingToString('http://localhost/', 'https://example.com/')), 'res', name);
+			assert.strictEqual(received[0], 'http://localhost/', `${name}: flipping toString`);
+			// a URL is passed on as its href
+			assert.strictEqual(await doFetch(new URL('http://localhost:1/x')), 'res', name);
+			assert.strictEqual(received[1], 'http://localhost:1/x', `${name}: URL`);
+			// a plain object with a reassuring `url` but a different stringification is judged by what Request would use
+			await assert.rejects(doFetch({ url: 'http://localhost/', toString: () => 'https://example.com/' }), (e: Error) => e.message === blockedMessage('example.com:443'), `${name}: {url, toString}`);
+			// a Request subclass shadowing `url`: the real request state is what gets dialed
+			await assert.rejects(doFetch(lying(new Request('https://example.com/'), 'url', 'http://localhost/')), (e: Error) => e.message === blockedMessage('example.com:443'), `${name}: Request with a shadowed url`);
+			// a genuine Request passes through as the same instance, body intact
+			const request = new Request('http://localhost:1/', { method: 'POST', body: 'payload' });
+			assert.strictEqual(await doFetch(request), 'res', name);
+			assert.strictEqual(received[2], request, `${name}: Request identity`);
+			assert.strictEqual(request.bodyUsed, false, `${name}: Request body untouched`);
+			assert.strictEqual(received.length, 3, name);
+		}
+	});
+
+	test('http.request: host, hostname and port are read once and the checked values are dialed', async () => {
+		install(loopbackOnly);
+		const other = await closedPort();
+		// the flipped values stay on loopback (so nothing leaves the machine either way), but would not reach the server
+		const cases: [string, () => NodeJS.EventEmitter][] = [
+			['hostname getter', () => http.request(withFlippingProp({ port, agent: false }, 'hostname', '127.0.0.1', '::1')).end()],
+			['host getter', () => http.request(withFlippingProp({ port, agent: false }, 'host', '127.0.0.1', '::1')).end()],
+			['port getter', () => http.request(withFlippingProp({ host: '127.0.0.1', agent: false }, 'port', port, other)).end()],
+			['port getter via http.get', () => http.get(withFlippingProp({ host: '127.0.0.1', agent: false }, 'port', port, other))],
+			['URL with a shadowed hostname', () => http.request(lying(new URL(`http://127.0.0.1:${port}/`), 'hostname', '::1'), { agent: false }).end()],
+			['URL string with a flipping options port', () => http.request(`http://127.0.0.1:${port}/`, withFlippingProp({ agent: false }, 'port', port, other)).end()],
+		];
+		for (const [name, make] of cases) {
+			connections = 0;
+			assert.strictEqual(await outcome(make()), 'REACHED 200', name);
+			assert.strictEqual(connections, 1, name);
+		}
+		assert.deepStrictEqual(denials(), []);
+	});
+
+	test('Socket#connect: host, port and path are read once and the checked values are dialed', async () => {
+		install(loopbackOnly);
+		const other = await closedPort();
+		const cases: [string, () => NodeJS.EventEmitter][] = [
+			['host getter', () => new net.Socket().connect(withFlippingProp({ port }, 'host', '127.0.0.1', '::1'))],
+			['port getter', () => new net.Socket().connect(withFlippingProp({ host: '127.0.0.1' }, 'port', port, other))],
+			['lookup is taken from the snapshot', () => new net.Socket().connect(withFlippingProp({ host: 'localhost', port }, 'lookup', undefined, () => { throw new Error('flipped lookup used'); }))],
+			// net.createConnection copies the options once (Socket constructor) before connect reads them, so the
+			// read the hook and the dial share is the second one
+			['host getter via net.connect', () => net.connect(withFlippingProp({ port }, 'host', '127.0.0.1', '::1', 2))],
+			['port getter via net.connect', () => net.connect(withFlippingProp({ host: '127.0.0.1' }, 'port', port, other, 2))],
+		];
+		for (const [name, make] of cases) {
+			connections = 0;
+			const seen = new Promise<void>(r => server.once('connection', () => r()));
+			assert.strictEqual(await outcome(make()), 'REACHED', name);
+			await seen;
+			assert.strictEqual(connections, 1, name);
+		}
+		// a path that vanishes after the first read must not turn into a TCP dial
+		const checksBefore = checked.length;
+		const sock = new net.Socket().connect(withFlippingProp({ host: '127.0.0.1', port: other }, 'path', '/nonexistent/zero-egress.sock', undefined));
+		const err = await new Promise<NodeJS.ErrnoException>(r => sock.once('error', r));
+		assert.strictEqual(err.code, 'ENOENT', 'the unix socket we saw is the one Node tried');
+		assert.strictEqual(checked.length, checksBefore, 'a pipe is not checked');
 	});
 
 	test('dispose restores every original', () => {

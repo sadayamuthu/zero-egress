@@ -18,6 +18,10 @@
 // so proxy-agent's patched request (which may attach its own agent) is never involved.
 // Optionally also wraps Electron's `net.request` / `net.fetch` (used by the shared process).
 // Pass the CommonJS module objects (require('http'), ...); patches are mirrored to ESM namespace imports.
+//
+// Time-of-check/time-of-use: a caller's object is read exactly once (snapshotOptions / fetchInput), every
+// destination is computed from that plain copy, and the copy, never the caller's object, is what the original
+// receives. A getter or toString that answers differently on a later read therefore cannot move the dial.
 
 import type * as httpType from 'http';
 import type * as netType from 'net';
@@ -70,22 +74,54 @@ function destinationUrl(host: unknown, port: unknown): string {
 	return `http://${bracket(h)}:${n}/`;
 }
 
-function fetchInputUrl(input: unknown): string {
-	return typeof input === 'string' ? input : input instanceof URL ? input.href : typeof (input as Request)?.url === 'string' ? (input as Request).url : String(input);
+/**
+ * A plain copy of a caller's options object, taken in one spread so each own getter runs exactly once. The
+ * wrappers compute the check from the copy and hand the copy on, so what was checked is what gets dialed.
+ * `port` is coerced to a primitive here (Node's `+port`, Electron's `':' + port`) so a stateful valueOf or
+ * toString cannot answer differently later. Non-string hosts are left alone: destinationUrl denies them.
+ */
+function snapshotOptions(options: unknown): Record<string, any> {
+	const s: Record<string, any> = { ...(options as object) };
+	if (typeof s.port === 'object' && s.port !== null) { s.port = Number(s.port); }
+	return s;
 }
 
-/** Normalizes http(s).request/get arguments the way Node does; `url` is undefined for a unix socket. */
+/** Request#url as the fetch machinery sees it (the request's own state), not a shadowing own property. */
+const requestUrl: ((this: Request) => string) | undefined = typeof Request === 'function' ? Object.getOwnPropertyDescriptor(Request.prototype, 'url')?.get : undefined;
+
+/**
+ * The URL a fetch input names, read once, and what to hand the original: a Request is passed as is (its URL
+ * is internal state, which `new Request(input)` copies); anything else becomes the string we checked.
+ */
+function fetchInput(input: unknown): { url: string; input: string | Request } {
+	if (requestUrl && input instanceof Request) { return { url: requestUrl.call(input), input }; }
+	const url = input instanceof URL ? input.href : String(input);
+	return { url, input: url };
+}
+
+/**
+ * Normalizes http(s).request/get arguments the way Node's ClientRequest does, into a snapshot the wrapper also
+ * passes on: a string or URL is stringified once and parsed; an object is copied once, and one that Node would
+ * duck-type as a URL (href and protocol, no auth or path) is converted like one; URL forms take an optional
+ * options object before the callback. `url` is undefined for a unix socket.
+ */
 function requestOptions(args: unknown[], defaultPort: number): { url: string | undefined; options: any; callback: unknown } {
 	const [a, b, c] = args;
 	let options: any;
 	let callback: unknown;
+	let fromUrl = true;
 	if (typeof a === 'string' || a instanceof URL) {
-		const u = new URL(String(a));
-		options = { protocol: u.protocol, hostname: u.hostname.replace(/^\[|\]$/g, ''), port: u.port, path: `${u.pathname}${u.search}` };
-		if (b && typeof b === 'object') { options = { ...options, ...b }; callback = c; } else { callback = b; }
+		options = { ...nodeUrl.urlToHttpOptions(new URL(String(a))) };
 	} else {
-		options = { ...(a as object ?? {}) };
+		options = snapshotOptions(a);
+		fromUrl = Boolean(options.href && options.protocol) && options.auth === undefined && options.path === undefined;
+		if (fromUrl) { options = { ...nodeUrl.urlToHttpOptions(options as URL) }; }
+	}
+	if (!fromUrl || typeof b === 'function') {
 		callback = b;
+	} else {
+		options = { ...options, ...(b as object) };
+		callback = c;
 	}
 	if (options.socketPath) { return { url: undefined, options, callback }; }
 	const port = options.port || options.defaultPort || options.agent?.defaultPort || defaultPort;
@@ -93,16 +129,16 @@ function requestOptions(args: unknown[], defaultPort: number): { url: string | u
 }
 
 /**
- * Socket#connect arguments as [options, connectListener], mirroring Node's net.normalizeArgs: an object is the
- * options; a string that is not a number >= 0 (Node's isPipeName) is a pipe path; anything else is the port,
- * with an optional string host. Also accepts Node's internal pre-normalized array.
+ * Socket#connect arguments as [options snapshot, connectListener], mirroring Node's net.normalizeArgs: an
+ * object is the options; a string that is not a number >= 0 (Node's isPipeName) is a pipe path; anything else
+ * is the port, with an optional string host. Also accepts Node's internal pre-normalized array.
  */
 function connectArgs(args: unknown[]): [{ path?: unknown; host?: unknown; port?: unknown; lookup?: Function }, unknown] {
 	const [a, b] = args;
-	if (Array.isArray(a)) { return [a[0] ?? {}, a[1]]; }
+	if (Array.isArray(a)) { return [snapshotOptions(a[0]), a[1]]; }
 	const last = args[args.length - 1];
 	const listener = typeof last === 'function' ? last : undefined;
-	if (a !== null && typeof a === 'object') { return [a, listener]; }
+	if (a !== null && typeof a === 'object') { return [snapshotOptions(a), listener]; }
 	if (typeof a === 'string' && !(Number(a) >= 0)) { return [{ path: a }, listener]; }
 	return [typeof b === 'string' ? { port: a, host: b } : { port: a }, listener];
 }
@@ -171,10 +207,10 @@ export function installEgressNodeHooks(check: (url: string) => boolean, t: Egres
 		restore.push(() => { obj[key] = original; });
 	};
 
-	// The choke point.
+	// The choke point. `options` is our snapshot, and it is what the original gets (Node re-normalizes it).
 	patch(t.net.Socket.prototype, 'connect', original => function (this: netType.Socket, ...args: unknown[]) {
 		const [options, listener] = connectArgs(args);
-		if (options.path) { return (original as Function).apply(this, args); }
+		if (options.path) { return (original as Function).call(this, options, listener); }
 		const url = destinationUrl(options.host, options.port);
 		if (!check(url)) {
 			// Look like a connect in progress (as the real connect does synchronously) so early writes are
@@ -207,20 +243,20 @@ export function installEgressNodeHooks(check: (url: string) => boolean, t: Egres
 			};
 			return (original as Function).call(this, { ...options, lookup: guardedLookup }, listener);
 		}
-		return (original as Function).apply(this, args);
+		return (original as Function).call(this, options, listener);
 	} as typeof original);
 
 	patch(t.global, 'fetch', original => async function (input: string | URL | Request, init?: RequestInit) {
-		const url = fetchInputUrl(input);
+		const { url, input: checked } = fetchInput(input);
 		if (!check(url)) { throw egressBlockedError(url); }
-		return original.call(globalThis, input, init);
+		return original.call(globalThis, checked, init);
 	} as typeof fetch);
 
 	for (const [mod, defaultPort] of [[t.http, 80], [t.https, 443]] as const) {
 		for (const key of ['request', 'get'] as const) {
 			patch(mod, key, original => function (this: unknown, ...args: unknown[]) {
 				const { url, options, callback } = requestOptions(args, defaultPort);
-				if (url === undefined || check(url)) { return (original as Function).apply(this, args); }
+				if (url === undefined || check(url)) { return (original as Function).call(this, options, callback); }
 				const err = egressBlockedError(url);
 				// A bare ClientRequest whose connection fails with our error: callers see the normal 'error' event.
 				const req = new t.http.ClientRequest({
@@ -249,14 +285,17 @@ export function installEgressNodeHooks(check: (url: string) => boolean, t: Egres
 		}
 	};
 	tryPatch('request', original => function (this: unknown, options: unknown, ...rest: unknown[]) {
-		const denied = electronRequestUrls(options).find(url => !check(url));
+		// Electron stringifies a truthy `url` of any type; do it once here so it and we see the same string.
+		const snapshot = typeof options === 'string' ? options : snapshotOptions(options);
+		if (typeof snapshot !== 'string' && snapshot.url) { snapshot.url = String(snapshot.url); }
+		const denied = electronRequestUrls(snapshot).find(url => !check(url));
 		if (denied !== undefined) { throw egressBlockedError(denied); }
-		return original.call(this, options, ...rest);
+		return original.call(this, snapshot, ...rest);
 	});
 	tryPatch('fetch', original => async function (this: unknown, input: unknown, ...rest: unknown[]) {
-		const url = fetchInputUrl(input);
+		const { url, input: checked } = fetchInput(input);
 		if (!check(url)) { throw egressBlockedError(url); }
-		return original.call(this, input, ...rest);
+		return original.call(this, checked, ...rest);
 	});
 
 	syncBuiltinESMExports();
