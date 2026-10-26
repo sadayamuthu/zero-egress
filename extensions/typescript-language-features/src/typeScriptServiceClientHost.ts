@@ -12,7 +12,6 @@ import * as vscode from 'vscode';
 import { CommandManager } from './commands/commandManager';
 import { ServiceConfigurationProvider } from './configuration/configuration';
 import { DiagnosticLanguage, LanguageDescription } from './configuration/languageDescription';
-import { IExperimentationTelemetryReporter } from './experimentTelemetryReporter';
 import { DiagnosticKind } from './languageFeatures/diagnostics';
 import FileConfigurationManager from './languageFeatures/fileConfigurationManager';
 import LanguageProvider from './languageProvider';
@@ -74,7 +73,6 @@ export default class TypeScriptServiceClientHost extends Disposable {
 			processFactory: TsServerProcessFactory;
 			activeJsTsEditorTracker: ActiveJsTsEditorTracker;
 			serviceConfigurationProvider: ServiceConfigurationProvider;
-			experimentTelemetryReporter: IExperimentationTelemetryReporter | undefined;
 			logger: Logger;
 		},
 		onCompletionAccepted: (item: vscode.CompletionItem) => void,

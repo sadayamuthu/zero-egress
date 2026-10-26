@@ -3,8 +3,6 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { IExperimentationTelemetryReporter } from '../experimentTelemetryReporter';
-
 export interface TelemetryProperties {
 	readonly [prop: string]: string | number | boolean | undefined;
 }
@@ -13,25 +11,11 @@ export interface TelemetryReporter {
 	logTelemetry(eventName: string, properties?: TelemetryProperties): void;
 }
 
-export class VSCodeTelemetryReporter implements TelemetryReporter {
-	constructor(
-		private readonly reporter: IExperimentationTelemetryReporter | undefined,
-		private readonly clientVersionDelegate: () => string
-	) { }
-
-	public logTelemetry(eventName: string, properties: { [prop: string]: string } = {}) {
-		const reporter = this.reporter;
-		if (!reporter) {
-			return;
-		}
-
-		/* __GDPR__FRAGMENT__
-			"TypeScriptCommonProperties" : {
-				"version" : { "classification": "SystemMetaData", "purpose": "FeatureInsight" }
-			}
-		*/
-		properties['version'] = this.clientVersionDelegate();
-
-		reporter.postEventObj(eventName, properties);
-	}
+/**
+ * ZeroEgress: this extension sends no telemetry and runs no experiments (the upstream reporter posted
+ * through @vscode/extension-telemetry with the extension's aiKey, and fetched experiments from
+ * default.exp-tas.com). Events are dropped here.
+ */
+export class NoopTelemetryReporter implements TelemetryReporter {
+	public logTelemetry(_eventName: string, _properties?: TelemetryProperties): void { }
 }

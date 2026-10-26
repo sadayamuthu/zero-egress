@@ -9,10 +9,9 @@ import * as vscode from 'vscode';
 import { ServiceConfigurationProvider, SyntaxServerConfiguration, TsServerLogLevel, TypeScriptServiceConfiguration, areServiceConfigurationsEqual } from './configuration/configuration';
 import * as fileSchemes from './configuration/fileSchemes';
 import { Schemes } from './configuration/schemes';
-import { IExperimentationTelemetryReporter } from './experimentTelemetryReporter';
 import { DiagnosticKind, DiagnosticsManager } from './languageFeatures/diagnostics';
 import { Logger } from './logging/logger';
-import { TelemetryReporter, VSCodeTelemetryReporter } from './logging/telemetry';
+import { NoopTelemetryReporter, TelemetryReporter } from './logging/telemetry';
 import Tracer from './logging/tracer';
 import { ProjectType, inferredProjectCompilerOptions } from './tsconfig';
 import { API } from './tsServer/api';
@@ -151,7 +150,6 @@ export default class TypeScriptServiceClient extends Disposable implements IType
 			versionProvider: ITypeScriptVersionProvider;
 			processFactory: TsServerProcessFactory;
 			serviceConfigurationProvider: ServiceConfigurationProvider;
-			experimentTelemetryReporter: IExperimentationTelemetryReporter | undefined;
 			logger: Logger;
 		},
 		allModeIds: readonly string[]
@@ -227,14 +225,7 @@ export default class TypeScriptServiceClient extends Disposable implements IType
 			}
 		}, this, this._disposables);
 
-		this.telemetryReporter = new VSCodeTelemetryReporter(services.experimentTelemetryReporter, () => {
-			if (this.serverState.type === ServerState.Type.Running) {
-				if (this.serverState.tsserverVersion) {
-					return this.serverState.tsserverVersion;
-				}
-			}
-			return this.apiVersion.fullVersionString;
-		});
+		this.telemetryReporter = new NoopTelemetryReporter();
 
 		this.diagnosticsManager = new DiagnosticsManager('typescript', this._configuration, this.telemetryReporter, onCaseInsensitiveFileSystem);
 		this.typescriptServerSpawner = new TypeScriptServerSpawner(this.versionProvider, this._versionManager, this._nodeVersionManager, this.logDirectoryProvider, this.pluginPathsProvider, this.logger, this.telemetryReporter, this.tracer, this.processFactory);
