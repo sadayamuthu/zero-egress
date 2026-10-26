@@ -120,6 +120,15 @@ export function isAllowed(url: string, targets: readonly EgressTarget[]): boolea
 	return targets.some(x => x.host === t.host && x.port === t.port);
 }
 
+/** Short, credential- and path-free name of a destination for logs and errors: `host:port`, else `scheme://host`. */
+export function describeDestination(url: string): string {
+	const t = targetFromUrl(url);
+	if (t) { return `${t.host.includes(':') ? `[${t.host}]` : t.host}:${t.port}`; }
+	let u: URL;
+	try { u = new URL(url); } catch { return 'unparseable URL'; }
+	return u.hostname ? `${u.protocol}//${u.hostname}` : u.protocol;
+}
+
 /** The single merge point for allowed destinations; a future admin policy plugs in here (spec 5.3). */
 export function collectEgressTargets(s: EgressSources): EgressTarget[] {
 	const out: EgressTarget[] = [];

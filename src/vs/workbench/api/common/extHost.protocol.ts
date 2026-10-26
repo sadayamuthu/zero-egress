@@ -89,6 +89,7 @@ import { TextSearchCompleteMessage } from '../../services/search/common/searchEx
 import { ISaveProfileResult } from '../../services/userDataProfile/common/userDataProfile.js';
 import { TerminalShellExecutionCommandLineConfidence } from './extHostTypes.js';
 import * as tasks from './shared/tasks.js';
+import { EgressTarget } from '../../contrib/zeroEgress/common/egressPolicy.js';
 
 export interface IWorkspaceData extends IStaticWorkspaceData {
 	folders: { uri: UriComponents; name: string; index: number }[];
@@ -725,6 +726,17 @@ export interface MainThreadStorageShape extends IDisposable {
 export interface MainThreadTelemetryShape extends IDisposable {
 	$publicLog(eventName: string, data?: any): void;
 	$publicLog2<E extends ClassifiedEvent<OmitMetadata<T>> = never, T extends IGDPRProperty = never>(eventName: string, data?: StrictPropertyCheck<T, E>): void;
+}
+
+// ZeroEgress: the extension host enforces the egress allow-list itself (see api/node/proxyResolver.ts).
+export interface MainThreadEgressGuardShape extends IDisposable {
+	/** Current allow-list; after the first call, changes are pushed with ExtHostEgressGuardShape.$setTargets. */
+	$getTargets(): Promise<EgressTarget[]>;
+	$reportBlocked(url: string): void;
+}
+
+export interface ExtHostEgressGuardShape {
+	$setTargets(targets: EgressTarget[]): void;
 }
 
 export interface MainThreadEditorInsetsShape extends IDisposable {
@@ -3146,6 +3158,7 @@ export const MainContext = {
 	MainThreadAiRelatedInformation: createProxyIdentifier<MainThreadAiRelatedInformationShape>('MainThreadAiRelatedInformation'),
 	MainThreadAiEmbeddingVector: createProxyIdentifier<MainThreadAiEmbeddingVectorShape>('MainThreadAiEmbeddingVector'),
 	MainThreadChatStatus: createProxyIdentifier<MainThreadChatStatusShape>('MainThreadChatStatus'),
+	MainThreadEgressGuard: createProxyIdentifier<MainThreadEgressGuardShape>('MainThreadEgressGuard'),
 };
 
 export const ExtHostContext = {
@@ -3218,3 +3231,7 @@ export const ExtHostContext = {
 	ExtHostLocalization: createProxyIdentifier<ExtHostLocalizationShape>('ExtHostLocalization'),
 	ExtHostMcp: createProxyIdentifier<ExtHostMcpShape>('ExtHostMcp'),
 };
+
+// ZeroEgress: kept out of ExtHostContext, whose actors must all exist when the API is created. This one is
+// registered later, by the Node extension host's proxyResolver, and never by the web worker extension host.
+export const ExtHostEgressGuardContext = createProxyIdentifier<ExtHostEgressGuardShape>('ExtHostEgressGuard');

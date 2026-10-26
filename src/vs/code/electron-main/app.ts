@@ -137,6 +137,9 @@ import { resolveAuditConfig } from '../../workbench/contrib/zeroEgress/electron-
 import { ZeroEgressSCMService } from '../../workbench/contrib/zeroEgress/electron-main/zeroEgressSCMMainService.js';
 import { IZeroEgressSCMService } from '../../workbench/contrib/zeroEgress/common/zeroEgressSCMTypes.js';
 import { MCPChannel } from '../../workbench/contrib/zeroEgress/electron-main/mcpChannel.js';
+import { EgressGuard, EgressGuardMainService } from '../../workbench/contrib/zeroEgress/electron-main/egressGuard.js';
+import { EGRESS_GUARD_CHANNEL } from '../../workbench/contrib/zeroEgress/common/egressGuardService.js';
+import { describeDestination } from '../../workbench/contrib/zeroEgress/common/egressPolicy.js';
 /**
  * The main VS Code application. There will only ever be one instance,
  * even if the user starts many instances (e.g. from the command line).
@@ -151,6 +154,9 @@ export class CodeApplication extends Disposable {
 	private windowsMainService: IWindowsMainService | undefined;
 	private auxiliaryWindowsMainService: IAuxiliaryWindowsMainService | undefined;
 	private nativeHostMainService: INativeHostMainService | undefined;
+
+	// ZeroEgress: the runtime egress guard. Created first so nothing can reach the network before it is in place.
+	private readonly egressGuard: EgressGuard;
 
 	constructor(
 		private readonly mainProcessNodeIpcServer: NodeIPCServer,
@@ -167,6 +173,10 @@ export class CodeApplication extends Disposable {
 		@IUserDataProfilesMainService private readonly userDataProfilesMainService: IUserDataProfilesMainService
 	) {
 		super();
+
+		this.egressGuard = this._register(new EgressGuard());
+		this._register(this.egressGuard.installNodeHooks());
+		this._register(this.egressGuard.onDidBlock(e => this.logService.warn(`[ZeroEgress] blocked connection to ${describeDestination(e.url)} from ${e.origin}`)));
 
 		this.configureSession();
 		this.registerListeners();
@@ -279,6 +289,11 @@ export class CodeApplication extends Disposable {
 		};
 
 		session.defaultSession.webRequest.onBeforeRequest((details, callback) => {
+			// ZeroEgress: renderer, webview and Electron net requests. Electron allows one listener, so it lives here.
+			if (!this.egressGuard.check(details.url, details.webContentsId === undefined ? 'main' : 'renderer')) {
+				return callback({ cancel: true });
+			}
+
 			const uri = URI.parse(details.url);
 			if (uri.scheme === Schemas.vscodeWebview) {
 				if (!isAllowedWebviewRequest(uri, details)) {
@@ -1247,6 +1262,9 @@ export class CodeApplication extends Disposable {
 		const zeroEgressUpdatesChannel = ProxyChannel.fromService(accessor.get(IZeroEgressUpdateService), disposables);
 		mainProcessElectronServer.registerChannel('zero-egress-channel-update', zeroEgressUpdatesChannel);
 
+		const egressGuardChannel = ProxyChannel.fromService(disposables.add(new EgressGuardMainService(this.egressGuard)), disposables);
+		mainProcessElectronServer.registerChannel(EGRESS_GUARD_CHANNEL, egressGuardChannel);
+
 		// Chat audit pipeline (electron-main only). Config from product.json; policy override optional.
 		// The chat channel is registered SYNCHRONOUSLY here with a disabled audit service, BEFORE any await,
 		// so a slow or hung audit init (LocalAuditStore.create / getDebuggingProperties) can never delay or
@@ -1261,6 +1279,7 @@ export class CodeApplication extends Disposable {
 		void (async () => {
 			try {
 				const auditConfig = resolveAuditConfig({ product: (this.productService as any).auditPipeline });
+				this.egressGuard.setTargets('audit', auditConfig.enabled && auditConfig.endpointUrl ? [auditConfig.endpointUrl] : []);
 				const auditDbPath = join(this.environmentMainService.userDataPath, 'zero-egress-audit.vscdb');
 				const auditStore = await LocalAuditStore.create(auditDbPath);
 				const auditForwarder = new HttpAuditForwarder({ endpointUrl: auditConfig.endpointUrl, authHeader: auditConfig.authHeader });
@@ -1291,7 +1310,7 @@ export class CodeApplication extends Disposable {
 		mainProcessElectronServer.registerChannel('zero-egress-channel-scm', zeroEgressSCMChannel);
 
 		// ZeroEgress added this
-		const mcpChannel = new MCPChannel();
+		const mcpChannel = new MCPChannel(this.egressGuard);
 		mainProcessElectronServer.registerChannel('zero-egress-channel-mcp', mcpChannel);
 
 		// Extension Host Debug Broadcasting

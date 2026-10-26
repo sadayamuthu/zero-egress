@@ -5,7 +5,7 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { collectEgressTargets, isAllowed, isLoopbackHost, isNetworkUrl, isPrivateHost, targetFromUrl } from '../egressPolicy.js';
+import { collectEgressTargets, describeDestination, isAllowed, isLoopbackHost, isNetworkUrl, isPrivateHost, targetFromUrl } from '../egressPolicy.js';
 
 suite('egressPolicy', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
@@ -107,5 +107,12 @@ suite('egressPolicy', () => {
 		for (const u of ['about:blank', 'javascript:void 0', 'chrome-extension://x/y', 'vscode-webview://abc/index.html', 'data:text/plain,hi', 'blob:vscode-file://x/uuid', 'file:///tmp/x']) {
 			assert.strictEqual(isAllowed(u, []), true, u);
 		}
+	});
+
+	test('describeDestination names host:port, or the scheme for non-network URLs', () => {
+		assert.strictEqual(describeDestination('https://api.github.com/x?token=secret'), 'api.github.com:443');
+		assert.strictEqual(describeDestination('http://[::1]:8000/'), '[::1]:8000');
+		assert.strictEqual(describeDestination('ftp://user:pw@evil.com/f'), 'ftp://evil.com');
+		assert.strictEqual(describeDestination('not a url'), 'unparseable URL');
 	});
 });

@@ -17,6 +17,7 @@ import { MCPConfigFileJSON, MCPConfigFileEntryJSON, MCPServer, RawMCPToolCall, M
 import { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { MCPUserStateOfName } from '../common/zeroEgressSettingsTypes.js';
+import { EgressGuard } from './egressGuard.js';
 
 const getClientConfig = (serverName: string) => {
 	return {
@@ -66,6 +67,7 @@ export class MCPChannel implements IServerChannel {
 	}
 
 	constructor(
+		private readonly egressGuard: EgressGuard,
 	) { }
 
 	// browser uses this to listen for changes
@@ -123,6 +125,9 @@ export class MCPChannel implements IServerChannel {
 		} = params
 
 		const { mcpServers: mcpServersJSON } = mcpConfigFileJSON
+
+		// the config file is the full list: every HTTP/SSE server in it is an allowed destination, before any client connects
+		this.egressGuard.setTargets('mcp', Object.values(mcpServersJSON ?? {}).flatMap(server => server?.url ? [String(server.url)] : []))
 
 		const allChanges: { type: 'added' | 'removed' | 'updated', serverName: string }[] = [
 			...addedServerNames.map(n => ({ serverName: n, type: 'added' }) as const),
