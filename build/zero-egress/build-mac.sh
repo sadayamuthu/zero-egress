@@ -13,7 +13,9 @@
 #                            notarytool credentials. Required when
 #                            APPLE_SIGNING_IDENTITY is set: the dmg is
 #                            notarized and stapled.
-set -euo pipefail
+set -Eeuo pipefail
+# Name the failing command, so a red CI step always says what broke.
+trap 'rc=$?; echo "ERROR: [build-mac] exit $rc at line $LINENO: $BASH_COMMAND" >&2' ERR
 ARCH="${1:?arch required: arm64|x64}"
 case "$ARCH" in arm64|x64) ;; *) echo "ERROR: unsupported arch '$ARCH'" >&2; exit 2;; esac
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"

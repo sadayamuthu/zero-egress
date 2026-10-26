@@ -162,7 +162,7 @@ async function getVSCodeSysroot(arch) {
 async function getChromiumSysroot(arch) {
     const sysrootJSONUrl = `https://raw.githubusercontent.com/electron/electron/v${getElectronVersion().electronVersion}/script/sysroots.json`;
     const sysrootDictLocation = `${(0, os_1.tmpdir)()}/sysroots.json`;
-    const result = (0, child_process_1.spawnSync)('curl', [sysrootJSONUrl, '-o', sysrootDictLocation]);
+    const result = (0, child_process_1.spawnSync)('curl', ['-fsSL', '--retry', '8', '--retry-delay', '15', '--retry-all-errors', sysrootJSONUrl, '-o', sysrootDictLocation]); // ZeroEgress: fail on HTTP errors, retry rate limits
     if (result.status !== 0) {
         throw new Error('Cannot retrieve sysroots.json. Stderr:\n' + result.stderr);
     }

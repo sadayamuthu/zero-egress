@@ -8,7 +8,9 @@
 # blanket URL gate would be noise. The authoritative no-egress proof is the
 # runtime egress test, not this static scan.
 # Usage: audit-urls.sh <scan-dir>
-set -euo pipefail
+set -Eeuo pipefail
+# Never fail silently: any unexpected error names the command and line.
+trap 'rc=$?; echo "AUDIT FAILED: unexpected error (exit $rc) at line $LINENO: $BASH_COMMAND" >&2' ERR
 
 SCAN_DIR="${1:?scan dir required (e.g. out or a built .app)}"
 [ -d "$SCAN_DIR" ] || { echo "SCAN_DIR '$SCAN_DIR' not found or not a directory" >&2; exit 1; }
@@ -17,6 +19,7 @@ DENY_FILE="$HERE/deny-hosts.txt"
 KNOWN_INERT_FILE="$HERE/known-inert-hosts.txt"
 
 fail=0
+denied_hosts=""
 
 # A denied host that also appears in known-inert-hosts.txt is bundled but
 # provably never contacted (see EGRESS.md), so it is
@@ -40,6 +43,7 @@ while IFS= read -r host; do
     else
       echo "DENIED HOST '$host':"
       echo "$hits"
+      denied_hosts="${denied_hosts:+$denied_hosts, }$host"
       fail=1
     fi
   fi
@@ -109,12 +113,17 @@ else
     }
     console.log("PRODUCT.JSON INVARIANT: OK");
   ' "$PRODUCT_JSON"; then
+    product_invariant_failed=1
     fail=1
   fi
 fi
 
 if [ "$fail" -ne 0 ]; then
-  echo "AUDIT FAILED"
+  reasons=""
+  [ -n "$denied_hosts" ] && reasons="denied host(s): $denied_hosts"
+  [ -n "${product_invariant_failed:-}" ] && reasons="${reasons:+$reasons; }product.json invariant (see PRODUCT.JSON lines above)"
+  [ -f "$PRODUCT_JSON" ] || reasons="${reasons:+$reasons; }product.json not found"
+  echo "AUDIT FAILED: ${reasons:-see output above}"
   exit 1
 fi
 echo "AUDIT PASSED"

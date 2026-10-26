@@ -8,7 +8,9 @@
 #   ZeroEgress-<v>-x86_64.AppImage
 #   zero-egress-<v>-linux-x64.tar.gz
 # Needs dpkg-deb, fakeroot and rpmbuild on PATH.
-set -euo pipefail
+set -Eeuo pipefail
+# Name the failing command, so a red CI step always says what broke.
+trap 'rc=$?; echo "ERROR: [build-linux] exit $rc at line $LINENO: $BASH_COMMAND" >&2' ERR
 ARCH="${1:?arch required: x64}"
 [ "$ARCH" = x64 ] || { echo "ERROR: unsupported arch '$ARCH' (x64 only)" >&2; exit 2; }
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"

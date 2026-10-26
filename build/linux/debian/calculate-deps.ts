@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { spawnSync } from 'child_process';
-import { constants, statSync } from 'fs';
+import { constants, existsSync, readFileSync, statSync } from 'fs';
 import { tmpdir } from 'os';
 import path from 'path';
 import manifests from '../../../cgmanifest.json';
@@ -35,9 +35,14 @@ function calculatePackageDeps(binaryPath: string, arch: DebianArchString, chromi
 	});
 	const dpkgShlibdepsUrl = `https://raw.githubusercontent.com/chromium/chromium/${chromiumManifest[0].version}/third_party/dpkg-shlibdeps/dpkg-shlibdeps.pl`;
 	const dpkgShlibdepsScriptLocation = `${tmpdir()}/dpkg-shlibdeps.pl`;
-	const result = spawnSync('curl', [dpkgShlibdepsUrl, '-o', dpkgShlibdepsScriptLocation]);
-	if (result.status !== 0) {
-		throw new Error('Cannot retrieve dpkg-shlibdeps. Stderr:\n' + result.stderr);
+	// ZeroEgress: fetch once per process (this runs for every binary), fail on
+	// HTTP errors instead of saving the error page as the script, and retry:
+	// raw.githubusercontent.com rate-limits CI runners (HTTP 429).
+	if (!isPerlScript(dpkgShlibdepsScriptLocation)) {
+		const result = spawnSync('curl', ['-fsSL', '--retry', '8', '--retry-delay', '15', '--retry-all-errors', dpkgShlibdepsUrl, '-o', dpkgShlibdepsScriptLocation]);
+		if (result.status !== 0 || !isPerlScript(dpkgShlibdepsScriptLocation)) {
+			throw new Error(`Cannot retrieve dpkg-shlibdeps from ${dpkgShlibdepsUrl} (curl exit ${result.status}). Stderr:\n` + result.stderr);
+		}
 	}
 	const cmd = [dpkgShlibdepsScriptLocation, '--ignore-weak-undefined'];
 	switch (arch) {
@@ -94,4 +99,8 @@ function calculatePackageDeps(binaryPath: string, arch: DebianArchString, chromi
 	}).sort();
 	const requires = new Set(filteredDeps);
 	return requires;
+}
+
+function isPerlScript(file: string): boolean {
+	return existsSync(file) && readFileSync(file, 'utf8').startsWith('#!');
 }
