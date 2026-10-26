@@ -22,6 +22,7 @@
 import type * as httpType from 'http';
 import type * as netType from 'net';
 import * as dns from 'dns';
+import * as nodeUrl from 'url';
 import { isIP } from 'net';
 import { createRequire, syncBuiltinESMExports } from 'node:module';
 import { IDisposable, toDisposable } from '../../../../base/common/lifecycle.js';
@@ -111,15 +112,55 @@ function normalizedAddress(address: string): string | undefined {
 	return targetFromUrl(destinationUrl(address, 0))?.host;
 }
 
-function electronRequestUrl(options: any): string {
-	if (typeof options === 'string') { return options; }
-	if (typeof options?.url === 'string') { return options.url; }
-	const protocol = options?.protocol || 'http:';
-	if (options?.hostname !== undefined) {
-		const dest = destinationUrl(options.hostname, options.port || (protocol === 'https:' ? 443 : 80));
-		return dest.startsWith('http://') ? `${protocol}${dest.slice('http:'.length)}` : dest;
+/**
+ * The URL Electron's net.request dials, computed exactly as Electron's ClientRequest parseOptions does
+ * (node:url legacy parse/format): a string is parsed; a truthy `url` wins (stringified, any type); else `host`
+ * (host[:port]); else `hostname || 'localhost'` plus `port`; protocol defaults to 'http:'.
+ */
+function electronDialUrl(options: unknown): string {
+	const t: any = typeof options === 'string' ? nodeUrl.parse(options) : { ...(options as object) };
+	if (t.url) { return String(t.url); }
+	const e: any = { protocol: t.protocol || 'http:' };
+	if (t.host) {
+		e.host = t.host;
+	} else {
+		e.hostname = t.hostname || 'localhost';
+		if (t.port) { e.port = t.port; }
 	}
-	return `${protocol}//${options?.host || 'localhost'}/`; // `host` is host[:port]; the URL parser checks it
+	const path = nodeUrl.parse(t.path || '/');
+	e.pathname = path.pathname;
+	e.search = path.search;
+	e.hash = path.hash;
+	return nodeUrl.format(e);
+}
+
+/**
+ * Every destination a net.request options value could name: Electron's own choice (above) plus, as defense
+ * in depth, each of `url`, `host` and `hostname`+`port` present in it and the raw string. All must be allowed.
+ * Odd `host` values follow destinationUrl's invalid-host rule.
+ */
+function electronRequestUrls(options: unknown): string[] {
+	const urls: string[] = [];
+	try {
+		urls.push(electronDialUrl(options));
+	} catch {
+		urls.push('invalid-host://electron-options');
+	}
+	if (typeof options === 'string') {
+		urls.push(options);
+	} else if (options !== null && typeof options === 'object') {
+		const o = options as { url?: unknown; host?: unknown; hostname?: unknown; port?: unknown; protocol?: unknown };
+		const protocol = typeof o.protocol === 'string' && o.protocol ? o.protocol : 'http:';
+		if (o.url) { urls.push(String(o.url)); }
+		if (o.host) {
+			urls.push(typeof o.host !== 'string' ? 'invalid-host://non-string'
+				: URL_CONFUSING_HOST.test(o.host) ? `invalid-host://${encodeURIComponent(o.host)}`
+					: `${protocol}//${o.host}/`);
+		}
+		const dest = destinationUrl(o.hostname, o.port || (protocol === 'https:' ? 443 : 80));
+		urls.push(dest.startsWith('http://') ? `${protocol}${dest.slice('http:'.length)}` : dest);
+	}
+	return urls;
 }
 
 export function installEgressNodeHooks(check: (url: string) => boolean, t: EgressHookTargets): IDisposable {
@@ -208,8 +249,8 @@ export function installEgressNodeHooks(check: (url: string) => boolean, t: Egres
 		}
 	};
 	tryPatch('request', original => function (this: unknown, options: unknown, ...rest: unknown[]) {
-		const url = electronRequestUrl(options);
-		if (!check(url)) { throw egressBlockedError(url); }
+		const denied = electronRequestUrls(options).find(url => !check(url));
+		if (denied !== undefined) { throw egressBlockedError(denied); }
 		return original.call(this, options, ...rest);
 	});
 	tryPatch('fetch', original => async function (this: unknown, input: unknown, ...rest: unknown[]) {

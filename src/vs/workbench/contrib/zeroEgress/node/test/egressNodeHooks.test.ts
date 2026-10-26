@@ -213,6 +213,44 @@ suite('egressNodeHooks', () => {
 		assert.strictEqual(calls.length, 2);
 	});
 
+	test('electron net.request: Electron\'s option precedence, and every named destination must pass', () => {
+		const received: unknown[] = [];
+		const fakeNet = { request: (o: unknown) => { received.push(o); return 'req'; } };
+		hooks = installEgressNodeHooks(url => isAllowed(url, []), { global: globalThis, http, https, net, electronNet: fakeNet });
+		const blocked: [unknown, string][] = [
+			// Electron dials `host` over `hostname`, and a truthy non-string `url` over everything
+			[{ hostname: 'localhost', host: 'example.com' }, 'example.com:80'],
+			[{ url: new URL('https://example.com/'), hostname: 'localhost' }, 'example.com:443'],
+			[{ host: 'example.com:8443', protocol: 'https:' }, 'example.com:8443'],
+			[{ hostname: 'example.com', port: 8080 }, 'example.com:8080'],
+			// defense in depth: Electron would dial localhost here, but another field names a remote host
+			[{ url: 'http://127.0.0.1:1/', host: 'example.com' }, 'example.com:80'],
+			[{ host: 'localhost', hostname: 'example.com' }, 'example.com:80'],
+			// odd hosts
+			[{ host: 'x@localhost' }, 'invalid-host://x%40localhost'],
+			[{ host: { toString: () => 'localhost' } }, 'invalid-host://non-string'],
+			// strings: WHATWG and Electron's legacy parse both looked at
+			['http://example.com\\@localhost/', 'example.com:80'],
+		];
+		for (const [options, destination] of blocked) {
+			assert.throws(() => fakeNet.request(options), (e: Error) => e.message === blockedMessage(destination), JSON.stringify(String((options as { url?: unknown }).url ?? JSON.stringify(options))));
+		}
+		assert.deepStrictEqual(received, []);
+		const allowed: unknown[] = [
+			{ url: 'http://127.0.0.1:1/' },
+			{ host: 'localhost:8080' },
+			{ hostname: 'localhost', port: 1 },
+			{ hostname: '::1', port: 1 },
+			{},
+			'http://localhost:80\\@example.com/',
+			'http://example.com%2f@localhost/',
+		];
+		for (const options of allowed) {
+			assert.strictEqual(fakeNet.request(options), 'req', JSON.stringify(options));
+		}
+		assert.strictEqual(received.length, allowed.length);
+	});
+
 	test('electron net properties that cannot be replaced do not throw; sockets stay policed', async () => {
 		const original = () => 'req';
 		const getterOnly = {} as { request: Function; fetch?: Function };
