@@ -39,3 +39,5 @@ src/vs/workbench/contrib/debug/browser/replAccessibilityHelp.ts:Xkxvb3Ak
 src/vs/workbench/contrib/notebook/browser/view/notebookCellListView.ts:Xkxvb3Ak
 src/vs/workbench/services/textMate/common/TMHelper.ts:Xkxvb3Ak
 src/vs/workbench/services/views/browser/viewDescriptorService.ts:Xkxvb3Ak
+# upstream highlight.js language-grammar keywords (e.g. Cap'n Proto types), bundled into the packaged markdown extension
+extensions/markdown-language-features/dist/extension.js:XigiVm9pZCJ8TG9vcFNvdW5kfExvb3BGcmVlR3JhcGhRfExPT1BfW0EtWl0pJA==

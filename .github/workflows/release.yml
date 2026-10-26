@@ -170,7 +170,9 @@ jobs:
   build-win:
     needs: test
     if: needs.test.outputs.win == 'true'
-    runs-on: windows-latest
+    # windows-latest now ships Visual Studio 2026, which node-gyp 10 (npm 10,
+    # Node 20) cannot find; windows-2022 has Visual Studio 2022.
+    runs-on: windows-2022
     timeout-minutes: 180
     defaults:
       run:
@@ -269,6 +271,15 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: npm
+      # The minified build's mangler step outgrows the runner's 16 GB of RAM.
+      - name: Add swap
+        run: |
+          df -h / /mnt || true
+          sudo fallocate -l 16G /swapfile-release
+          sudo chmod 600 /swapfile-release
+          sudo mkswap /swapfile-release
+          sudo swapon /swapfile-release
+          free -h
       # Native build prerequisites for VS Code's npm dependencies, plus the
       # .deb (dpkg-deb, fakeroot) and .rpm (rpmbuild) packaging tools.
       - name: System dependencies

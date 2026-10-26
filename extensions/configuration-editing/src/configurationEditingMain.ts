@@ -7,7 +7,8 @@ import { getLocation, JSONPath, parse, visit, Location } from 'jsonc-parser';
 import * as vscode from 'vscode';
 import { SettingsDocument } from './settingsDocumentHelper';
 import { provideInstalledExtensionProposals } from './extensionsProposals';
-import './importExportProfiles';
+// ZeroEgress: the GitHub Gist profile import/export handler (importExportProfiles.ts)
+// is removed; it called api.github.com.
 
 export function activate(context: vscode.ExtensionContext): void {
 	//settings.json suggestions

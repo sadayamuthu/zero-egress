@@ -186,3 +186,9 @@ zone.js/dist/**
 @xterm/xterm-addon-*/fixtures/**
 @xterm/xterm-addon-*/out/**
 @xterm/xterm-addon-*/out-test/**
+
+# ZeroEgress: install-time download helpers and release notes, never loaded at
+# runtime; they carry api.github.com strings the packaged-app URL audit rejects.
+@vscode/ripgrep/lib/download.js
+@vscode/ripgrep/lib/postinstall.js
+diff/release-notes.md

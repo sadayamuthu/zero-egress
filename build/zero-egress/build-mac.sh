@@ -35,12 +35,14 @@ else
 fi
 DMG="$ROOT/dist/ZeroEgress-${VERSION}-${ARCH}${SUFFIX}.dmg"
 
-# ZeroEgress requires the React bundle (react/out/) before any TS compile/package.
-mark "buildreact start"
-npm run buildreact
-mark "gulp min start"
-npm run gulp -- "vscode-darwin-${ARCH}-min"
-mark "gulp min done; locating .app"
+if [ "${ZE_REUSE_APP:-}" != 1 ]; then
+  # ZeroEgress requires the React bundle (react/out/) before any TS compile/package.
+  mark "buildreact start"
+  npm run buildreact
+  mark "gulp min start"
+  npm run gulp -- "vscode-darwin-${ARCH}-min"
+fi
+mark "locating .app"
 APP="$(ls -d "$BUILDROOT/VSCode-darwin-${ARCH}/"*.app | head -1)"
 [ -d "$APP" ] || { echo "ERROR: no .app under $BUILDROOT/VSCode-darwin-${ARCH}" >&2; exit 1; }
 
