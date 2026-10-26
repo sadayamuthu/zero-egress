@@ -26,6 +26,7 @@ function mergeTyped(base: IAuditConfig, src: Partial<IAuditConfig> | undefined):
 	return out;
 }
 
-export function resolveAuditConfig(sources: { product?: Partial<IAuditConfig>; policy?: Partial<IAuditConfig> }): IAuditConfig {
-	return mergeTyped(mergeTyped(AUDIT_DEFAULTS, sources.product), sources.policy);
+// Precedence, lowest to highest: defaults < product.json < user settings < policy (unused in v0.1.0).
+export function resolveAuditConfig(sources: { product?: Partial<IAuditConfig>; user?: Partial<IAuditConfig>; policy?: Partial<IAuditConfig> }): IAuditConfig {
+	return mergeTyped(mergeTyped(mergeTyped(AUDIT_DEFAULTS, sources.product), sources.user), sources.policy);
 }

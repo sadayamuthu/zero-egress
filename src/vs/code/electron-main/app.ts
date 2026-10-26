@@ -133,6 +133,7 @@ import { LLMMessageChannel } from '../../workbench/contrib/zeroEgress/electron-m
 import { AuditMainService, IAuditMainService, createDisabledAuditService } from '../../workbench/contrib/zeroEgress/electron-main/audit/auditMainService.js';
 import { LocalAuditStore } from '../../workbench/contrib/zeroEgress/electron-main/audit/localAuditStore.js';
 import { HttpAuditForwarder } from '../../workbench/contrib/zeroEgress/electron-main/audit/auditForwarder.js';
+import '../../workbench/contrib/zeroEgress/common/zeroEgressConfiguration.js';
 import { resolveAuditConfig } from '../../workbench/contrib/zeroEgress/electron-main/audit/auditConfig.js';
 import { ZeroEgressSCMService } from '../../workbench/contrib/zeroEgress/electron-main/zeroEgressSCMMainService.js';
 import { IZeroEgressSCMService } from '../../workbench/contrib/zeroEgress/common/zeroEgressSCMTypes.js';
@@ -1268,7 +1269,7 @@ export class CodeApplication extends Disposable {
 		// Shared process: loopback-only Node hooks there; it only reports its blocks.
 		sharedProcessClient.then(client => client.registerChannel(EGRESS_GUARD_CHANNEL, new EgressGuardChannel(this.egressGuard, { canSetSettings: false, reportOrigin: 'sharedProcess' })));
 
-		// Chat audit pipeline (electron-main only). Config from product.json; policy override optional.
+		// Chat audit pipeline (electron-main only). Config from product.json, then user settings (zeroEgress.audit.*); policy override optional.
 		// The chat channel is registered SYNCHRONOUSLY here with a disabled audit service, BEFORE any await,
 		// so a slow or hung audit init (LocalAuditStore.create / getDebuggingProperties) can never delay or
 		// block channel registration — chat is always wired. The real audit pipeline is built asynchronously
@@ -1281,7 +1282,15 @@ export class CodeApplication extends Disposable {
 		// Build the real audit pipeline asynchronously and hot-swap it in when ready.
 		void (async () => {
 			try {
-				const auditConfig = resolveAuditConfig({ product: (this.productService as any).auditPipeline });
+				const userEnabled = this.configurationService.getValue<unknown>('zeroEgress.audit.enabled');
+				const userCollectorUrl = this.configurationService.getValue<unknown>('zeroEgress.audit.collectorUrl');
+				const auditConfig = resolveAuditConfig({
+					product: (this.productService as any).auditPipeline,
+					user: {
+						...(typeof userEnabled === 'boolean' ? { enabled: userEnabled } : {}),
+						...(typeof userCollectorUrl === 'string' && userCollectorUrl.trim() ? { endpointUrl: userCollectorUrl.trim() } : {}),
+					},
+				});
 				this.egressGuard.setTargets('audit', auditConfig.enabled && auditConfig.endpointUrl ? [auditConfig.endpointUrl] : []);
 				const auditDbPath = join(this.environmentMainService.userDataPath, 'zero-egress-audit.vscdb');
 				const auditStore = await LocalAuditStore.create(auditDbPath);

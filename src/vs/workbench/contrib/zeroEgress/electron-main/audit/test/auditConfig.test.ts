@@ -29,4 +29,19 @@ suite('resolveAuditConfig', () => {
 		assert.strictEqual(c.enabled, false);
 		assert.strictEqual(c.batchSize, AUDIT_DEFAULTS.batchSize);
 	});
+
+	test('user overrides product', () => {
+		const c = resolveAuditConfig({ product: { enabled: false }, user: { enabled: true } });
+		assert.strictEqual(c.enabled, true);
+	});
+
+	test('policy overrides user', () => {
+		const c = resolveAuditConfig({ user: { enabled: true }, policy: { enabled: false } });
+		assert.strictEqual(c.enabled, false);
+	});
+
+	test('user wrong type ignored', () => {
+		const c = resolveAuditConfig({ user: { enabled: 'yes' as unknown as boolean } });
+		assert.strictEqual(c.enabled, AUDIT_DEFAULTS.enabled);
+	});
 });

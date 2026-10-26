@@ -71,6 +71,7 @@ import './egressTargetsContribution.js'
 import '../common/sendLLMMessageService.js'
 
 // zeroEgressSettings
+import '../common/zeroEgressConfiguration.js'
 import '../common/zeroEgressSettingsService.js'
 
 // refreshModel
