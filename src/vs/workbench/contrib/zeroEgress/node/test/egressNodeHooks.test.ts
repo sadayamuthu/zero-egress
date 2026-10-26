@@ -8,6 +8,7 @@ import type * as httpType from 'http';
 import type * as netType from 'net';
 import type * as tlsType from 'tls';
 import { EventEmitter } from 'events';
+import { Readable, Writable } from 'stream';
 import { createRequire } from 'node:module';
 import * as nodeUrl from 'url';
 import * as proxyAgent from '@vscode/proxy-agent';
@@ -215,15 +216,18 @@ suite('egressNodeHooks', () => {
 	});
 
 	test('electron net is wrapped when given', async () => {
-		const calls: unknown[] = [];
-		const fakeNet = { request: (o: unknown) => { calls.push(o); return 'req'; }, fetch: async (u: unknown) => { calls.push(u); return 'res'; } };
+		const { fakeNet, requests, originalFetchCalls } = fakeElectronNet();
 		hooks = installEgressNodeHooks(url => isAllowed(url, []), { global: globalThis, http, https, net, electronNet: fakeNet });
 		assert.throws(() => fakeNet.request({ url: 'https://update.example.com/x' }), (e: Error) => e.message === blockedMessage('update.example.com:443'));
 		assert.throws(() => fakeNet.request({ protocol: 'https:', hostname: 'example.com', port: 8443 }), (e: Error) => e.message === blockedMessage('example.com:8443'));
 		await assert.rejects(fakeNet.fetch('https://example.com/'), (e: Error) => e.message === blockedMessage('example.com:443'));
-		assert.strictEqual(fakeNet.request({ url: 'http://127.0.0.1:1/' }), 'req');
-		assert.strictEqual(await fakeNet.fetch('http://localhost:1/'), 'res');
-		assert.strictEqual(calls.length, 2);
+		assert.strictEqual(requests.length, 0);
+		assert.ok(fakeNet.request({ url: 'http://127.0.0.1:1/' }) instanceof FakeElectronRequest);
+		const response = fakeNet.fetch('http://localhost:1/') as unknown as Promise<Response>;
+		assert.strictEqual(requests[1].options.url, 'http://localhost:1/');
+		requests[1].serverResponds(200, {}, 'ok');
+		assert.strictEqual(await (await response).text(), 'ok');
+		assert.deepStrictEqual(originalFetchCalls, [], 'Electron\'s own net.fetch is never used');
 	});
 
 	test('electron net.request: Electron\'s option precedence, and every named destination must pass', () => {
@@ -324,31 +328,47 @@ suite('egressNodeHooks', () => {
 		}
 	});
 
-	test('electron net.fetch and global fetch: the input is normalized once and the normalized value is passed on', async () => {
+	test('global fetch: the input is normalized once and the normalized value is passed on', async () => {
 		const received: unknown[] = [];
-		const fakeFetch = async (input: unknown) => { received.push(input); return 'res'; };
-		const fakeGlobal = { fetch: fakeFetch as unknown as typeof fetch };
-		const fakeNet = { request: () => 'req', fetch: fakeFetch };
-		hooks = installEgressNodeHooks(loopbackOnly, { global: fakeGlobal, http, https, net, electronNet: fakeNet });
-		for (const [name, doFetch] of [['global fetch', (i: unknown) => fakeGlobal.fetch(i as string)], ['electron net.fetch', (i: unknown) => fakeNet.fetch(i)]] as const) {
-			received.length = 0;
-			// an object whose stringification flips: the original gets the string we checked
-			assert.strictEqual(await doFetch(flippingToString('http://localhost/', 'https://example.com/')), 'res', name);
-			assert.strictEqual(received[0], 'http://localhost/', `${name}: flipping toString`);
-			// a URL is passed on as its href
-			assert.strictEqual(await doFetch(new URL('http://localhost:1/x')), 'res', name);
-			assert.strictEqual(received[1], 'http://localhost:1/x', `${name}: URL`);
-			// a plain object with a reassuring `url` but a different stringification is judged by what Request would use
-			await assert.rejects(doFetch({ url: 'http://localhost/', toString: () => 'https://example.com/' }), (e: Error) => e.message === blockedMessage('example.com:443'), `${name}: {url, toString}`);
-			// a Request subclass shadowing `url`: the real request state is what gets dialed
-			await assert.rejects(doFetch(lying(new Request('https://example.com/'), 'url', 'http://localhost/')), (e: Error) => e.message === blockedMessage('example.com:443'), `${name}: Request with a shadowed url`);
-			// a genuine Request passes through as the same instance, body intact
-			const request = new Request('http://localhost:1/', { method: 'POST', body: 'payload' });
-			assert.strictEqual(await doFetch(request), 'res', name);
-			assert.strictEqual(received[2], request, `${name}: Request identity`);
-			assert.strictEqual(request.bodyUsed, false, `${name}: Request body untouched`);
-			assert.strictEqual(received.length, 3, name);
-		}
+		const fakeGlobal = { fetch: (async (input: unknown) => { received.push(input); return 'res'; }) as unknown as typeof fetch };
+		hooks = installEgressNodeHooks(loopbackOnly, { global: fakeGlobal, http, https, net });
+		const doFetch = (i: unknown) => fakeGlobal.fetch(i as string);
+		// an object whose stringification flips: the original gets the string we checked
+		assert.strictEqual(await doFetch(flippingToString('http://localhost/', 'https://example.com/')), 'res');
+		assert.strictEqual(received[0], 'http://localhost/', 'flipping toString');
+		// a URL is passed on as its href
+		assert.strictEqual(await doFetch(new URL('http://localhost:1/x')), 'res');
+		assert.strictEqual(received[1], 'http://localhost:1/x', 'URL');
+		// a plain object with a reassuring `url` but a different stringification is judged by what Request would use
+		await assert.rejects(doFetch({ url: 'http://localhost/', toString: () => 'https://example.com/' }), (e: Error) => e.message === blockedMessage('example.com:443'));
+		// a Request subclass shadowing `url`: the real request state is what gets dialed
+		await assert.rejects(doFetch(lying(new Request('https://example.com/'), 'url', 'http://localhost/')), (e: Error) => e.message === blockedMessage('example.com:443'));
+		// a genuine Request passes through as the same instance, body intact
+		const request = new Request('http://localhost:1/', { method: 'POST', body: 'payload' });
+		assert.strictEqual(await doFetch(request), 'res');
+		assert.strictEqual(received[2], request, 'Request identity');
+		assert.strictEqual(request.bodyUsed, false, 'Request body untouched');
+		assert.strictEqual(received.length, 3);
+	});
+
+	test('electron net.fetch: the input is normalized once and the checked URL is what net.request gets', async () => {
+		const { fakeNet, requests } = fakeElectronNet();
+		hooks = installEgressNodeHooks(loopbackOnly, { global: globalThis, http, https, net, electronNet: fakeNet });
+		const respond = async (p: unknown, i: number) => { await settle(); requests[i].serverResponds(200); return (await (p as Promise<Response>)).status; };
+		assert.strictEqual(await respond(fakeNet.fetch(flippingToString('http://localhost/', 'https://example.com/')), 0), 200);
+		assert.strictEqual(requests[0].options.url, 'http://localhost/', 'flipping toString');
+		assert.strictEqual(await respond(fakeNet.fetch(new URL('http://localhost:1/x')), 1), 200);
+		assert.strictEqual(requests[1].options.url, 'http://localhost:1/x', 'URL');
+		await assert.rejects(fakeNet.fetch({ url: 'http://localhost/', toString: () => 'https://example.com/' }) as Promise<unknown>, (e: Error) => e.message === blockedMessage('example.com:443'));
+		await assert.rejects(fakeNet.fetch(lying(new Request('https://example.com/'), 'url', 'http://localhost/')) as Promise<unknown>, (e: Error) => e.message === blockedMessage('example.com:443'));
+		assert.strictEqual(requests.length, 2, 'nothing was created for the blocked inputs');
+		// a genuine Request: its method, headers and body go to the request
+		const p = fakeNet.fetch(new Request('http://localhost:1/', { method: 'POST', body: 'payload', headers: { 'x-a': '1' } }));
+		while (!requests[2]?.started) { await settle(); }
+		assert.strictEqual(requests[2].options.method, 'POST');
+		assert.strictEqual(requests[2].headers['x-a'], '1');
+		assert.strictEqual(Buffer.concat(requests[2].chunks).toString(), 'payload');
+		assert.strictEqual(await respond(p, 2), 200);
 	});
 
 	test('http.request: host, hostname and port are read once and the checked values are dialed', async () => {
@@ -402,10 +422,22 @@ suite('egressNodeHooks', () => {
 	// event is being emitted; with redirect 'manual' it cancels ("Redirect was cancelled") unless followRedirect() was
 	// called during that emit. FakeElectronRequest reproduces that logic (net-client-request.ts in Electron 34).
 
-	class FakeElectronRequest extends EventEmitter {
+	class FakeElectronRequest extends Writable {
 		readonly policy: string;
 		/** URLs the loader went on to after a redirect. */
 		readonly followed: string[] = [];
+		readonly headers: Record<string, string> = {};
+		readonly chunks: Buffer[] = [];
+		/** end() was called: Electron starts the url loader here. */
+		started = false;
+		setHeader(name: string, value: string): void { this.headers[name] = value; }
+		override _write(chunk: Buffer, _enc: string, cb: () => void): void { this.chunks.push(Buffer.from(chunk)); cb(); }
+		override _final(cb: () => void): void { this.started = true; cb(); }
+		/** The server answered (Electron emits an IncomingMessage). */
+		serverResponds(statusCode: number, headers: Record<string, string | string[]> = {}, body = ''): void {
+			const resp = Object.assign(Readable.from(body ? [Buffer.from(body)] : []), { statusCode, statusMessage: `status ${statusCode}`, headers });
+			this.emit('response', resp);
+		}
 		private cancelled = false;
 		private aborted = false;
 		private followRedirectCb: (() => void) | undefined;
@@ -454,8 +486,12 @@ suite('egressNodeHooks', () => {
 
 	function fakeElectronNet() {
 		const requests: FakeElectronRequest[] = [];
-		const fakeNet = { request: (o: unknown) => { const r = new FakeElectronRequest(o); requests.push(r); return r; } };
-		return { fakeNet, requests };
+		const originalFetchCalls: unknown[] = [];
+		const fakeNet = {
+			request: (o: unknown) => { const r = new FakeElectronRequest(o); requests.push(r); return r; },
+			fetch: async (...a: unknown[]) => { originalFetchCalls.push(a); return 'original fetch'; },
+		};
+		return { fakeNet, requests, originalFetchCalls };
 	}
 	const nextError = (req: EventEmitter) => new Promise<string>(resolve => req.once('error', (e: Error) => resolve(e.message)));
 	const settle = () => new Promise(r => setImmediate(r));
@@ -550,6 +586,87 @@ suite('egressNodeHooks', () => {
 		flippedToManual.serverRedirects('https://example.com/');
 		assert.deepStrictEqual(flippedToManual.followed, []);
 		await settle();
+	});
+
+	// net.fetch is built on the guarded net.request (Electron's own net.fetch is out of the wrapper's reach).
+
+	/** Starts a net.fetch on the fake net and returns it with the request it created, once that request started. */
+	async function startFetch(fakeNet: ReturnType<typeof fakeElectronNet>['fakeNet'], requests: FakeElectronRequest[], input: string, init?: RequestInit) {
+		const n = requests.length;
+		const response = fakeNet.fetch(input, init) as unknown as Promise<Response>;
+		response.catch(() => { });
+		while (!requests[n]?.started) { await settle(); }
+		return { response, req: requests[n] };
+	}
+
+	test('electron net.fetch: an allowed hop is followed, a blocked hop is refused with one log line', async () => {
+		const { fakeNet, requests, originalFetchCalls } = fakeElectronNet();
+		hooks = installEgressNodeHooks(url => { const allowed = loopbackOnly(url); checked.push({ url, allowed }); return allowed; }, { global: globalThis, http, https, net, electronNet: fakeNet });
+
+		const ok = await startFetch(fakeNet, requests, 'http://127.0.0.1:18091/start');
+		assert.strictEqual(ok.req.policy, 'manual', 'redirect follow runs as manual');
+		ok.req.serverRedirects('http://localhost:2/next');
+		assert.deepStrictEqual(ok.req.followed, ['http://localhost:2/next']);
+		ok.req.serverResponds(200, {}, 'landed');
+		assert.strictEqual(await (await ok.response).text(), 'landed');
+
+		checked.length = 0;
+		const bad = await startFetch(fakeNet, requests, 'http://127.0.0.1:18091/start');
+		bad.req.serverRedirects('http://192.168.68.60:18092/leaked');
+		assert.deepStrictEqual(bad.req.followed, []);
+		await assert.rejects(bad.response, (e: Error) => e.message === blockedMessage('192.168.68.60:18092'));
+		assert.deepStrictEqual(denials(), ['http://192.168.68.60:18092/leaked']);
+		assert.deepStrictEqual(originalFetchCalls, []);
+	});
+
+	test('electron net.fetch: redirect \'error\' and \'manual\' reject as Electron\'s own fetch does, following nothing', async () => {
+		const { fakeNet, requests } = fakeElectronNet();
+		hooks = installEgressNodeHooks(url => { const allowed = loopbackOnly(url); checked.push({ url, allowed }); return allowed; }, { global: globalThis, http, https, net, electronNet: fakeNet });
+		const err = await startFetch(fakeNet, requests, 'http://127.0.0.1:1/', { redirect: 'error' });
+		assert.strictEqual(err.req.policy, 'error');
+		err.req.serverRedirects('http://localhost:2/');
+		await assert.rejects(err.response, (e: Error) => e.message === 'Attempted to redirect, but redirect policy was \'error\'');
+		checked.length = 0;
+		const man = await startFetch(fakeNet, requests, 'http://127.0.0.1:1/', { redirect: 'manual' });
+		assert.strictEqual(man.req.policy, 'manual');
+		man.req.serverRedirects('https://example.com/');
+		await assert.rejects(man.response, (e: Error) => e.message === 'Redirect was cancelled');
+		assert.deepStrictEqual([err.req.followed, man.req.followed, checked.filter(c => !c.url.startsWith('http://127.0.0.1:1/') && c.url !== 'http://localhost:80/')], [[], [], []], 'the hop is never checked or logged');
+		// init is read once: a getter answering 'error' first is what the request gets
+		const flipped = await startFetch(fakeNet, requests, 'http://127.0.0.1:1/', withFlippingProp({}, 'redirect', 'error', 'follow'));
+		assert.strictEqual(flipped.req.policy, 'error');
+		flipped.req.serverResponds(204);
+		assert.strictEqual((await flipped.response).body, null);
+	});
+
+	test('electron net.fetch: at most 20 redirects are followed', async () => {
+		const { fakeNet, requests } = fakeElectronNet();
+		hooks = installEgressNodeHooks(loopbackOnly, { global: globalThis, http, https, net, electronNet: fakeNet });
+		const { response, req } = await startFetch(fakeNet, requests, 'http://127.0.0.1:1/0');
+		for (let i = 1; i <= 21; i++) { req.serverRedirects(`http://127.0.0.1:1/${i}`); }
+		await assert.rejects(response, (e: Error) => e.message === 'net::ERR_TOO_MANY_REDIRECTS');
+		assert.strictEqual(req.followed.length, 20);
+		assert.strictEqual(req.followed[19], 'http://127.0.0.1:1/20');
+	});
+
+	test('electron net.fetch: the Response is built as Electron builds it; abort cancels the request', async () => {
+		const { fakeNet, requests } = fakeElectronNet();
+		hooks = installEgressNodeHooks(loopbackOnly, { global: globalThis, http, https, net, electronNet: fakeNet });
+		const a = await startFetch(fakeNet, requests, 'http://localhost:1/', { headers: { origin: 'http://localhost:1' }, credentials: 'same-origin', mode: 'cors' });
+		assert.deepStrictEqual([a.req.options.origin, a.req.options.credentials, a.req.headers['Sec-Fetch-Mode']], ['http://localhost:1', 'same-origin', 'cors']);
+		a.req.serverResponds(201, { 'set-cookie': ['a=1', 'b=2'], 'x-y': 'z' }, 'body');
+		const res = await a.response;
+		assert.deepStrictEqual([res.status, res.statusText, res.headers.get('x-y'), res.headers.get('set-cookie'), await res.text()], [201, 'status 201', 'z', 'a=1, b=2', 'body']);
+		const head = await startFetch(fakeNet, requests, 'http://localhost:1/', { method: 'HEAD' });
+		assert.strictEqual(head.req.options.credentials, 'include', 'same-origin without origin becomes include');
+		head.req.serverResponds(200, {}, 'ignored');
+		assert.strictEqual((await head.response).body, null);
+		const controller = new AbortController();
+		const c = await startFetch(fakeNet, requests, 'http://localhost:1/', { signal: controller.signal });
+		controller.abort();
+		await assert.rejects(c.response, (e: Error) => e.name === 'AbortError');
+		c.req.serverRedirects('http://localhost:2/');
+		assert.deepStrictEqual(c.req.followed, [], 'aborted request cancelled');
 	});
 
 	test('dispose restores every original', () => {

@@ -28,6 +28,7 @@ import type * as netType from 'net';
 import * as dns from 'dns';
 import * as nodeUrl from 'url';
 import { isIP } from 'net';
+import { Readable, Writable } from 'stream';
 import { createRequire, syncBuiltinESMExports } from 'node:module';
 import { IDisposable, toDisposable } from '../../../../base/common/lifecycle.js';
 import { describeDestination, isAllowed, isLoopbackHost, targetFromUrl } from '../common/egressPolicy.js';
@@ -199,6 +200,96 @@ function electronRequestUrls(options: unknown): string[] {
 	return urls;
 }
 
+/** Chromium's limit (and the fetch standard's): the 21st redirect of one fetch is an error. */
+const MAX_FETCH_REDIRECTS = 20;
+
+/**
+ * Electron's net.fetch (lib/browser/api/net-fetch.ts, fetchWithSession, Electron 34), ported onto a (guarded)
+ * net.request. Differences: redirect 'follow' runs as 'manual' with followRedirect() per hop, so each hop is
+ * checked and the 20-redirect limit is ours too (Chromium still applies the method/body rules of 301/302/303 and
+ * 307/308, since following continues the same loader); non-http(s) schemes and bypassCustomProtocolHandlers are
+ * not supported (Electron's internal allowAnyProtocol); no session (utility processes have none).
+ * 'error' and 'manual' reject exactly as Electron's own fetch does.
+ */
+function electronFetch(request: Function, input: string | Request, init: RequestInit | undefined): Promise<Response> {
+	return new Promise<Response>((resolve, reject) => {
+		let req: Request;
+		try {
+			req = new Request(input, init); // reads `init` once (WebIDL dictionary); the URL is `input`, already checked
+		} catch (e) {
+			return reject(e);
+		}
+		const cancelBody = (reason: unknown) => {
+			if (req.body) { req.body.cancel(reason).catch((e: NodeJS.ErrnoException) => { if (e?.code !== 'ERR_INVALID_STATE') { throw e; } }); }
+		};
+		if (req.signal.aborted) {
+			const reason = req.signal.reason ?? new DOMException('The operation was aborted.', 'AbortError');
+			reject(reason);
+			cancelBody(reason);
+			return;
+		}
+		const origin = req.headers.get('origin') ?? undefined;
+		const credentials = req.credentials !== 'same-origin' || origin ? req.credentials : 'include';
+		const follow = req.redirect === 'follow';
+		let r: any;
+		try {
+			r = request({
+				method: req.method,
+				url: req.url,
+				origin,
+				credentials,
+				cache: req.cache,
+				referrerPolicy: req.referrerPolicy,
+				redirect: follow ? 'manual' : req.redirect,
+			});
+		} catch (e) {
+			return reject(e);
+		}
+		let aborted = false;
+		req.signal.addEventListener('abort', () => {
+			aborted = true;
+			const reason = req.signal.reason ?? new DOMException('The operation was aborted.', 'AbortError');
+			reject(reason);
+			cancelBody(reason);
+			r.abort();
+		}, { once: true });
+		if (req.mode && (req.mode !== 'cors' || origin)) { r.setHeader('Sec-Fetch-Mode', req.mode); }
+		for (const [name, value] of req.headers) { r.setHeader(name, value); }
+		if (follow) {
+			let redirects = 0;
+			r.on('redirect', () => {
+				if (++redirects > MAX_FETCH_REDIRECTS) {
+					reject(new Error('net::ERR_TOO_MANY_REDIRECTS'));
+					r.abort();
+					return;
+				}
+				r.followRedirect(); // checked by guardRedirects; a blocked hop fails the request with our error
+			});
+		}
+		r.on('response', (resp: any) => {
+			if (aborted) { return; }
+			try {
+				const headers = new Headers();
+				for (const [name, value] of Object.entries(resp.headers as Record<string, string | string[]>)) {
+					headers.set(name, Array.isArray(value) ? value.join(', ') : value);
+				}
+				const nullBody = [101, 204, 205, 304].includes(resp.statusCode) || req.method === 'HEAD';
+				const response = new Response(nullBody ? null : Readable.toWeb(resp) as ReadableStream, { headers, status: resp.statusCode, statusText: resp.statusMessage });
+				(response as any).__original_resp = resp;
+				resolve(response);
+			} catch (e) {
+				reject(e);
+			}
+		});
+		r.on('error', (e: Error) => reject(e));
+		if (req.body) {
+			req.body.pipeTo(Writable.toWeb(r) as WritableStream).then(() => r.end(), () => { });
+		} else {
+			r.end();
+		}
+	});
+}
+
 export function installEgressNodeHooks(check: (url: string) => boolean, t: EgressHookTargets): IDisposable {
 	const restore: (() => void)[] = [];
 	const patch = <O extends object, K extends keyof O>(obj: O, key: K, wrap: (original: O[K]) => O[K]) => {
@@ -332,7 +423,7 @@ export function installEgressNodeHooks(check: (url: string) => boolean, t: Egres
 			console.error(`ZeroEgress: could not wrap Electron net.${key}; its requests are not policed in this process`, e);
 		}
 	};
-	tryPatch('request', original => function (this: unknown, options: unknown, ...rest: unknown[]) {
+	const guardedRequest = (original: Function) => function (this: unknown, options: unknown, ...rest: unknown[]) {
 		// Electron stringifies a truthy `url` of any type; do it once here so it and we see the same string.
 		const snapshot = typeof options === 'string' ? options : snapshotOptions(options);
 		if (typeof snapshot !== 'string' && snapshot.url) { snapshot.url = String(snapshot.url); }
@@ -345,12 +436,26 @@ export function installEgressNodeHooks(check: (url: string) => boolean, t: Egres
 		if (policy !== 'follow' && policy !== 'manual') { return original.call(this, snapshot, ...rest); }
 		const manual = { ...(typeof snapshot === 'string' ? nodeUrl.parse(snapshot) : snapshot), redirect: 'manual' };
 		return guardRedirects(original.call(this, manual, ...rest), policy === 'follow');
-	});
-	tryPatch('fetch', original => async function (this: unknown, input: unknown, ...rest: unknown[]) {
-		const { url, input: checked } = fetchInput(input);
-		if (!check(url)) { throw egressBlockedError(url); }
-		return original.call(this, checked, ...rest);
-	});
+	};
+	const originalRequest = electronNet && typeof electronNet.request === 'function' ? electronNet.request : undefined;
+	tryPatch('request', guardedRequest);
+	if (originalRequest) {
+		// Electron's own net.fetch builds its ClientRequest internally, out of reach of the wrapper above, and with
+		// redirect 'manual' it rejects without exposing the Location. So net.fetch is re-implemented on the guarded
+		// request: every hop of every fetch goes through guardRedirects. The original net.fetch is never called.
+		const request = guardedRequest(originalRequest);
+		tryPatch('fetch', () => function (this: unknown, input: unknown, init?: RequestInit) {
+			const { url, input: checked } = fetchInput(input);
+			if (!check(url)) { return Promise.reject(egressBlockedError(url)); }
+			return electronFetch(request, checked, init);
+		});
+	} else {
+		tryPatch('fetch', original => async function (this: unknown, input: unknown, ...rest: unknown[]) {
+			const { url, input: checked } = fetchInput(input);
+			if (!check(url)) { throw egressBlockedError(url); }
+			return original.call(this, checked, ...rest);
+		});
+	}
 
 	syncBuiltinESMExports();
 	return toDisposable(() => {
