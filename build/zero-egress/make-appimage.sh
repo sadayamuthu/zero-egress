@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# Usage: make-appimage.sh <linux-min-app-dir> <dmg-version> <arch>
-# Builds a portable .AppImage from the Linux min build. Net-new tooling.
+# Usage: make-appimage.sh <linux-min-app-dir> <version> <arch>
+# Builds dist/ZeroEgress-<version>-x86_64.AppImage from the Linux min build.
 set -euo pipefail
 APPDIR_SRC="${1:?linux min app dir required}"
-DMG_VERSION="${2:?version required}"
+VERSION="${2:?version required}"
 ARCH="${3:?arch required}"
+case "$ARCH" in x64) AI_ARCH=x86_64;; *) echo "ERROR: unsupported arch '$ARCH'" >&2; exit 2;; esac
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-APPNAME="$(node -p "require('$ROOT/product.json').applicationName")"   # zero-egress
-BIN="$(node -p "require('$ROOT/product.json').applicationName")"       # launcher binary name
+BIN="$(cd "$ROOT" && node -p "require('./product.json').applicationName")"   # zero-egress launcher
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 APPDIR="$WORK/ZeroEgress.AppDir"
@@ -41,12 +41,13 @@ EOF
 chmod +x "$APPDIR/AppRun"
 
 # 5. Fetch appimagetool (no repo tooling exists for AppImage) and build.
+#    AppImageKit is archived; appimagetool now lives in AppImage/appimagetool.
 TOOL="$WORK/appimagetool"
 curl -fsSL -o "$TOOL" \
-  "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage"
+  "${APPIMAGETOOL_URL:-https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage}"
 chmod +x "$TOOL"
 mkdir -p "$ROOT/dist"
-OUT="$ROOT/dist/ZeroEgress-${DMG_VERSION}-${ARCH}.AppImage"
+OUT="$ROOT/dist/ZeroEgress-${VERSION}-${AI_ARCH}.AppImage"
 # --appimage-extract-and-run avoids needing FUSE on CI runners.
-ARCH=x86_64 "$TOOL" --appimage-extract-and-run "$APPDIR" "$OUT"
+ARCH="$AI_ARCH" "$TOOL" --appimage-extract-and-run "$APPDIR" "$OUT"
 echo "Created $OUT"

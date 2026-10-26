@@ -1,0 +1,26 @@
+# Rendered by .github/workflows/release.yml on each tagged release and pushed
+# to sadayamuthu/homebrew-tap as Casks/zero-egress.rb. Do not edit the copy in
+# the tap. The template's placeholders are VERSION, SHA256_ARM64, SHA256_X64
+# and SUFFIX ("" for a signed build, "-unsigned" otherwise), each wrapped in
+# double at-signs.
+cask "zero-egress" do
+  arch arm: "arm64", intel: "x64"
+
+  version "@@VERSION@@"
+  sha256 arm:   "@@SHA256_ARM64@@",
+         intel: "@@SHA256_X64@@"
+
+  url "https://github.com/sadayamuthu/zero-egress/releases/download/v#{version}/ZeroEgress-#{version}-#{arch}@@SUFFIX@@.dmg"
+  name "ZeroEgress"
+  desc "Offline AI code editor"
+  homepage "https://github.com/sadayamuthu/zero-egress"
+
+  depends_on macos: ">= :big_sur"
+
+  app "ZeroEgress.app"
+
+  zap trash: [
+    "~/.zero-egress",
+    "~/Library/Application Support/ZeroEgress",
+  ]
+end
