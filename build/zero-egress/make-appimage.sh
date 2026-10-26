@@ -42,9 +42,13 @@ chmod +x "$APPDIR/AppRun"
 
 # 5. Fetch appimagetool (no repo tooling exists for AppImage) and build.
 #    AppImageKit is archived; appimagetool now lives in AppImage/appimagetool.
+#    Pinned to release 1.9.1 and checked against its sha256 before it runs.
+#    Override both APPIMAGETOOL_URL and APPIMAGETOOL_SHA256 to use another build.
 TOOL="$WORK/appimagetool"
-curl -fsSL -o "$TOOL" \
-  "${APPIMAGETOOL_URL:-https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage}"
+APPIMAGETOOL_URL="${APPIMAGETOOL_URL:-https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage}"
+APPIMAGETOOL_SHA256="${APPIMAGETOOL_SHA256:-ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0}"
+curl -fsSL -o "$TOOL" "$APPIMAGETOOL_URL"
+echo "${APPIMAGETOOL_SHA256}  ${TOOL}" | sha256sum -c -
 chmod +x "$TOOL"
 mkdir -p "$ROOT/dist"
 OUT="$ROOT/dist/ZeroEgress-${VERSION}-${AI_ARCH}.AppImage"
