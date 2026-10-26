@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      # None of the steps below launch Electron or a browser.
+      ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+    steps:
+      - uses: actions/checkout@v4
+
+      # The gates and their own tests need no dependencies, so they run first.
+      - name: Brand gate tests
+        run: bash scripts/zero-egress/test/check-brand.test.sh
+      - name: Brand gate
+        run: bash scripts/zero-egress/check-brand.sh .
+      - name: Defaults gate tests
+        run: node scripts/zero-egress/test/check-defaults.test.mjs
+      - name: Defaults gate
+        run: node scripts/zero-egress/check-defaults.mjs
+      - name: Egress verdict tests
+        run: node scripts/zero-egress/test/egress-verdict.test.mjs
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      # Native build prerequisites for VS Code's npm dependencies.
+      - name: System dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config python3 libkrb5-dev libx11-dev libxkbfile-dev libsecret-1-dev
+
+      - name: Install
+        run: npm ci
+      - name: Build the ZeroEgress UI
+        run: npm run buildreact
+      - name: Compile
+        run: npm run compile
+
+      # The Node-layer suite, which includes the egress policy, Node hooks and
+      # extension-host guard tests.
+      - name: Unit tests (node)
+        run: npm run test-node
+
+      # test-node skips electron-main/ folders, so run the guard and audit
+      # suites by path (see CONTRIBUTING.md).
+      - name: Unit tests (ZeroEgress electron-main)
+        run: |
+          set -e
+          for f in src/vs/workbench/contrib/zeroEgress/electron-main/test/*.test.ts src/vs/workbench/contrib/zeroEgress/electron-main/audit/test/*.test.ts; do
+            echo "::group::$f"
+            node test/unit/node/index.js --run "$f"
+            echo "::endgroup::"
+          done
+
+      - name: Audit URLs in build output
+        run: bash scripts/zero-egress/audit-urls.sh out
