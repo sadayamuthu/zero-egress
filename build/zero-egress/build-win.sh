@@ -47,7 +47,7 @@ phase_app() {
   mark "buildreact start"
   npm run buildreact
   mark "gulp min start"
-  npm run gulp -- "vscode-win32-${ARCH}-min"
+  bash "$ROOT/build/zero-egress/gulp-min.sh" win32 "$ARCH"
   npm run gulp -- "vscode-win32-${ARCH}-inno-updater"
   [ -d "$APPDIR" ] || { echo "ERROR: win32 min output not found at $APPDIR" >&2; ls -la "$BUILDROOT" >&2 || true; exit 1; }
 

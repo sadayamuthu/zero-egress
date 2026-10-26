@@ -51,10 +51,6 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: release-${{ github.ref }}
-  cancel-in-progress: false
-
 env:
   # Nothing here launches Electron from node_modules or a browser; the gulp
   # packaging step downloads its own Electron.

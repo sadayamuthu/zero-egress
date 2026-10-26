@@ -46,8 +46,20 @@ Run from a clean checkout, in this order:
 4. The platform script below. Each runs `npm run buildreact` (the
    React/Tailwind bundle under
    `src/vs/workbench/contrib/zeroEgress/browser/react/`, which must exist
-   before any TypeScript compile or gulp packaging task) and then the gulp
-   min target, e.g. `npm run gulp -- vscode-darwin-arm64-min`.
+   before any TypeScript compile or gulp packaging task) and then
+   `gulp-min.sh <platform> <arch>`, the minified build (see below).
+
+## Minified build without mangling
+
+`gulp-min.sh` runs the same steps as upstream's `vscode-<platform>-<arch>-min`
+target (`compile-build-without-mangling`, `compile-extensions-build`,
+`compile-extension-media-build`, `minify-vscode`,
+`vscode-<platform>-<arch>-min-ci`) except that the TypeScript compile skips
+the identifier mangler, as VSCodium does. The mangler runs four TypeScript
+language-service workers that outgrow 16 GB GitHub-hosted runners: it was
+OOM-killed on Linux and stalled for hours on Windows. Mangling only shortens
+private names, so the app is the same apart from a few MB of size.
+`ZE_MANGLE=1` runs the upstream target with mangling instead.
 
 ## Release gates
 
@@ -58,7 +70,7 @@ nothing is written to `dist/`.
 
 ### Mangler guard
 
-A minified gulp build (`*-min` targets) runs VS Code's build-time identifier
+A mangled build (`ZE_MANGLE=1`, or upstream's `*-min` targets) runs VS Code's build-time identifier
 mangler. With the AI-feature dependencies ZeroEgress adds (e.g.
 `google-auth-library`), TypeScript can pull dependency `.d.ts` files from
 `node_modules` into the compile program, and the mangler can crash on
@@ -77,7 +89,8 @@ build/zero-egress/build-mac.sh <arch>   # arch = arm64 | x64
 ```
 
 1. Builds `../VSCode-darwin-<arch>/ZeroEgress.app` (one directory above the
-   repo root) with `vscode-darwin-<arch>-min`, and runs the gates on it.
+   repo root) with `gulp-min.sh darwin <arch>`, and runs the gates on it.
+   `ZE_REUSE_APP=1` skips the build and repackages an existing app.
 2. Signs it:
    - `APPLE_SIGNING_IDENTITY` set (a "Developer ID Application" identity in
      a keychain on the search list): signs every Mach-O inside out with the
@@ -97,8 +110,8 @@ build/zero-egress/build-mac.sh <arch>   # arch = arm64 | x64
 build/zero-egress/build-win.sh x64 [app|setup|all]   # bash / git-bash on Windows
 ```
 
-- `app` builds `../VSCode-win32-x64` (`vscode-win32-x64-min` and
-  `-inno-updater`) and runs the gates on it.
+- `app` builds `../VSCode-win32-x64` (`gulp-min.sh win32 x64` and
+  `vscode-win32-x64-inno-updater`) and runs the gates on it.
 - `setup` builds the all-users (`vscode-win32-x64-system-setup`) and per-user
   (`vscode-win32-x64-user-setup`) Inno Setup installers into
   `dist/ZeroEgress-<v>-x64-setup[-unsigned].exe` and
@@ -120,7 +133,7 @@ after `setup`, and sets `ZE_WIN_SIGNED=1` so the names drop `-unsigned`.
 build/zero-egress/build-linux.sh x64
 ```
 
-Builds `../VSCode-linux-x64` with `vscode-linux-x64-min`, runs the gates,
+Builds `../VSCode-linux-x64` with `gulp-min.sh linux x64`, runs the gates,
 then packages the tarball (unpacks to `zero-egress-<v>-linux-x64/`), the
 `.deb` (`-prepare-deb`/`-build-deb`, needs `dpkg-deb` and `fakeroot`), the
 `.rpm` (`-prepare-rpm`/`-build-rpm`, needs `rpmbuild`) and the AppImage

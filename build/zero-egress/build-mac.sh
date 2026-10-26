@@ -40,7 +40,7 @@ if [ "${ZE_REUSE_APP:-}" != 1 ]; then
   mark "buildreact start"
   npm run buildreact
   mark "gulp min start"
-  npm run gulp -- "vscode-darwin-${ARCH}-min"
+  bash "$ROOT/build/zero-egress/gulp-min.sh" darwin "$ARCH"
 fi
 mark "locating .app"
 APP="$(ls -d "$BUILDROOT/VSCode-darwin-${ARCH}/"*.app | head -1)"

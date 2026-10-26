@@ -24,7 +24,7 @@ mark() { echo "===> [build-linux ${ARCH}] $1 @ $(date -u +%H:%M:%S)Z"; }
 mark "buildreact start"
 npm run buildreact
 mark "gulp min start"
-npm run gulp -- "vscode-linux-${ARCH}-min"
+bash "$ROOT/build/zero-egress/gulp-min.sh" linux "$ARCH"
 
 # Min output sits beside the repo as VSCode-linux-<arch>/ (same pattern as darwin).
 APPDIR="$BUILDROOT/VSCode-linux-${ARCH}"
