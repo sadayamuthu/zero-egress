@@ -50,8 +50,11 @@ jobs:
         run: npm ci
       - name: Build the ZeroEgress UI
         run: npm run buildreact
+      # The default 2 GB V8 heap is too small for the full compile.
       - name: Compile
         run: npm run compile
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
 
       # The Node-layer suite, which includes the egress policy, Node hooks and
       # extension-host guard tests.
