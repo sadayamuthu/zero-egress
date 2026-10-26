@@ -25,7 +25,7 @@ import * as dns from 'dns';
 import { isIP } from 'net';
 import { createRequire, syncBuiltinESMExports } from 'node:module';
 import { IDisposable, toDisposable } from '../../../../base/common/lifecycle.js';
-import { describeDestination, isAllowed, isLoopbackHost } from '../common/egressPolicy.js';
+import { describeDestination, isAllowed, isLoopbackHost, targetFromUrl } from '../common/egressPolicy.js';
 
 export interface EgressHookTargets {
 	readonly global: { fetch: typeof fetch };
@@ -44,8 +44,29 @@ function bracket(host: string): string {
 	return host.includes(':') && !host.startsWith('[') ? `[${host}]` : host;
 }
 
-function socketUrl(host: string | undefined, port: number | string | undefined): string {
-	return `http://${bracket(host || 'localhost')}:${port || 0}/`;
+/** Characters that make a host string mean something else once embedded in a URL (userinfo, fragment, path, ...). */
+const URL_CONFUSING_HOST = /[@#/?\\\s\x00-\x1f\x7f]/;
+
+/**
+ * The URL `check` sees for a TCP destination, built the way Node will dial it: an empty host is localhost,
+ * the port is `Number(port)` (Node's `+port`, so '0x1bb', ' 443' and '443.0' are 443). A host that is not a
+ * string, or that could re-parse as a different hostname inside a URL, yields an `invalid-host:` URL, which
+ * the policy denies. Brackets are accepted only around a valid IPv6 literal.
+ */
+function destinationUrl(host: unknown, port: unknown): string {
+	const h = host === undefined || host === null || host === '' ? 'localhost' : host;
+	if (typeof h !== 'string') {
+		return 'invalid-host://non-string';
+	}
+	const misusedBrackets = /[[\]]/.test(h) && !(/^\[[^[\]]+\]$/.test(h) && isIP(h.slice(1, -1)) === 6);
+	if (URL_CONFUSING_HOST.test(h) || misusedBrackets) {
+		return `invalid-host://${encodeURIComponent(h)}`;
+	}
+	const n = port === undefined || port === null || port === '' ? 0 : Number(port);
+	if (!Number.isInteger(n) || n < 0 || n > 65535) {
+		return `invalid-port://${encodeURIComponent(String(port))}`;
+	}
+	return `http://${bracket(h)}:${n}/`;
 }
 
 function fetchInputUrl(input: unknown): string {
@@ -67,26 +88,38 @@ function requestOptions(args: unknown[], defaultPort: number): { url: string | u
 	}
 	if (options.socketPath) { return { url: undefined, options, callback }; }
 	const port = options.port || options.defaultPort || options.agent?.defaultPort || defaultPort;
-	return { url: socketUrl(options.hostname || options.host, port), options, callback };
+	return { url: destinationUrl(options.hostname || options.host, port), options, callback };
 }
 
-/** Socket#connect arguments as [options, connectListener]; also accepts Node's internal pre-normalized array. */
-function connectArgs(args: unknown[]): [{ path?: string; host?: string; port?: number | string; lookup?: Function }, unknown] {
-	const [a, b, c] = args;
+/**
+ * Socket#connect arguments as [options, connectListener], mirroring Node's net.normalizeArgs: an object is the
+ * options; a string that is not a number >= 0 (Node's isPipeName) is a pipe path; anything else is the port,
+ * with an optional string host. Also accepts Node's internal pre-normalized array.
+ */
+function connectArgs(args: unknown[]): [{ path?: unknown; host?: unknown; port?: unknown; lookup?: Function }, unknown] {
+	const [a, b] = args;
 	if (Array.isArray(a)) { return [a[0] ?? {}, a[1]]; }
-	if (a && typeof a === 'object') { return [a, b]; }
-	if (typeof a === 'number' || (typeof a === 'string' && /^\d+$/.test(a))) {
-		return typeof b === 'string' ? [{ port: a, host: b }, c] : [{ port: a }, b];
-	}
-	return [{ path: String(a) }, b]; // (path[, cb]): unix socket / named pipe
+	const last = args[args.length - 1];
+	const listener = typeof last === 'function' ? last : undefined;
+	if (a !== null && typeof a === 'object') { return [a, listener]; }
+	if (typeof a === 'string' && !(Number(a) >= 0)) { return [{ path: a }, listener]; }
+	return [typeof b === 'string' ? { port: a, host: b } : { port: a }, listener];
+}
+
+/** URL-normalized form of an address, for comparing a lookup result with the parsed destination. */
+function normalizedAddress(address: string): string | undefined {
+	return targetFromUrl(destinationUrl(address, 0))?.host;
 }
 
 function electronRequestUrl(options: any): string {
 	if (typeof options === 'string') { return options; }
 	if (typeof options?.url === 'string') { return options.url; }
 	const protocol = options?.protocol || 'http:';
-	const authority = options?.hostname ? `${bracket(options.hostname)}${options.port ? `:${options.port}` : ''}` : (options?.host || 'localhost');
-	return `${protocol}//${authority}/`;
+	if (options?.hostname !== undefined) {
+		const dest = destinationUrl(options.hostname, options.port || (protocol === 'https:' ? 443 : 80));
+		return dest.startsWith('http://') ? `${protocol}${dest.slice('http:'.length)}` : dest;
+	}
+	return `${protocol}//${options?.host || 'localhost'}/`; // `host` is host[:port]; the URL parser checks it
 }
 
 export function installEgressNodeHooks(check: (url: string) => boolean, t: EgressHookTargets): IDisposable {
@@ -101,8 +134,7 @@ export function installEgressNodeHooks(check: (url: string) => boolean, t: Egres
 	patch(t.net.Socket.prototype, 'connect', original => function (this: netType.Socket, ...args: unknown[]) {
 		const [options, listener] = connectArgs(args);
 		if (options.path) { return (original as Function).apply(this, args); }
-		const host = options.host || 'localhost';
-		const url = socketUrl(host, options.port);
+		const url = destinationUrl(options.host, options.port);
 		if (!check(url)) {
 			// Look like a connect in progress (as the real connect does synchronously) so early writes are
 			// buffered rather than failing with 'Socket is closed'; then fail with our error. setImmediate, not
@@ -111,15 +143,25 @@ export function installEgressNodeHooks(check: (url: string) => boolean, t: Egres
 			setImmediate(() => this.destroy(egressBlockedError(url)));
 			return this;
 		}
-		if (!isIP(host.replace(/^\[|\]$/g, '')) && isLoopbackHost(host)) {
+		// Node resolves any host that is not an IP literal (including '[::1]' or '2130706433'), possibly with a
+		// caller-supplied lookup. If the decision above relied on the parsed host being loopback or a specific
+		// IP, the resolved addresses must match it: loopback names to loopback addresses, IP spellings to that IP.
+		const rawHost = (options.host as string | undefined) || 'localhost';
+		const parsed = targetFromUrl(url)?.host;
+		if (parsed !== undefined && isIP(rawHost) === 0 && (isIP(parsed) !== 0 || isLoopbackHost(parsed))) {
+			const acceptable = (address: string) => isLoopbackHost(parsed) ? isLoopbackHost(address) : normalizedAddress(address) === parsed;
 			const lookup = (options.lookup ?? dns.lookup) as Function;
 			const guardedLookup = (hostname: string, opts: any, cb?: Function) => {
 				if (typeof opts === 'function') { cb = opts; opts = {}; }
 				lookup(hostname, opts, (err: Error | null, address: string | dns.LookupAddress[], family?: number) => {
 					if (err) { return cb!(err, address, family); }
 					const addresses = Array.isArray(address) ? address.map(a => a.address) : [address];
-					const denied = addresses.map(a => socketUrl(a, options.port)).find(u => !check(u));
-					return denied ? cb!(egressBlockedError(denied)) : cb!(err, address, family);
+					const bad = addresses.find(a => !acceptable(a));
+					if (bad === undefined) { return cb!(err, address, family); }
+					const badUrl = destinationUrl(bad, options.port);
+					// record the block; a configured address reached through a loopback name is still refused
+					if (check(badUrl)) { check(`invalid-lookup://${encodeURIComponent(bad)}`); }
+					return cb!(egressBlockedError(badUrl));
 				});
 			};
 			return (original as Function).call(this, { ...options, lookup: guardedLookup }, listener);
@@ -152,21 +194,29 @@ export function installEgressNodeHooks(check: (url: string) => boolean, t: Egres
 		}
 	}
 
-	const electronNet = t.electronNet;
-	if (electronNet && !Object.isFrozen(electronNet)) {
-		patch(electronNet, 'request', original => function (this: unknown, options: unknown, ...rest: unknown[]) {
-			const url = electronRequestUrl(options);
-			if (!check(url)) { throw egressBlockedError(url); }
-			return original.call(this, options, ...rest);
-		});
-		if (typeof electronNet.fetch === 'function') {
-			patch(electronNet, 'fetch', original => async function (this: unknown, input: unknown, ...rest: unknown[]) {
-				const url = fetchInputUrl(input);
-				if (!check(url)) { throw egressBlockedError(url); }
-				return original!.call(this, input, ...rest);
-			});
+	// Best effort: Electron may expose these as getter-only or non-writable, and Chromium's network stack does
+	// not go through Node sockets, so Socket#connect cannot stand in for them. Never throw; say so loudly.
+	const electronNet = t.electronNet as Record<'request' | 'fetch', Function | undefined> | undefined;
+	const tryPatch = (key: 'request' | 'fetch', wrap: (original: Function) => Function) => {
+		if (!electronNet || typeof electronNet[key] !== 'function') { return; }
+		try {
+			const wrapped = wrap(electronNet[key]!);
+			patch(electronNet, key, () => wrapped);
+			if (electronNet[key] !== wrapped) { throw new Error('assignment did not take effect'); }
+		} catch (e) {
+			console.error(`ZeroEgress: could not wrap Electron net.${key}; its requests are not policed in this process`, e);
 		}
-	}
+	};
+	tryPatch('request', original => function (this: unknown, options: unknown, ...rest: unknown[]) {
+		const url = electronRequestUrl(options);
+		if (!check(url)) { throw egressBlockedError(url); }
+		return original.call(this, options, ...rest);
+	});
+	tryPatch('fetch', original => async function (this: unknown, input: unknown, ...rest: unknown[]) {
+		const url = fetchInputUrl(input);
+		if (!check(url)) { throw egressBlockedError(url); }
+		return original.call(this, input, ...rest);
+	});
 
 	syncBuiltinESMExports();
 	return toDisposable(() => {

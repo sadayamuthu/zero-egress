@@ -131,6 +131,58 @@ suite('egressNodeHooks', () => {
 		assert.deepStrictEqual(denials(), [`http://10.255.255.1:${port}/`]);
 	});
 
+	test('numeric-string ports are ports, as in Node (not pipe paths)', async () => {
+		install(blockAll);
+		for (const p of [`0x${port.toString(16)}`, ` ${port}`, `${port}.0`, `${port}`]) {
+			assert.strictEqual(await outcome(new net.Socket().connect(p as unknown as number, '127.0.0.1')), blockedMessage(`127.0.0.1:${port}`), `Socket#connect(${JSON.stringify(p)})`);
+			assert.strictEqual(await outcome(net.connect({ port: p as unknown as number, host: '127.0.0.1' })), blockedMessage(`127.0.0.1:${port}`), `net.connect({port: ${JSON.stringify(p)}})`);
+		}
+		assert.strictEqual(connections, 0);
+	});
+
+	test('hosts that re-parse differently inside a URL are blocked (Socket#connect and http.request)', async () => {
+		install(loopbackOnly);
+		const toLoopback = ((_h: string, opts: { all?: boolean }, cb: Function) => opts?.all ? cb(null, [{ address: '127.0.0.1', family: 4 }]) : cb(null, '127.0.0.1', 4)) as unknown as netType.LookupFunction;
+		const cases: [unknown, string][] = [
+			['x@localhost', 'invalid-host://x%40localhost'],
+			['localhost#x', 'invalid-host://localhost%23x'],
+			['localhost/x', 'invalid-host://localhost%2Fx'],
+			['localhost?x', 'invalid-host://localhost%3Fx'],
+			['local\\host', 'invalid-host://local%5Chost'],
+			[' localhost', 'invalid-host://%20localhost'],
+			['localhost\n', 'invalid-host://localhost%0A'],
+			['[localhost]', 'invalid-host://%5Blocalhost%5D'],
+			[{ toString: () => 'localhost' }, 'invalid-host://non-string'],
+		];
+		for (const [host, described] of cases) {
+			const name = JSON.stringify(String(host));
+			assert.strictEqual(await outcome(net.connect({ host: host as string, port, lookup: toLoopback })), blockedMessage(described), `Socket#connect ${name}`);
+			if (typeof host === 'string') {
+				let result: string;
+				try {
+					result = await outcome(http.request({ host, port, lookup: toLoopback }).end());
+				} catch (e) {
+					result = (e as NodeJS.ErrnoException).code === 'ERR_INVALID_CHAR' ? blockedMessage(described) : String(e); // Node's own Host-header refusal
+				}
+				assert.strictEqual(result, blockedMessage(described), `http.request ${name}`);
+			}
+		}
+		assert.strictEqual(connections, 0);
+	});
+
+	test('a host spelled as a loopback IP must resolve to that IP', async () => {
+		install(loopbackOnly);
+		const to = (address: string) => ((_h: string, opts: { all?: boolean }, cb: Function) => opts?.all ? cb(null, [{ address, family: 4 }]) : cb(null, address, 4)) as unknown as netType.LookupFunction;
+		// '2130706433' parses to 127.0.0.1 but Node resolves it, so a lookup can send it elsewhere
+		assert.strictEqual(await outcome(net.connect({ host: '2130706433', port, lookup: to('10.255.255.1') })), blockedMessage(`10.255.255.1:${port}`));
+		assert.strictEqual(await outcome(http.request({ host: '2130706433', port, lookup: to('10.255.255.1') }).end()), blockedMessage(`10.255.255.1:${port}`));
+		assert.strictEqual(await outcome(net.connect({ host: '[::1]', port, lookup: to('10.255.255.1') })), blockedMessage(`10.255.255.1:${port}`));
+		assert.strictEqual(connections, 0);
+		// and the honest resolution still connects
+		assert.strictEqual(await outcome(net.connect({ host: '2130706433', port, lookup: to('127.0.0.1') })), 'REACHED');
+		assert.strictEqual(await outcome(net.connect({ host: '[::1]', port, lookup: to('127.0.0.1') })), 'REACHED');
+	});
+
 	test('tls over an existing socket is not checked again', async () => {
 		install(loopbackOnly);
 		const raw = net.connect(port, '127.0.0.1');
@@ -159,6 +211,27 @@ suite('egressNodeHooks', () => {
 		assert.strictEqual(fakeNet.request({ url: 'http://127.0.0.1:1/' }), 'req');
 		assert.strictEqual(await fakeNet.fetch('http://localhost:1/'), 'res');
 		assert.strictEqual(calls.length, 2);
+	});
+
+	test('electron net properties that cannot be replaced do not throw; sockets stay policed', async () => {
+		const original = () => 'req';
+		const getterOnly = {} as { request: Function; fetch?: Function };
+		Object.defineProperty(getterOnly, 'request', { get: () => original, enumerable: true });
+		Object.defineProperty(getterOnly, 'fetch', { value: async () => 'res', writable: false, enumerable: true });
+		const logged: unknown[] = [];
+		const realError = console.error;
+		console.error = (...a: unknown[]) => { logged.push(a[0]); };
+		try {
+			hooks = installEgressNodeHooks(blockAll, { global: globalThis, http, https, net, electronNet: getterOnly });
+		} finally {
+			console.error = realError;
+		}
+		assert.deepStrictEqual(logged, [
+			'ZeroEgress: could not wrap Electron net.request; its requests are not policed in this process',
+			'ZeroEgress: could not wrap Electron net.fetch; its requests are not policed in this process',
+		]);
+		assert.strictEqual(await outcome(net.connect(port, '127.0.0.1')), blockedMessage(`127.0.0.1:${port}`));
+		assert.strictEqual(connections, 0);
 	});
 
 	test('dispose restores every original', () => {

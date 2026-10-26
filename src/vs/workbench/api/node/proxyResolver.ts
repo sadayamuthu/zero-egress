@@ -110,9 +110,19 @@ export async function connectProxyResolver(
 	const egressGuard = new ExtHostEgressGuard(extHostRpc.getProxy(MainContext.MainThreadEgressGuard), extHostLogService);
 	extHostRpc.set(ExtHostEgressGuardContext, egressGuard);
 	await egressGuard.init();
-	disposables.add(installEgressNodeHooks(egressGuard.check, { global: globalThis, http, https, net }));
+	disposables.add(installEgressNodeHooks(egressGuard.check, { global: globalThis, http, https, net, electronNet: loadElectronNet(extHostLogService) }));
 
 	return configureModuleLoading(extensionService, lookup);
+}
+
+/** Electron's `net` when this extension host runs as an Electron utility process (it is what http.electronFetch uses). */
+function loadElectronNet(log: ILogService): { request: Function; fetch?: Function } | undefined {
+	try {
+		return require('electron').net;
+	} catch (e) {
+		log.trace('ZeroEgress: Electron net not available in this extension host', e);
+		return undefined;
+	}
 }
 
 const unsafeHeaders = [
