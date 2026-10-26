@@ -7,6 +7,7 @@ import assert from 'assert';
 import type * as httpType from 'http';
 import type * as netType from 'net';
 import type * as tlsType from 'tls';
+import { EventEmitter } from 'events';
 import { createRequire } from 'node:module';
 import * as nodeUrl from 'url';
 import * as proxyAgent from '@vscode/proxy-agent';
@@ -395,6 +396,160 @@ suite('egressNodeHooks', () => {
 		const err = await new Promise<NodeJS.ErrnoException>(r => sock.once('error', r));
 		assert.strictEqual(err.code, 'ENOENT', 'the unix socket we saw is the one Node tried');
 		assert.strictEqual(checked.length, checksBefore, 'a pipe is not checked');
+	});
+
+	// Redirects. Electron's ClientRequest follows a redirect unless the request is cancelled while its 'redirect'
+	// event is being emitted; with redirect 'manual' it cancels ("Redirect was cancelled") unless followRedirect() was
+	// called during that emit. FakeElectronRequest reproduces that logic (net-client-request.ts in Electron 34).
+
+	class FakeElectronRequest extends EventEmitter {
+		readonly policy: string;
+		/** URLs the loader went on to after a redirect. */
+		readonly followed: string[] = [];
+		private cancelled = false;
+		private aborted = false;
+		private followRedirectCb: (() => void) | undefined;
+		constructor(readonly options: any) {
+			super();
+			const policy = (typeof options === 'object' && options.redirect) || 'follow';
+			if (!['follow', 'error', 'manual'].includes(policy)) { throw new Error('redirect mode should be one of follow, error or manual'); }
+			this.policy = policy;
+		}
+		/** The server answered with a redirect to `newUrl`. */
+		serverRedirects(newUrl: string): void {
+			if (this.policy === 'error') {
+				this.die(new Error('Attempted to redirect, but redirect policy was \'error\''));
+			} else if (this.policy === 'manual') {
+				let follow = false;
+				this.followRedirectCb = () => { follow = true; };
+				try {
+					this.emit('redirect', 302, 'GET', newUrl, {});
+				} finally {
+					this.followRedirectCb = undefined;
+					if (!follow && !this.aborted) { this.die(new Error('Redirect was cancelled')); }
+				}
+			} else {
+				try {
+					this.followRedirectCb = () => { };
+					this.emit('redirect', 302, 'GET', newUrl, {});
+				} finally {
+					this.followRedirectCb = undefined;
+				}
+			}
+			if (!this.cancelled) { this.followed.push(newUrl); }
+		}
+		followRedirect(): void {
+			if (!this.followRedirectCb) { throw new Error('followRedirect() called, but was not waiting for a redirect'); }
+			this.followRedirectCb();
+		}
+		abort(): void {
+			this.aborted = true;
+			this.die();
+		}
+		private die(e?: Error): void {
+			this.cancelled = true;
+			if (e) { process.nextTick(() => this.emit('error', e)); }
+		}
+	}
+
+	function fakeElectronNet() {
+		const requests: FakeElectronRequest[] = [];
+		const fakeNet = { request: (o: unknown) => { const r = new FakeElectronRequest(o); requests.push(r); return r; } };
+		return { fakeNet, requests };
+	}
+	const nextError = (req: EventEmitter) => new Promise<string>(resolve => req.once('error', (e: Error) => resolve(e.message)));
+	const settle = () => new Promise(r => setImmediate(r));
+
+	test('electron net.request: a redirect is followed only to an allowed destination (default follow policy)', async () => {
+		const { fakeNet, requests } = fakeElectronNet();
+		hooks = installEgressNodeHooks(url => { const allowed = loopbackOnly(url); checked.push({ url, allowed }); return allowed; }, { global: globalThis, http, https, net, electronNet: fakeNet });
+
+		// string and object options alike are handed to Electron with redirect 'manual'
+		for (const options of ['http://127.0.0.1:1/start', { url: 'http://127.0.0.1:1/start' }, { url: 'http://127.0.0.1:1/start', redirect: 'follow' }]) {
+			checked.length = 0;
+			const req = fakeNet.request(options) as unknown as FakeElectronRequest;
+			assert.strictEqual(req.policy, 'manual', JSON.stringify(options));
+			const seenByCaller: string[] = [];
+			req.on('redirect', (_s: number, _m: string, url: string) => seenByCaller.push(url));
+
+			req.serverRedirects('http://localhost:2/next');
+			assert.deepStrictEqual(req.followed, ['http://localhost:2/next'], 'allowed hop followed');
+
+			const error = nextError(req);
+			req.serverRedirects('http://192.168.68.60:18092/leaked');
+			assert.deepStrictEqual(req.followed, ['http://localhost:2/next'], 'blocked hop not followed');
+			assert.strictEqual(await error, blockedMessage('192.168.68.60:18092'));
+			assert.deepStrictEqual(seenByCaller, ['http://localhost:2/next', 'http://192.168.68.60:18092/leaked'], 'the caller still sees redirect events');
+			assert.deepStrictEqual(denials(), ['http://192.168.68.60:18092/leaked'], 'one log line per blocked hop');
+		}
+		assert.strictEqual(requests.length, 3);
+	});
+
+	test('electron net.request: a caller calling followRedirect() in follow mode cannot follow a blocked hop', async () => {
+		const { fakeNet } = fakeElectronNet();
+		hooks = installEgressNodeHooks(url => { const allowed = loopbackOnly(url); checked.push({ url, allowed }); return allowed; }, { global: globalThis, http, https, net, electronNet: fakeNet });
+		const req = fakeNet.request({ url: 'http://127.0.0.1:1/' }) as unknown as FakeElectronRequest;
+		req.on('redirect', () => { req.followRedirect(); req.followRedirect(); });
+		const error = nextError(req);
+		req.serverRedirects('https://example.com/');
+		assert.deepStrictEqual(req.followed, []);
+		assert.strictEqual(await error, blockedMessage('example.com:443'));
+		assert.deepStrictEqual(denials(), ['https://example.com/'], 'decided once');
+	});
+
+	test('electron net.request: manual policy keeps emitting redirects, and followRedirect() to a blocked hop is refused', async () => {
+		const { fakeNet } = fakeElectronNet();
+		hooks = installEgressNodeHooks(url => { const allowed = loopbackOnly(url); checked.push({ url, allowed }); return allowed; }, { global: globalThis, http, https, net, electronNet: fakeNet });
+
+		// the caller follows an allowed hop
+		const ok = fakeNet.request({ url: 'http://127.0.0.1:1/', redirect: 'manual' }) as unknown as FakeElectronRequest;
+		ok.on('redirect', () => ok.followRedirect());
+		ok.serverRedirects('http://[::1]:2/');
+		assert.deepStrictEqual(ok.followed, ['http://[::1]:2/']);
+
+		// the caller does not follow: Electron's own cancellation, nothing checked or logged
+		const declined = fakeNet.request({ url: 'http://127.0.0.1:1/', redirect: 'manual' }) as unknown as FakeElectronRequest;
+		declined.on('redirect', () => { });
+		checked.length = 0;
+		const declinedError = nextError(declined);
+		declined.serverRedirects('https://example.com/');
+		assert.strictEqual(await declinedError, 'Redirect was cancelled');
+		assert.deepStrictEqual(checked, []);
+
+		// the caller tries to follow a blocked hop: refused, our error, one log line
+		const refused = fakeNet.request({ url: 'http://127.0.0.1:1/', redirect: 'manual' }) as unknown as FakeElectronRequest;
+		let threw: unknown;
+		refused.on('redirect', () => { try { refused.followRedirect(); refused.followRedirect(); } catch (e) { threw = e; } });
+		const refusedError = nextError(refused);
+		refused.serverRedirects('http://192.168.68.60:18092/leaked');
+		assert.strictEqual(threw, undefined, 'refusing does not throw into the caller\'s listener');
+		assert.deepStrictEqual(refused.followed, []);
+		assert.strictEqual(await refusedError, blockedMessage('192.168.68.60:18092'));
+		assert.deepStrictEqual(denials(), ['http://192.168.68.60:18092/leaked']);
+
+		// followRedirect() outside a redirect still fails the way Electron's does
+		assert.throws(() => refused.followRedirect(), /not waiting for a redirect/);
+	});
+
+	test('electron net.request: redirect policy \'error\' is passed through; the policy is read once', async () => {
+		const { fakeNet } = fakeElectronNet();
+		hooks = installEgressNodeHooks(loopbackOnly, { global: globalThis, http, https, net, electronNet: fakeNet });
+		const req = fakeNet.request({ url: 'http://127.0.0.1:1/', redirect: 'error' }) as unknown as FakeElectronRequest;
+		assert.strictEqual(req.policy, 'error');
+		const error = nextError(req);
+		req.serverRedirects('http://localhost:2/');
+		assert.strictEqual(await error, 'Attempted to redirect, but redirect policy was \'error\'');
+		assert.deepStrictEqual(req.followed, []);
+
+		// a getter answering 'error' to us and 'follow' to Electron cannot turn the gate off
+		const flipped = fakeNet.request(withFlippingProp({ url: 'http://127.0.0.1:1/' }, 'redirect', 'error', 'follow')) as unknown as FakeElectronRequest;
+		assert.strictEqual(flipped.policy, 'error');
+		const flippedToManual = fakeNet.request(withFlippingProp({ url: 'http://127.0.0.1:1/' }, 'redirect', 'follow', 'error')) as unknown as FakeElectronRequest;
+		assert.strictEqual(flippedToManual.policy, 'manual');
+		flippedToManual.on('error', () => { });
+		flippedToManual.serverRedirects('https://example.com/');
+		assert.deepStrictEqual(flippedToManual.followed, []);
+		await settle();
 	});
 
 	test('dispose restores every original', () => {

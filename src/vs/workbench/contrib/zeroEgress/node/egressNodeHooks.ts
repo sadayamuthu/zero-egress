@@ -271,6 +271,54 @@ export function installEgressNodeHooks(check: (url: string) => boolean, t: Egres
 		}
 	}
 
+	/**
+	 * Polices the redirects of an Electron ClientRequest created with redirect 'manual'. Electron emits 'redirect'
+	 * and, unless followRedirect() is called during that emit, cancels the request with "Redirect was cancelled".
+	 * So a hop is followed only through the wrapped followRedirect, which checks the hop's URL first (once per
+	 * hop, so one log line). `autoFollow` (the caller asked for 'follow') follows every allowed hop itself; the
+	 * caller's listeners still see each 'redirect'. A refused hop's cancellation error is replaced by our error.
+	 * Fail-closed: if the shape is not as expected, nothing follows and Electron cancels every redirect.
+	 */
+	const guardRedirects = (request: any, autoFollow: boolean): unknown => {
+		if (!request || typeof request.prependListener !== 'function' || typeof request.followRedirect !== 'function' || typeof request.emit !== 'function') {
+			return request;
+		}
+		const followOriginal: Function = request.followRedirect;
+		const emitOriginal: Function = request.emit;
+		let hop: { url: string; allowed?: boolean } | undefined;
+		let refusal: Error | undefined;
+		const allowed = (h: { url: string; allowed?: boolean }): boolean => {
+			if (h.allowed === undefined) {
+				h.allowed = check(h.url);
+				if (!h.allowed) { refusal = egressBlockedError(h.url); }
+			}
+			return h.allowed;
+		};
+		request.followRedirect = function (this: unknown) {
+			// outside a redirect, Electron's own followRedirect throws "not waiting for a redirect"
+			if (!hop) { return followOriginal.call(request); }
+			if (allowed(hop)) { return followOriginal.call(request); }
+		};
+		request.emit = function (this: unknown, event: unknown, ...args: unknown[]) {
+			if (event === 'error' && refusal) {
+				args[0] = refusal;
+				refusal = undefined;
+			}
+			if (event !== 'redirect') { return emitOriginal.call(this, event, ...args); }
+			// Electron emits 'redirect' (statusCode, method, newUrl, headers); the hop lives only for this emit
+			hop = { url: String(args[2]) };
+			try {
+				return emitOriginal.call(this, event, ...args);
+			} finally {
+				hop = undefined;
+			}
+		};
+		if (autoFollow) {
+			request.prependListener('redirect', () => { if (hop && allowed(hop)) { followOriginal.call(request); } });
+		}
+		return request;
+	};
+
 	// Best effort: Electron may expose these as getter-only or non-writable, and Chromium's network stack does
 	// not go through Node sockets, so Socket#connect cannot stand in for them. Never throw; say so loudly.
 	const electronNet = t.electronNet as Record<'request' | 'fetch', Function | undefined> | undefined;
@@ -290,7 +338,13 @@ export function installEgressNodeHooks(check: (url: string) => boolean, t: Egres
 		if (typeof snapshot !== 'string' && snapshot.url) { snapshot.url = String(snapshot.url); }
 		const denied = electronRequestUrls(snapshot).find(url => !check(url));
 		if (denied !== undefined) { throw egressBlockedError(denied); }
-		return original.call(this, snapshot, ...rest);
+		// Electron follows redirects by default and only the first URL was checked above. 'error' (and any value
+		// Electron rejects) can pass as is; 'follow' and 'manual' run as 'manual' behind guardRedirects. A string
+		// becomes the object Electron itself would parse it into (node:url legacy parse), so it can carry the policy.
+		const policy = (typeof snapshot === 'string' ? undefined : snapshot.redirect) || 'follow';
+		if (policy !== 'follow' && policy !== 'manual') { return original.call(this, snapshot, ...rest); }
+		const manual = { ...(typeof snapshot === 'string' ? nodeUrl.parse(snapshot) : snapshot), redirect: 'manual' };
+		return guardRedirects(original.call(this, manual, ...rest), policy === 'follow');
 	});
 	tryPatch('fetch', original => async function (this: unknown, input: unknown, ...rest: unknown[]) {
 		const { url, input: checked } = fetchInput(input);
