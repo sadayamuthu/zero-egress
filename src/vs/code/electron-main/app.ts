@@ -1276,7 +1276,7 @@ export class CodeApplication extends Disposable {
 		// and hot-swapped into the same channel instance once it is ready.
 		const metricsService = accessor.get(IMetricsService);
 		const disabledIdentity = { machineId: 'unknown', userId: 'unknown', appVersion: this.productService.version ?? '', zeroEgressVersion: (this.productService as any).zeroEgressVersion ?? '' };
-		const sendLLMMessageChannel = new LLMMessageChannel(metricsService, createDisabledAuditService(), disabledIdentity);
+		const sendLLMMessageChannel = new LLMMessageChannel(metricsService, createDisabledAuditService(), disabledIdentity, this.egressGuard);
 		mainProcessElectronServer.registerChannel('zero-egress-channel-llmMessage', sendLLMMessageChannel);
 
 		// Build the real audit pipeline asynchronously and hot-swap it in when ready.

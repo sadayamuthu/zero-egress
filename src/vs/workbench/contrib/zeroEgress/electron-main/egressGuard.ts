@@ -9,7 +9,7 @@
 
 import { createRequire } from 'node:module';
 import { Emitter, Event } from '../../../../base/common/event.js';
-import { Disposable, IDisposable } from '../../../../base/common/lifecycle.js';
+import { Disposable, IDisposable, toDisposable } from '../../../../base/common/lifecycle.js';
 import { IServerChannel } from '../../../../base/parts/ipc/common/ipc.js';
 import { BlockedAttempt, EgressSource } from '../common/egressGuardService.js';
 import { collectEgressTargets, EgressTarget, isAllowed } from '../common/egressPolicy.js';
@@ -26,6 +26,11 @@ export class EgressGuard extends Disposable {
 
 	/** 'settings' is per client (window): every window holds its own copy of the settings state. */
 	private readonly settingsByClient = new Map<string, readonly string[]>();
+	/**
+	 * Endpoints held by a client's model requests in flight (see leaseSettingsTarget), counted per client.
+	 * Part of that client's 'settings': the request carried them as its settings.
+	 */
+	private readonly leasesByClient = new Map<string, string[]>();
 	private readonly urls: Record<Exclude<EgressSource, 'settings'>, readonly string[]> = { mcp: [], audit: [] };
 	private _targets: EgressTarget[] = [];
 	private readonly _recentBlocked: BlockedAttempt[] = [];
@@ -56,19 +61,54 @@ export class EgressGuard extends Disposable {
 		this.update();
 	}
 
-	/** Drops a client's 'settings' list (its window closed or reloaded). */
+	/**
+	 * Keeps `url` in `client`'s 'settings' until the returned disposable is disposed. A model request carries the
+	 * settings it was made with; leasing its endpoint for the request's lifetime means neither a request that
+	 * reaches main ahead of the window's setTargets, nor the SDK's retries of a request made before the user
+	 * edited the field (every keystroke replaces the window's list), is blocked. Grants nothing new: the same
+	 * client may set any 'settings' list. Leases go with the client in removeSettingsClient.
+	 */
+	leaseSettingsTarget(client: string, url: string): IDisposable {
+		let leases = this.leasesByClient.get(client);
+		if (!leases) {
+			leases = [];
+			this.leasesByClient.set(client, leases);
+		}
+		leases.push(url);
+		this.update();
+		const owner = leases;
+		return toDisposable(() => {
+			if (this.leasesByClient.get(client) !== owner) {
+				return; // the client is gone (toDisposable already makes a second dispose a no-op)
+			}
+			owner.splice(owner.indexOf(url), 1);
+			if (!owner.length) {
+				this.leasesByClient.delete(client);
+			}
+			this.update();
+		});
+	}
+
+	/** Drops a client's 'settings' list and leases (its window closed or reloaded). */
 	removeSettingsClient(client: string): void {
-		if (this.settingsByClient.delete(client)) {
+		const hadSettings = this.settingsByClient.delete(client);
+		const hadLeases = this.leasesByClient.delete(client);
+		if (hadSettings || hadLeases) {
 			this.update();
 		}
 	}
 
 	private update(): void {
-		this._targets = collectEgressTargets({
-			providerEndpoints: [...this.settingsByClient.values()].flat(),
+		const targets = collectEgressTargets({
+			providerEndpoints: [...this.settingsByClient.values(), ...this.leasesByClient.values()].flat(),
 			mcpServerUrls: this.urls.mcp,
 			auditCollectorUrl: this.urls.audit[0],
 		});
+		// leases come and go with every model request; only a real change is worth pushing to extension hosts
+		if (JSON.stringify(targets) === JSON.stringify(this._targets)) {
+			return;
+		}
+		this._targets = targets;
 		this._onDidChangeTargets.fire(this._targets);
 	}
 

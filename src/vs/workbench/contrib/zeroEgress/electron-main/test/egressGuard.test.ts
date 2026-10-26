@@ -76,6 +76,59 @@ suite('EgressGuard', () => {
 		assert.deepStrictEqual(guard.targets.map(x => `${x.host}:${x.port}`), ['10.0.0.5:8000', '127.0.0.1:11434', 'gpubox:9000']);
 	});
 
+	test('a request lease keeps its endpoint allowed for the request\'s lifetime, whatever the window sets meanwhile', () => {
+		const guard = createGuard();
+		guard.setSettingsTargets('window:1', ['http://10.255.255.1:8000']);
+		const lease = guard.leaseSettingsTarget('window:1', 'http://10.255.255.1:8000');
+		// the user edits the field: each keystroke replaces the window's list
+		guard.setSettingsTargets('window:1', ['http://10.255.255.1:80']);
+		guard.setSettingsTargets('window:1', ['http://localhost:8000']);
+		assert.strictEqual(guard.check('http://10.255.255.1:8000/v1/models'), true, 'in-flight request (and its retries) still allowed');
+		lease.dispose();
+		assert.strictEqual(guard.check('http://10.255.255.1:8000/v1/models'), false, 'released with the request');
+		lease.dispose();
+		assert.strictEqual(guard.check('http://10.255.255.1:8000/v1/models'), false, 'double release is harmless');
+	});
+
+	test('a lease taken before the window\'s settings arrive allows the request it was taken for', () => {
+		const guard = createGuard();
+		const lease = guard.leaseSettingsTarget('window:1', 'http://10.255.255.1:8000');
+		assert.strictEqual(guard.check('http://10.255.255.1:8000/v1/models'), true);
+		assert.deepStrictEqual(guard.targets.map(x => `${x.host}:${x.port}`), ['10.255.255.1:8000']);
+		lease.dispose();
+		assert.deepStrictEqual(guard.targets, []);
+	});
+
+	test('a lease of an endpoint already allowed changes nothing and fires nothing', () => {
+		const guard = createGuard();
+		guard.setSettingsTargets('window:1', ['http://10.0.0.5:8000']);
+		let fired = 0;
+		store.add(guard.onDidChangeTargets(() => fired++));
+		guard.leaseSettingsTarget('window:1', 'http://10.0.0.5:8000/').dispose();
+		assert.strictEqual(fired, 0);
+		guard.leaseSettingsTarget('window:1', 'http://10.0.0.6:8000/').dispose();
+		assert.strictEqual(fired, 2);
+	});
+
+	test('leases are counted, per window, and dropped with the window', () => {
+		const guard = createGuard();
+		const a = guard.leaseSettingsTarget('window:1', 'http://10.0.0.5:8000');
+		const b = guard.leaseSettingsTarget('window:1', 'http://10.0.0.5:8000');
+		const c = guard.leaseSettingsTarget('window:2', 'http://10.0.0.7:8000');
+		a.dispose();
+		assert.strictEqual(guard.check('http://10.0.0.5:8000/'), true, 'b still holds it');
+		guard.removeSettingsClient('window:1');
+		assert.strictEqual(guard.check('http://10.0.0.5:8000/'), false, 'window closed');
+		b.dispose();
+		const d = guard.leaseSettingsTarget('window:1', 'http://10.0.0.9:8000');
+		guard.removeSettingsClient('window:1');
+		assert.strictEqual(guard.check('http://10.0.0.9:8000/'), false, 'a window with only leases is dropped too');
+		assert.strictEqual(guard.check('http://10.0.0.7:8000/'), true, 'other windows untouched');
+		c.dispose();
+		d.dispose();
+		assert.deepStrictEqual(guard.targets, []);
+	});
+
 	test('node hooks', async () => {
 		const guard = createGuard();
 		const realFetch = globalThis.fetch;

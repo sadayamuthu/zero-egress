@@ -13,6 +13,13 @@ import { sendLLMMessage } from './llmMessage/sendLLMMessage.js'
 import { IMetricsService } from '../common/metricsService.js';
 import { sendLLMMessageToProviderImplementation } from './llmMessage/sendLLMMessage.impl.js';
 import { IAuditMainService } from './audit/auditMainService.js';
+import { IDisposable } from '../../../../base/common/lifecycle.js';
+import { SettingsOfProvider } from '../common/zeroEgressSettingsTypes.js';
+
+/** The egress guard's request leases (EgressGuard.leaseSettingsTarget). */
+export interface EndpointLeases {
+	leaseSettingsTarget(client: string, url: string): IDisposable;
+}
 
 // NODE IMPLEMENTATION - calls actual sendLLMMessage() and returns listeners to it
 
@@ -26,7 +33,7 @@ export class LLMMessageChannel implements IServerChannel {
 	}
 
 	// aborters for above
-	private readonly _infoOfRunningRequest: Record<string, { waitForSend: Promise<void> | undefined, abortRef: AbortRef }> = {}
+	private readonly _infoOfRunningRequest: Record<string, { waitForSend: Promise<void> | undefined, abortRef: AbortRef, lease?: IDisposable }> = {}
 
 
 	// list
@@ -57,9 +64,23 @@ export class LLMMessageChannel implements IServerChannel {
 		private readonly metricsService: IMetricsService,
 		auditService: IAuditMainService,
 		auditIdentity: { machineId: string; userId: string; appVersion: string; zeroEgressVersion: string },
+		private readonly endpointLeases?: EndpointLeases,
 	) {
 		this.auditService = auditService;
 		this.auditIdentity = auditIdentity;
+	}
+
+	/**
+	 * Every request carries the settings it was made with. Its provider's endpoint is leased in the egress guard,
+	 * for the calling window (`ctx`), until the request is over, so the request and its SDK retries are judged
+	 * against those settings rather than whatever the window's allow-list holds at the moment of each dial.
+	 */
+	private _leaseEndpoint(ctx: unknown, settingsOfProvider: SettingsOfProvider | undefined, providerName: unknown): IDisposable | undefined {
+		const endpoint = (settingsOfProvider as Record<string, { endpoint?: unknown } | undefined> | undefined)?.[String(providerName)]?.endpoint;
+		if (!this.endpointLeases || typeof ctx !== 'string' || typeof endpoint !== 'string' || !endpoint) {
+			return undefined;
+		}
+		return this.endpointLeases.leaseSettingsTarget(ctx, endpoint);
 	}
 
 	setAudit(service: IAuditMainService, identity: { machineId: string; userId: string; appVersion: string; zeroEgressVersion: string }) {
@@ -83,19 +104,19 @@ export class LLMMessageChannel implements IServerChannel {
 	}
 
 	// browser uses this to call (see this.channel.call() in llmMessageService.ts for all usages)
-	async call(_: unknown, command: string, params: any): Promise<any> {
+	async call(ctx: unknown, command: string, params: any): Promise<any> {
 		try {
 			if (command === 'sendLLMMessage') {
-				this._callSendLLMMessage(params)
+				this._callSendLLMMessage(params, this._leaseEndpoint(ctx, params?.settingsOfProvider, params?.modelSelection?.providerName))
 			}
 			else if (command === 'abort') {
 				await this._callAbort(params)
 			}
 			else if (command === 'ollamaList') {
-				this._callOllamaList(params)
+				this._callOllamaList(params, this._leaseEndpoint(ctx, params?.settingsOfProvider, 'ollama'))
 			}
 			else if (command === 'openAICompatibleList') {
-				this._callOpenAICompatibleList(params)
+				this._callOpenAICompatibleList(params, this._leaseEndpoint(ctx, params?.settingsOfProvider, params?.providerName))
 			}
 			else {
 				throw new Error(`ZeroEgress sendLLM: command "${command}" not recognized.`)
@@ -107,11 +128,13 @@ export class LLMMessageChannel implements IServerChannel {
 	}
 
 	// the only place sendLLMMessage is actually called
-	private _callSendLLMMessage(params: MainSendLLMMessageParams) {
+	private _callSendLLMMessage(params: MainSendLLMMessageParams, lease: IDisposable | undefined) {
 		const { requestId } = params;
 
 		if (!(requestId in this._infoOfRunningRequest))
 			this._infoOfRunningRequest[requestId] = { waitForSend: undefined, abortRef: { current: null } }
+		this._infoOfRunningRequest[requestId].lease?.dispose()
+		this._infoOfRunningRequest[requestId].lease = lease
 
 		const mainThreadParams: SendLLMMessageParams = {
 			...params,
@@ -119,9 +142,11 @@ export class LLMMessageChannel implements IServerChannel {
 				this.llmMessageEmitters.onText.fire({ requestId, ...p });
 			},
 			onFinalMessage: (p) => {
+				lease?.dispose();
 				this.llmMessageEmitters.onFinalMessage.fire({ requestId, ...p });
 			},
 			onError: (p) => {
+				lease?.dispose();
 				console.log('sendLLM: firing err');
 				this.llmMessageEmitters.onError.fire({ requestId, ...p });
 			},
@@ -136,7 +161,8 @@ export class LLMMessageChannel implements IServerChannel {
 	private async _callAbort(params: MainLLMMessageAbortParams) {
 		const { requestId } = params;
 		if (!(requestId in this._infoOfRunningRequest)) return
-		const { waitForSend, abortRef } = this._infoOfRunningRequest[requestId]
+		const { waitForSend, abortRef, lease } = this._infoOfRunningRequest[requestId]
+		lease?.dispose()
 		await waitForSend // wait for the send to finish so we know abortRef was set
 		abortRef?.current?.()
 		delete this._infoOfRunningRequest[requestId]
@@ -146,26 +172,36 @@ export class LLMMessageChannel implements IServerChannel {
 
 
 
-	_callOllamaList = (params: MainModelListParams<OllamaModelResponse>) => {
+	_callOllamaList = (params: MainModelListParams<OllamaModelResponse>, lease?: IDisposable) => {
 		const { requestId } = params
 		const emitters = this.listEmitters.ollama
 		const mainThreadParams: ModelListParams<OllamaModelResponse> = {
 			...params,
-			onSuccess: (p) => { emitters.success.fire({ requestId, ...p }); },
-			onError: (p) => { emitters.error.fire({ requestId, ...p }); },
+			onSuccess: (p) => { lease?.dispose(); emitters.success.fire({ requestId, ...p }); },
+			onError: (p) => { lease?.dispose(); emitters.error.fire({ requestId, ...p }); },
 		}
-		sendLLMMessageToProviderImplementation.ollama.list(mainThreadParams)
+		try {
+			sendLLMMessageToProviderImplementation.ollama.list(mainThreadParams)
+		} catch (e) {
+			lease?.dispose()
+			throw e
+		}
 	}
 
-	_callOpenAICompatibleList = (params: MainModelListParams<OpenaiCompatibleModelResponse>) => {
+	_callOpenAICompatibleList = (params: MainModelListParams<OpenaiCompatibleModelResponse>, lease?: IDisposable) => {
 		const { requestId, providerName } = params
 		const emitters = this.listEmitters.openaiCompat
 		const mainThreadParams: ModelListParams<OpenaiCompatibleModelResponse> = {
 			...params,
-			onSuccess: (p) => { emitters.success.fire({ requestId, ...p }); },
-			onError: (p) => { emitters.error.fire({ requestId, ...p }); },
+			onSuccess: (p) => { lease?.dispose(); emitters.success.fire({ requestId, ...p }); },
+			onError: (p) => { lease?.dispose(); emitters.error.fire({ requestId, ...p }); },
 		}
-		sendLLMMessageToProviderImplementation[providerName].list(mainThreadParams)
+		try {
+			sendLLMMessageToProviderImplementation[providerName].list(mainThreadParams)
+		} catch (e) {
+			lease?.dispose()
+			throw e
+		}
 	}
 
 
