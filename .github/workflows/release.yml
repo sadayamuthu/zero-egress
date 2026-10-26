@@ -133,6 +133,9 @@ jobs:
         env:
           # Newer Apple clang rejects the consteval use in a bundled fmt.
           CXXFLAGS: -DFMT_CONSTEVAL=
+          # @vscode/ripgrep's postinstall downloads from the GitHub API, which
+          # rate-limits anonymous requests from shared runner IPs (403).
+          GITHUB_TOKEN: ${{ github.token }}
       - name: Restore @parcel/watcher prebuild
         run: bash build/zero-egress/restore-parcel-watcher.sh ${{ matrix.watcher }}
       - name: Import signing certificate
@@ -190,6 +193,8 @@ jobs:
           cache: npm
       - name: Install
         run: npm ci
+        env:
+          GITHUB_TOKEN: ${{ github.token }}   # see build-mac
       - name: Restore @parcel/watcher prebuild
         run: bash build/zero-egress/restore-parcel-watcher.sh win32-x64
       - name: Signing mode
@@ -296,6 +301,8 @@ jobs:
           sudo apt-get install -y build-essential pkg-config python3 libkrb5-dev libx11-dev libxkbfile-dev libsecret-1-dev fakeroot dpkg rpm
       - name: Install
         run: npm ci
+        env:
+          GITHUB_TOKEN: ${{ github.token }}   # see build-mac
       - name: Restore @parcel/watcher prebuild
         run: bash build/zero-egress/restore-parcel-watcher.sh linux-x64-glibc
       # Builds, runs the brand check and URL audit on the app (a failure ships
