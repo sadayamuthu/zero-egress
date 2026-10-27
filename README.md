@@ -170,7 +170,11 @@ shasum -a 256 -c SHA256SUMS --ignore-missing     # macOS
 sha256sum -c SHA256SUMS --ignore-missing         # Linux
 ```
 
-Each file you downloaded should print `OK`. On Windows, compare
+Each file you downloaded should print `OK`. `SHA256SUMS` also covers the
+CycloneDX SBOM (`zero-egress-<v>.cdx.json`). The SBOM lists the production
+npm dependencies of the root lockfile only; it does not yet list the
+built-in extensions' dependencies, Electron and Chromium, or the bundled
+ripgrep. On Windows, compare
 `Get-FileHash` with the line in `SHA256SUMS`:
 
 ```powershell

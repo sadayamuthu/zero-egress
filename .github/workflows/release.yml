@@ -547,7 +547,9 @@ jobs:
           for f in "${expected[@]}"; do [ -s "$f" ] || { echo "::error::missing $f"; missing=1; }; done
           [ "$(ls | wc -l)" -eq "${#expected[@]}" ] || { echo "::error::unexpected files in dist"; missing=1; }
           exit "$missing"
-      # CycloneDX SBOM of the production npm dependency tree, from the lockfile.
+      # CycloneDX SBOM of the production npm dependency tree, from the root
+      # lockfile. Not covered (README says so): the built-in extensions'
+      # dependencies, Electron/Chromium and the bundled ripgrep.
       - name: SBOM
         env:
           V: ${{ needs.test.outputs.version }}

@@ -110,7 +110,8 @@ packaged app before it is packaged:
 - **product.json invariant** (fatal): `updateUrl`, the gallery URLs,
   `configurationSync.store`, `tasConfig`, `releaseNotesUrl`,
   `nodejsRepository`, `licenseUrl`, `reportIssueUrl` and `aiConfig` must be
-  absent or empty, and `enableTelemetry` must not be `true`.
+  absent or empty, and `enableTelemetry` must not be `true`. On a packaged
+  app this reads the `product.json` that ships in it.
 - **Other URLs** (informational): lists every non-loopback URL string for
   review. A VS Code build carries hundreds of documentation and schema
   links that are never fetched, so this part doesn't fail the build. The
@@ -130,6 +131,11 @@ bash scripts/zero-egress/audit-urls.sh out
 ```
 
 ends with `AUDIT PASSED`.
+
+The brand gate (`check-brand.sh`) also runs on each packaged app, but it
+skips `out*/` and `node_modules/`, so on a packaged app it checks little
+of the shipped code; widening it is a tracked follow-up. It is a naming
+check, not an egress check.
 
 ## Known limits
 
