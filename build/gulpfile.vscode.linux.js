@@ -13,7 +13,6 @@ const vfs = require('vinyl-fs');
 const { rimraf } = require('./lib/util');
 const { getVersion } = require('./lib/getVersion');
 const task = require('./lib/task');
-const packageJson = require('../package.json');
 const product = require('../product.json');
 const dependenciesGenerator = require('./linux/dependencies-generator');
 const debianRecommendedDependencies = require('./linux/debian/dep-lists').recommendedDeps;
@@ -86,9 +85,12 @@ function prepareDebPackage(arch) {
 			function (f) { size += f.isDirectory() ? 4096 : f.contents.length; },
 			function () {
 				const that = this;
+				// The package version is ZeroEgress's own (zeroEgressVersion), not VS Code's.
+				// Epoch 1: the 0.1.0 .deb carried VS Code's 1.99.3, which would otherwise sort
+				// above every 0.x release and block upgrades.
 				gulp.src('resources/linux/debian/control.template', { base: '.' })
 					.pipe(replace('@@NAME@@', product.applicationName))
-					.pipe(replace('@@VERSION@@', packageJson.version + '-' + linuxPackageRevision))
+					.pipe(replace('@@VERSION@@', '1:' + product.zeroEgressVersion + '-' + linuxPackageRevision))
 					.pipe(replace('@@ARCHITECTURE@@', debArch))
 					.pipe(replace('@@DEPENDS@@', dependencies.join(', ')))
 					.pipe(replace('@@RECOMMENDS@@', debianRecommendedDependencies.join(', ')))
@@ -197,7 +199,7 @@ function prepareRpmPackage(arch) {
 			.pipe(replace('@@NAME@@', product.applicationName))
 			.pipe(replace('@@NAME_LONG@@', product.nameLong))
 			.pipe(replace('@@ICON@@', product.linuxIconName))
-			.pipe(replace('@@VERSION@@', packageJson.version))
+			.pipe(replace('@@VERSION@@', product.zeroEgressVersion))
 			.pipe(replace('@@RELEASE@@', linuxPackageRevision))
 			.pipe(replace('@@ARCHITECTURE@@', rpmArch))
 			.pipe(replace('@@LICENSE@@', product.licenseName))

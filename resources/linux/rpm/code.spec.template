@@ -1,12 +1,15 @@
 Name:     @@NAME@@
+# Epoch 1: the 0.1.0 rpm carried VS Code's 1.99.3, which would otherwise sort
+# above every 0.x release and block upgrades.
+Epoch:    1
 Version:  @@VERSION@@
 Release:  @@RELEASE@@.el8
-Summary:  Code editing. Redefined.
+Summary:  AI code editor that works offline
 Group:    Development/Tools
-Vendor:   Microsoft Corporation
-Packager: Visual Studio Code Team <vscode-linux@microsoft.com>
+Vendor:   ZeroEgress <4604648+sadayamuthu@users.noreply.github.com>
+Packager: ZeroEgress <4604648+sadayamuthu@users.noreply.github.com>
 License:  @@LICENSE@@
-URL:      https://code.visualstudio.com/
+URL:      https://github.com/sadayamuthu/zero-egress
 Icon:     @@NAME@@.xpm
 Requires: @@DEPENDENCIES@@
 AutoReq:  0
@@ -17,10 +20,10 @@ AutoReq:  0
 %global __brp_strip_comment_note %{nil}
 
 %description
-Visual Studio Code is a new choice of tool that combines the simplicity of a code editor with what developers need for the core edit-build-debug cycle. See https://code.visualstudio.com/docs/setup/linux for installation instructions and FAQ.
+ZeroEgress has chat, an agent mode, quick edit and autocomplete, and talks only to model servers you run yourself (Ollama, vLLM or LM Studio, on your machine or your own network). It connects to loopback and to the servers you configure, and nothing else. Telemetry, auto-update, the online extension marketplace and cloud sign-in are removed.
 
 # Don't generate build_id links to prevent conflicts when installing multiple
-# versions of VS Code alongside each other (e.g. `code` and `code-insiders`)
+# builds alongside each other
 %define _build_id_links none
 %define __strip @@STRIP@@
 

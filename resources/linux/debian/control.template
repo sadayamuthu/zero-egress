@@ -5,14 +5,12 @@ Depends: @@DEPENDS@@
 Recommends: @@RECOMMENDS@@
 Priority: optional
 Architecture: @@ARCHITECTURE@@
-Maintainer: Microsoft Corporation <vscode-linux@microsoft.com>
-Homepage: https://code.visualstudio.com/
+Maintainer: ZeroEgress <4604648+sadayamuthu@users.noreply.github.com>
+Homepage: https://github.com/sadayamuthu/zero-egress
 Installed-Size: @@INSTALLEDSIZE@@
-Provides: visual-studio-@@NAME@@
-Conflicts: visual-studio-@@NAME@@
-Replaces: visual-studio-@@NAME@@
-Description: Code editing. Redefined.
- Visual Studio Code is a new choice of tool that combines the simplicity of
- a code editor with what developers need for the core edit-build-debug cycle.
- See https://code.visualstudio.com/docs/setup/linux for installation
- instructions and FAQ.
+Description: AI code editor that works offline
+ ZeroEgress has chat, an agent mode, quick edit and autocomplete, and talks
+ only to model servers you run yourself (Ollama, vLLM or LM Studio, on your
+ machine or your own network). It connects to loopback and to the servers you
+ configure, and nothing else. Telemetry, auto-update, the online extension
+ marketplace and cloud sign-in are removed.

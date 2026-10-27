@@ -4,15 +4,11 @@
 	<metadata_license>@@LICENSE@@</metadata_license>
 	<project_license>@@LICENSE@@</project_license>
 	<name>@@NAME_LONG@@</name>
-	<url type="homepage">https://code.visualstudio.com</url>
-	<summary>Visual Studio Code. Code editing. Redefined.</summary>
+	<url type="homepage">https://github.com/sadayamuthu/zero-egress</url>
+	<url type="bugtracker">https://github.com/sadayamuthu/zero-egress/issues</url>
+	<summary>AI code editor that works offline</summary>
 	<description>
-		<p>Visual Studio Code is a new choice of tool that combines the simplicity of a code editor with what developers need for the core edit-build-debug cycle. See https://code.visualstudio.com/docs/setup/linux for installation instructions and FAQ.</p>
+		<p>ZeroEgress has chat, an agent mode, quick edit and autocomplete, and talks only to model servers you run yourself (Ollama, vLLM or LM Studio, on your machine or your own network). It connects to loopback and to the servers you configure, and nothing else. Telemetry, auto-update, the online extension marketplace and cloud sign-in are removed.</p>
 	</description>
-	<screenshots>
-		<screenshot type="default">
-			<image>https://code.visualstudio.com/home/home-screenshot-linux-lg.png</image>
-			<caption>Editing TypeScript and searching for extensions</caption>
-		</screenshot>
-	</screenshots>
+	<developer_name>ZeroEgress</developer_name>
 </component>
