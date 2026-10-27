@@ -5,29 +5,27 @@
 
 // Feeds this window's configured model endpoints to the main-process egress guard (main keeps one list per
 // window and allows their union, dropping a window's list when it closes), and writes every blocked
-// connection to the "ZeroEgress: Network" output channel (host and caller; never the path or query).
+// connection to the "ZeroEgress: Network" output channel (host and caller; never the path or query), with
+// repeats of one destination from one caller coalesced into a summary line per minute.
 
 import { onUnexpectedError } from '../../../../base/common/errors.js';
-import { Disposable } from '../../../../base/common/lifecycle.js';
+import { Disposable, toDisposable } from '../../../../base/common/lifecycle.js';
 import { Registry } from '../../../../platform/registry/common/platform.js';
 import { IWorkbenchContribution, registerWorkbenchContribution2, WorkbenchPhase } from '../../../common/contributions.js';
 import { Extensions as OutputExtensions, IOutputChannelRegistry, IOutputService } from '../../../services/output/common/output.js';
 import { BlockedAttempt, IEgressGuardService } from '../common/egressGuardService.js';
-import { describeDestination } from '../common/egressPolicy.js';
+import { BLOCKED_LOG_WINDOW_MS, BlockedLogCoalescer } from '../common/blockedLog.js';
 import { IZeroEgressSettingsService } from '../common/zeroEgressSettingsService.js';
 
 export const NETWORK_OUTPUT_CHANNEL_ID = 'zeroEgress.network';
 
 Registry.as<IOutputChannelRegistry>(OutputExtensions.OutputChannels).registerChannel({ id: NETWORK_OUTPUT_CHANNEL_ID, label: 'ZeroEgress: Network', log: false });
 
-export function formatBlockedAttempt(e: BlockedAttempt): string {
-	return `${new Date(e.time).toISOString()} blocked ${describeDestination(e.url)} (caller: ${e.origin})\n`;
-}
-
 class EgressTargetsContribution extends Disposable implements IWorkbenchContribution {
 	static readonly ID = 'workbench.contrib.zeroEgress.egressTargets';
 
 	private lastSent: string | undefined;
+	private readonly coalescer = new BlockedLogCoalescer();
 
 	constructor(
 		@IEgressGuardService private readonly egressGuardService: IEgressGuardService,
@@ -39,6 +37,8 @@ class EgressTargetsContribution extends Disposable implements IWorkbenchContribu
 		// Subscribe before reading the backlog; a block landing in between may show twice, never zero times.
 		this._register(this.egressGuardService.onDidBlock(e => this.log(e)));
 		this.egressGuardService.getRecentBlocked().then(recent => recent.forEach(e => this.log(e)), onUnexpectedError);
+		const summaries = setInterval(() => this.write(this.coalescer.flush(Date.now())), BLOCKED_LOG_WINDOW_MS / 6);
+		this._register(toDisposable(() => clearInterval(summaries)));
 
 		// The settings service fires onDidChangeState synchronously when its stored state is first read,
 		// ahead of anything awaiting waitForInitState (e.g. model refresh), so endpoints reach main first.
@@ -59,7 +59,13 @@ class EgressTargetsContribution extends Disposable implements IWorkbenchContribu
 	}
 
 	private log(e: BlockedAttempt): void {
-		this.outputService.getChannel(NETWORK_OUTPUT_CHANNEL_ID)?.append(formatBlockedAttempt(e));
+		this.write(this.coalescer.add(e));
+	}
+
+	private write(lines: string[]): void {
+		if (lines.length) {
+			this.outputService.getChannel(NETWORK_OUTPUT_CHANNEL_ID)?.append(lines.join(''));
+		}
 	}
 }
 

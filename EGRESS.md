@@ -72,13 +72,18 @@ query are never logged. A line looks like:
 ```
 
 The caller is `renderer`, `main`, `extensionHost` or `sharedProcess`.
+Repeats are coalesced: after the first line for a destination and caller,
+further attempts in the next minute are counted and reported in one
+summary line, so code stuck in a retry loop doesn't flood the channel.
 
 **Internet endpoints.** If a model endpoint you enter is not loopback or a
 private address (`10/8`, `172.16/12`, `192.168/16`, `169.254/16`,
 `100.64/10`, `fc00::/7`, `fe80::/10`, or a single-label, `.local`, `.lan`,
 `.internal` or `.home.arpa` name), Settings shows "This server is on the
 internet; code you send will leave your network." It is still allowed:
-the warning makes it visible, you decide.
+the warning makes it visible, you decide. An MCP server reached by URL gets
+the same warning on its card in Settings, and an audit collector URL on
+the internet is reported in the main log.
 
 **Model requests in flight.** A model request is judged against the
 settings it was sent with. Its endpoint stays allowed for the lifetime of
