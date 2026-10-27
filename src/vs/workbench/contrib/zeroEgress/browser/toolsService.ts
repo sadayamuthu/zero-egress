@@ -537,6 +537,11 @@ export class ToolsService implements IToolsService {
 					return `${result_}\n(exit code ${resolveReason.exitCode})`
 				}
 				// normal command
+				if (resolveReason.type === 'timeout' && !resolveReason.commandDetection) {
+					// Without shell integration there is no "command finished" event, so inactivity is the only signal:
+					// the command may well have completed. Say so instead of reporting a failure.
+					return `${result_}\nTerminal command ran. ZeroEgress could not detect when it finished (the terminal's shell integration is not active), so this is its output once it had been quiet for ${MAX_TERMINAL_INACTIVE_TIME}s; the exit code is unknown. Check the output to tell whether it completed.`
+				}
 				if (resolveReason.type === 'timeout') {
 					return `${result_}\nTerminal command ran, but was automatically killed by ZeroEgress after ${MAX_TERMINAL_INACTIVE_TIME}s of inactivity and did not finish successfully. To try with more time, open a persistent terminal and run the command there.`
 				}

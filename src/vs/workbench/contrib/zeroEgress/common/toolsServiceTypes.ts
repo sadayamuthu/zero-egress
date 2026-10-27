@@ -5,7 +5,8 @@ import { RawToolParamsObj } from './sendLLMMessageTypes.js';
 
 
 
-export type TerminalResolveReason = { type: 'timeout' } | { type: 'done', exitCode: number }
+/** `commandDetection`: whether the terminal's shell integration could report the command finishing. */
+export type TerminalResolveReason = { type: 'timeout', commandDetection: boolean } | { type: 'done', exitCode: number }
 
 export type LintErrorItem = { code: string, message: string, startLineNumber: number, endLineNumber: number }
 

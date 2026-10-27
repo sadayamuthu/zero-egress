@@ -321,7 +321,7 @@ export class TerminalToolService extends Disposable implements ITerminalToolServ
 				// timeout after X seconds
 				new Promise<void>((res) => {
 					setTimeout(() => {
-						resolveReason = { type: 'timeout' };
+						resolveReason = { type: 'timeout', commandDetection: !!cmdCap };
 						res()
 					}, MAX_TERMINAL_BG_COMMAND_TIME * 1000)
 				})
@@ -333,7 +333,7 @@ export class TerminalToolService extends Disposable implements ITerminalToolServ
 						globalTimeoutId = setTimeout(() => {
 							if (resolveReason) return
 
-							resolveReason = { type: 'timeout' };
+							resolveReason = { type: 'timeout', commandDetection: !!cmdCap };
 							res();
 						}, MAX_TERMINAL_INACTIVE_TIME * 1000);
 					};
