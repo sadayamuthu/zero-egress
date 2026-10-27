@@ -79,7 +79,7 @@ jobs:
       - name: Unit tests (ZeroEgress electron-main)
         run: |
           set -e
-          for f in src/vs/workbench/contrib/zeroEgress/electron-main/test/*.test.ts src/vs/workbench/contrib/zeroEgress/electron-main/audit/test/*.test.ts; do
+          for f in src/vs/workbench/contrib/zeroEgress/electron-main/test/*.test.ts src/vs/workbench/contrib/zeroEgress/electron-main/audit/test/*.test.ts src/vs/platform/telemetry/test/electron-main/*.test.ts; do
             echo "::group::$f"
             node test/unit/node/index.js --run "$f"
             echo "::endgroup::"

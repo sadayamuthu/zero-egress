@@ -86,11 +86,6 @@ flakySuite('Native Modules (all platforms)', () => {
 		assert.ok(typeof parcelWatcher.subscribe === 'function', testErrorMessage('@parcel/watcher'));
 	});
 
-	test('@vscode/deviceid', async () => {
-		const deviceIdPackage = await import('@vscode/deviceid');
-		assert.ok(typeof deviceIdPackage.getDeviceId === 'function', testErrorMessage('@vscode/deviceid'));
-	});
-
 	test('@vscode/ripgrep', async () => {
 		const ripgrep = await import('@vscode/ripgrep');
 		assert.ok(typeof ripgrep.rgPath === 'string', testErrorMessage('@vscode/ripgrep'));

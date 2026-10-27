@@ -6,8 +6,6 @@
 import { networkInterfaces } from 'os';
 import { TernarySearchTree } from '../common/ternarySearchTree.js';
 import * as uuid from '../common/uuid.js';
-import { getMac } from './macAddress.js';
-import { isWindows } from '../common/platform.js';
 
 // http://www.techrepublic.com/blog/data-center/mac-address-scorecard-for-common-virtual-machine-platforms/
 // VMware ESX 3, Server, Workstation, Player	00-50-56, 00-0C-29, 00-05-69
@@ -77,51 +75,33 @@ export const virtualMachineHint: { value(): number } = new class {
 	}
 };
 
-let machineId: Promise<string>;
-export async function getMachineId(errorLogger: (error: any) => void): Promise<string> {
-	if (!machineId) {
-		machineId = (async () => {
-			const id = await getMacMachineId(errorLogger);
+// ZeroEgress: no identifier here is derived from the hardware or shared with
+// another product. Upstream hashed a MAC address (the same value VS Code
+// computes), read Windows' SQM MachineId from HKLM, and used @vscode/deviceid,
+// which reads or creates a device ID in a per-user Microsoft folder that every
+// Microsoft developer tool shares. Each function now returns a fresh random
+// UUID (or nothing); the main process stores the result in this app's own
+// state (see platform/telemetry/node/telemetryUtils.ts), so it is stable per
+// installation and unrelated to any other product.
 
-			return id || uuid.generateUuid(); // fallback, generate a UUID
-		})();
+let machineId: Promise<string>;
+export async function getMachineId(_errorLogger: (error: any) => void): Promise<string> {
+	if (!machineId) {
+		machineId = Promise.resolve(uuid.generateUuid());
 	}
 
 	return machineId;
 }
 
-async function getMacMachineId(errorLogger: (error: any) => void): Promise<string | undefined> {
-	try {
-		const crypto = await import('crypto');
-		const macAddress = getMac();
-		return crypto.createHash('sha256').update(macAddress, 'utf8').digest('hex');
-	} catch (err) {
-		errorLogger(err);
-		return undefined;
-	}
-}
-
-const SQM_KEY: string = 'Software\\Microsoft\\SQMClient';
-export async function getSqmMachineId(errorLogger: (error: any) => void): Promise<string> {
-	if (isWindows) {
-		const Registry = await import('@vscode/windows-registry');
-		try {
-			return Registry.GetStringRegKey('HKEY_LOCAL_MACHINE', SQM_KEY, 'MachineId') || '';
-		} catch (err) {
-			errorLogger(err);
-			return '';
-		}
-	}
+export async function getSqmMachineId(_errorLogger: (error: any) => void): Promise<string> {
 	return '';
 }
 
-export async function getdevDeviceId(errorLogger: (error: any) => void): Promise<string> {
-	try {
-		const deviceIdPackage = await import('@vscode/deviceid');
-		const id = await deviceIdPackage.getDeviceId();
-		return id;
-	} catch (err) {
-		errorLogger(err);
-		return uuid.generateUuid();
+let devDeviceId: Promise<string>;
+export async function getdevDeviceId(_errorLogger: (error: any) => void): Promise<string> {
+	if (!devDeviceId) {
+		devDeviceId = Promise.resolve(uuid.generateUuid());
 	}
+
+	return devDeviceId;
 }
