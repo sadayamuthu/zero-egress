@@ -74,6 +74,8 @@ jobs:
       all: ${{ steps.plan.outputs.all }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: Brand gate tests
         run: bash scripts/zero-egress/test/check-brand.test.sh
       - name: Brand gate
@@ -122,9 +124,11 @@ jobs:
     name: build-mac (${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 180
-    # Secrets go only to the steps that use them, never to npm ci, whose
-    # dependency install scripts would otherwise see them. Step conditions
-    # test this boolean instead.
+    # Signing secrets go only to the steps that use them, never to npm ci,
+    # whose dependency install scripts would otherwise see them. Step
+    # conditions test this boolean instead. npm ci does get the job's
+    # GITHUB_TOKEN (contents: read on this public repository, expiring with
+    # the job) for @vscode/ripgrep's download; see the Install step.
     env:
       HAS_APPLE_CERT: ${{ secrets.APPLE_CERT_P12_BASE64 != '' }}
     steps:
@@ -141,7 +145,10 @@ jobs:
           # Newer Apple clang rejects the consteval use in a bundled fmt.
           CXXFLAGS: -DFMT_CONSTEVAL=
           # @vscode/ripgrep's postinstall downloads from the GitHub API, which
-          # rate-limits anonymous requests from shared runner IPs (403).
+          # rate-limits anonymous requests from shared runner IPs (403). Every
+          # install script can read this token; it is read-only (permissions:
+          # contents: read) and expires with the job, so it grants nothing a
+          # public checkout does not.
           GITHUB_TOKEN: ${{ github.token }}
       - name: Restore @parcel/watcher prebuild
         run: bash build/zero-egress/restore-parcel-watcher.sh ${{ matrix.watcher }}
@@ -212,6 +219,9 @@ jobs:
         env:
           WIN_CERT_PFX_BASE64: ${{ secrets.WIN_CERT_PFX_BASE64 }}
         run: |
+          if [ "$HAS_AZURE" = true ] && [ "$HAS_PFX" = true ]; then
+            echo "::warning::Both Azure Trusted Signing and WIN_CERT_PFX_BASE64 are configured; signing with Azure and ignoring the PFX"
+          fi
           if [ "$HAS_AZURE" = true ]; then
             echo "ZE_WIN_SIGNED=1" >> "$GITHUB_ENV"
             echo "Signing with Azure Trusted Signing"
@@ -503,7 +513,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
+      # No credentials on disk: the SBOM step runs a tool from npm.
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version-file: .nvmrc
@@ -611,21 +624,23 @@ jobs:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-')
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # The token reaches only the step that pushes; the others test this boolean.
     env:
-      TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+      HAS_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN != '' }}
     steps:
       - name: Check for token
-        if: env.TAP_TOKEN == ''
+        if: env.HAS_TAP_TOKEN != 'true'
         run: echo "::warning::HOMEBREW_TAP_TOKEN is not set; skipping the Homebrew cask update."
       - uses: actions/download-artifact@v4
-        if: env.TAP_TOKEN != ''
+        if: env.HAS_TAP_TOKEN == 'true'
         with:
           name: release-meta
           path: meta
       - name: Update cask
-        if: env.TAP_TOKEN != ''
+        if: env.HAS_TAP_TOKEN == 'true'
         env:
           TAG: ${{ github.ref_name }}
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         run: |
           set -euo pipefail
           git clone --depth 1 "https://x-access-token:${TAP_TOKEN}@github.com/sadayamuthu/homebrew-tap.git" tap
