@@ -36,6 +36,8 @@ jobs:
         run: node scripts/zero-egress/test/egress-verdict.test.mjs
       - name: Linux packaging tests
         run: node scripts/zero-egress/test/linux-packaging.test.mjs
+      - name: Guard wiring check
+        run: node scripts/zero-egress/test/guard-wiring.test.mjs
 
       - uses: actions/setup-node@v4
         with:

@@ -78,6 +78,8 @@ jobs:
         run: node scripts/zero-egress/check-defaults.mjs
       - name: Egress verdict tests
         run: node scripts/zero-egress/test/egress-verdict.test.mjs
+      - name: Guard wiring check
+        run: node scripts/zero-egress/test/guard-wiring.test.mjs
       - name: Version and platforms
         id: plan
         env:

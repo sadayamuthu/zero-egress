@@ -7,10 +7,16 @@ import { tmpdir } from 'node:os';
 const here = dirname(fileURLToPath(import.meta.url));
 const verdict = join(here, '..', 'egress-verdict.mjs');
 const dir = mkdtempSync(join(tmpdir(), 'egress-verdict-'));
+const CONTROL = { host: '127.0.0.1', port: 9 };
+const EXPECT = ['--expect', '127.0.0.1:9'];
 
+/** Runs the verdict on a log of `lines` plus the positive control, with --expect for it. */
 function run(lines, args = []) {
+	return runRaw([CONTROL, ...lines], [...EXPECT, ...args]);
+}
+function runRaw(lines, args = []) {
 	const log = join(dir, `log-${Math.random().toString(36).slice(2)}.jsonl`);
-	writeFileSync(log, lines.map(l => JSON.stringify({ time: 't', ...l })).join('\n') + '\n');
+	writeFileSync(log, lines.map(l => JSON.stringify({ time: 't', ...l })).join('\n') + (lines.length ? '\n' : ''));
 	return spawnSync(process.execPath, [verdict, log, ...args], { encoding: 'utf8' });
 }
 function check(name, cond, r) {
@@ -36,6 +42,24 @@ r = run([{ host: 'localhost.evil.com', port: 443 }, { host: '128.0.0.1', port: 8
 check('lookalikes fail', r.status === 1 && r.stdout.includes('localhost.evil.com:443') && r.stdout.includes('128.0.0.1:80'), r);
 
 r = run([]);
-check('empty log passes', r.status === 0, r);
+check('a log with only the positive control passes', r.status === 0 && r.stdout.includes('EGRESS TEST PASSED'), r);
+
+r = runRaw([], EXPECT);
+check('an empty log fails even with --expect', r.status === 1 && r.stdout.includes('the log is empty') && !r.stdout.includes('PASSED'), r);
+
+r = runRaw([]);
+check('an empty log without --expect fails', r.status === 1 && r.stdout.includes('no --expect'), r);
+
+r = runRaw([{ host: '127.0.0.1', port: 11434 }]);
+check('a clean log without --expect fails', r.status === 1 && r.stdout.includes('no --expect'), r);
+
+r = runRaw([{ host: '127.0.0.1', port: 11434 }], EXPECT);
+check('a log that lacks the positive control fails', r.status === 1 && r.stdout.includes('positive control 127.0.0.1:9 never appeared'), r);
+
+r = spawnSync(process.execPath, [verdict, join(dir, 'missing.jsonl'), ...EXPECT], { encoding: 'utf8' });
+check('a missing log fails', r.status === 1 && r.stdout.includes('does not exist'), r);
+
+r = runRaw([{ host: '10.255.255.1', port: 8000 }], ['--expect', '10.255.255.1:8000']);
+check('an --expect destination is allowed', r.status === 0, r);
 
 console.log('PASS egress-verdict');
