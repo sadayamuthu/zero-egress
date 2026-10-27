@@ -2,7 +2,6 @@
 
 [![CI](https://github.com/sadayamuthu/zero-egress/actions/workflows/ci.yml/badge.svg)](https://github.com/sadayamuthu/zero-egress/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/sadayamuthu/zero-egress?sort=semver)](https://github.com/sadayamuthu/zero-egress/releases/latest)
-[![Homebrew](https://img.shields.io/badge/brew-sadayamuthu%2Ftap%2Fzero--egress-FBB040?logo=homebrew&logoColor=white)](https://github.com/sadayamuthu/homebrew-tap)
 [![License](https://img.shields.io/github/license/sadayamuthu/zero-egress)](LICENSE.txt)
 
 An AI code editor that works offline. ZeroEgress has chat, an agent mode,
@@ -42,11 +41,8 @@ Download from the
 [latest release](https://github.com/sadayamuthu/zero-egress/releases/latest).
 `<v>` below is the version number, for example `0.1.0`.
 
-**Homebrew** (macOS):
-
-```sh
-brew install --cask sadayamuthu/tap/zero-egress
-```
+**Homebrew** (macOS): coming soon. The `sadayamuthu/tap` cask does not exist
+yet; use the `.dmg` below.
 
 **macOS** (`.dmg`): `ZeroEgress-<v>-arm64.dmg` for Apple silicon,
 `ZeroEgress-<v>-x64.dmg` for Intel. Open it and drag ZeroEgress to
@@ -61,6 +57,11 @@ your account only and needs no administrator rights;
 ```sh
 sudo apt install ./zero-egress_<v>_amd64.deb
 ```
+
+Do not install the **0.1.0** `.deb`: it registers Microsoft's apt repository
+(see [the advisory](docs/release/v0.1.0-deb-advisory.md) for what it did and
+how to clean up). On Debian and Ubuntu, use the AppImage or the `.tar.gz`
+from 0.1.0 until a later release ships a fixed `.deb`.
 
 **Fedora / RHEL** (`.rpm`, x86_64):
 
