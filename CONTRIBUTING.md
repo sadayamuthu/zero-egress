@@ -26,7 +26,7 @@ change, and anything the guard can't cover is written down in
 - **Close a known limit.** [EGRESS.md](EGRESS.md#known-limits) lists what
   the guard can't see yet. Each one closed needs a test that fails before
   the change.
-- **Try it with your model server** (Ollama, vLLM or LM Studio, on your
+- **Try it with your model server** (Ollama, vLLM, LM Studio or oMLX, on your
   laptop or your network) and open an issue for what breaks.
 
 For anything larger than a small fix, open an issue first so we can agree on

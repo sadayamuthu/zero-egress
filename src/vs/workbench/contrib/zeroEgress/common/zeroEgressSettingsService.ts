@@ -151,7 +151,12 @@ const _validatedModelState = (state: Omit<ZeroEgressSettingsState, '_modelOption
 	for (const providerName of providerNames) {
 		const settingsAtProvider = newSettingsOfProvider[providerName]
 
-		const didFillInProviderSettings = Object.keys(defaultProviderSettings[providerName]).every(key => !!settingsAtProvider[key as keyof typeof settingsAtProvider])
+		// Settings whose default is '' (e.g. optional apiKey) do not block "filled in".
+		const defaultsForProvider = defaultProviderSettings[providerName] as Record<string, string>
+		const didFillInProviderSettings = Object.keys(defaultsForProvider).every(key => {
+			if (defaultsForProvider[key] === '') return true
+			return !!settingsAtProvider[key as keyof typeof settingsAtProvider]
+		})
 
 		if (didFillInProviderSettings === settingsAtProvider._didFillInProviderSettings) continue
 
