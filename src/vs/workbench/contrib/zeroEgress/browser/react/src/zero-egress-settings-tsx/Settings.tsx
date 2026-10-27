@@ -625,6 +625,8 @@ const ProviderSetting = ({ providerName, settingName, subTextMd }: { providerNam
 		zeroEgressSettingsService.setSettingOfProvider(providerName, settingName, newVal)
 	}, [zeroEgressSettingsService, providerName, settingName]);
 
+	const warning = settingName === 'endpoint' ? endpointWarning(settingValue) : undefined
+
 	return <ErrorBoundary>
 		<div className='my-1'>
 			<ZeroEgressSimpleInputBox
@@ -634,7 +636,7 @@ const ProviderSetting = ({ providerName, settingName, subTextMd }: { providerNam
 				passwordBlur={isPasswordField}
 				compact={true}
 			/>
-			{settingName === 'endpoint' && endpointWarning(settingValue) ? <WarningBox className='py-1 px-3' text={endpointWarning(settingValue)!} /> : null}
+			{warning ? <WarningBox className='py-1 px-3' text={warning} /> : null}
 			{!subTextMd ? null : <div className='py-1 px-3 opacity-50 text-sm'>
 				{subTextMd}
 			</div>}
@@ -928,6 +930,9 @@ const MCPServerComponent = ({ name, server }: { name: string, server: MCPServer 
 
 	const removeUniquePrefix = (name: string) => name.split('_').slice(1).join('_')
 
+	// A URL server's `command` is its URL: warn as for a model endpoint when it is on the internet.
+	const warning = server.command ? endpointWarning(server.command) : undefined
+
 	return (
 		<div className="border border-ze-border-2 bg-ze-bg-1 py-3 px-4 rounded-sm my-2">
 			<div className="flex items-center justify-between">
@@ -986,6 +991,12 @@ const MCPServerComponent = ({ name, server }: { name: string, server: MCPServer 
 					<div className="px-2 py-1 bg-ze-bg-2 text-xs font-mono overflow-x-auto whitespace-nowrap text-ze-fg-2 rounded-sm">
 						{server.command}
 					</div>
+				</div>
+			)}
+
+			{warning && (
+				<div className="mt-3">
+					<WarningBox text={warning} />
 				</div>
 			)}
 
