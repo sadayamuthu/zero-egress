@@ -133,14 +133,14 @@ import { LLMMessageChannel } from '../../workbench/contrib/zeroEgress/electron-m
 import { AuditMainService, IAuditMainService, createDisabledAuditService } from '../../workbench/contrib/zeroEgress/electron-main/audit/auditMainService.js';
 import { LocalAuditStore } from '../../workbench/contrib/zeroEgress/electron-main/audit/localAuditStore.js';
 import { HttpAuditForwarder } from '../../workbench/contrib/zeroEgress/electron-main/audit/auditForwarder.js';
-import '../../workbench/contrib/zeroEgress/common/zeroEgressConfiguration.js';
+import { AUDIT_COLLECTOR_URL_SETTING, AUDIT_ENABLED_SETTING } from '../../workbench/contrib/zeroEgress/common/zeroEgressConfiguration.js';
 import { resolveAuditConfig } from '../../workbench/contrib/zeroEgress/electron-main/audit/auditConfig.js';
 import { ZeroEgressSCMService } from '../../workbench/contrib/zeroEgress/electron-main/zeroEgressSCMMainService.js';
 import { IZeroEgressSCMService } from '../../workbench/contrib/zeroEgress/common/zeroEgressSCMTypes.js';
 import { MCPChannel } from '../../workbench/contrib/zeroEgress/electron-main/mcpChannel.js';
 import { EgressGuard, EgressGuardChannel } from '../../workbench/contrib/zeroEgress/electron-main/egressGuard.js';
 import { EGRESS_GUARD_CHANNEL } from '../../workbench/contrib/zeroEgress/common/egressGuardService.js';
-import { describeDestination } from '../../workbench/contrib/zeroEgress/common/egressPolicy.js';
+import { describeDestination, endpointWarning, targetFromUrl } from '../../workbench/contrib/zeroEgress/common/egressPolicy.js';
 /**
  * The main VS Code application. There will only ever be one instance,
  * even if the user starts many instances (e.g. from the command line).
@@ -1279,15 +1279,24 @@ export class CodeApplication extends Disposable {
 		// Build the real audit pipeline asynchronously and hot-swap it in when ready.
 		void (async () => {
 			try {
-				const userEnabled = this.configurationService.getValue<unknown>('zeroEgress.audit.enabled');
-				const userCollectorUrl = this.configurationService.getValue<unknown>('zeroEgress.audit.collectorUrl');
+				const userEnabled = this.configurationService.getValue<unknown>(AUDIT_ENABLED_SETTING);
+				// The user's own value, so an explicit blank clears a collector product.json sets (the setting's default is '' too).
+				const userCollectorUrl = this.configurationService.inspect<unknown>(AUDIT_COLLECTOR_URL_SETTING).userValue;
 				const auditConfig = resolveAuditConfig({
 					product: (this.productService as any).auditPipeline,
 					user: {
 						...(typeof userEnabled === 'boolean' ? { enabled: userEnabled } : {}),
-						...(typeof userCollectorUrl === 'string' && userCollectorUrl.trim() ? { endpointUrl: userCollectorUrl.trim() } : {}),
+						...(typeof userCollectorUrl === 'string' ? { endpointUrl: userCollectorUrl.trim() } : {}),
 					},
 				});
+				if (auditConfig.enabled && auditConfig.endpointUrl) {
+					if (!targetFromUrl(auditConfig.endpointUrl)) {
+						this.logService.error(`[ZeroEgress] ${AUDIT_COLLECTOR_URL_SETTING} is not an http(s) URL with a host; audit records stay local and are not sent.`);
+						auditConfig.endpointUrl = '';
+					} else if (endpointWarning(auditConfig.endpointUrl)) {
+						this.logService.warn(`[ZeroEgress] the audit collector ${describeDestination(auditConfig.endpointUrl)} is on the internet; audit records sent to it will leave your network.`);
+					}
+				}
 				this.egressGuard.setTargets('audit', auditConfig.enabled && auditConfig.endpointUrl ? [auditConfig.endpointUrl] : []);
 				const auditDbPath = join(this.environmentMainService.userDataPath, 'zero-egress-audit.vscdb');
 				const auditStore = await LocalAuditStore.create(auditDbPath);
