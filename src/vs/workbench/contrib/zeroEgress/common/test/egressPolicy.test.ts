@@ -109,6 +109,17 @@ suite('egressPolicy', () => {
 		}
 	});
 
+	test('a DNS query is allowed for loopback names and configured hosts, any port', () => {
+		const targets = collectEgressTargets({ providerEndpoints: ['http://GPUBOX.lan:8000', 'http://10.0.0.5:11434'], mcpServerUrls: [], auditCollectorUrl: undefined });
+		for (const name of ['localhost', 'foo.localhost', '127.0.0.1', '[::1]', 'gpubox.lan', 'GPUBOX.LAN.', '10.0.0.5']) {
+			assert.strictEqual(isAllowed(`dns://${name}/`, targets), true, name);
+		}
+		for (const url of ['dns://example.com/', 'dns://gpubox.lan.example.com/', 'dns://10.0.0.6/', 'dns://gpubox.lan:8000/', 'dns://user@gpubox.lan/', 'dns:///', 'dns:gpubox.lan', 'dns://a%20b/']) {
+			assert.strictEqual(isAllowed(url, targets), false, url);
+		}
+		assert.strictEqual(describeDestination('dns://exfil.example.com/'), 'dns://exfil.example.com');
+	});
+
 	test('describeDestination names host:port, or the scheme for non-network URLs', () => {
 		assert.strictEqual(describeDestination('https://api.github.com/x?token=secret'), 'api.github.com:443');
 		assert.strictEqual(describeDestination('http://[::1]:8000/'), '[::1]:8000');

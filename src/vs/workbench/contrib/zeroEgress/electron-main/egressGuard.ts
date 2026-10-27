@@ -137,6 +137,8 @@ export class EgressGuard extends Disposable {
 			http: require('http'),
 			https: require('https'),
 			net: require('net'),
+			dgram: require('dgram'),
+			dns: require('dns'),
 		});
 	}
 }

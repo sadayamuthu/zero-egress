@@ -28,6 +28,8 @@ const http = require('http');
 const https = require('https');
 const tls: typeof tlsType = require('tls');
 const net = require('net');
+const dgram = require('dgram');
+const dns = require('dns');
 
 const systemCertificatesV2Default = false;
 const useElectronFetchDefault = false;
@@ -104,13 +106,13 @@ export async function connectProxyResolver(
 
 	const lookup = createPatchedModules(params, resolveProxyWithRequest);
 
-	// ZeroEgress: enforce on top of the proxy patches, before any extension can load http/https/net/tls.
+	// ZeroEgress: enforce on top of the proxy patches, before any extension can load http/https/net/tls/dgram/dns.
 	// The module objects are the ones handed to extensions (see configureModuleLoading), so they get the guard too;
 	// net.Socket.prototype.connect is the choke point under proxy-agent's own agents and sockets.
 	const egressGuard = new ExtHostEgressGuard(extHostRpc.getProxy(MainContext.MainThreadEgressGuard), extHostLogService);
 	extHostRpc.set(ExtHostEgressGuardContext, egressGuard);
 	await egressGuard.init();
-	disposables.add(installEgressNodeHooks(egressGuard.check, { global: globalThis, http, https, net, electronNet: loadElectronNet(extHostLogService) }));
+	disposables.add(installEgressNodeHooks(egressGuard.check, { global: globalThis, http, https, net, dgram, dns, electronNet: loadElectronNet(extHostLogService) }));
 
 	return configureModuleLoading(extensionService, lookup);
 }

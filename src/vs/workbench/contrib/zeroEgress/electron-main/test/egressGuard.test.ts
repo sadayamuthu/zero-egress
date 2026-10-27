@@ -8,6 +8,8 @@ import * as http from 'http';
 import * as https from 'https';
 import * as net from 'net';
 import * as tls from 'tls';
+import * as dgram from 'dgram';
+import * as dns from 'dns';
 import { Event } from '../../../../../base/common/event.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { BlockedAttempt } from '../../common/egressGuardService.js';
@@ -164,6 +166,24 @@ suite('EgressGuard', () => {
 		} finally {
 			globalThis.fetch = realFetch;
 		}
+	});
+
+	test('main-process node hooks police UDP and DNS', async () => {
+		const guard = createGuard();
+		const originals = [dgram.Socket.prototype.send, dgram.Socket.prototype.connect, dns.lookup, dns.promises.resolve4];
+		const hooks = guard.installNodeHooks();
+		const sock = dgram.createSocket('udp4');
+		try {
+			assert.ok([dgram.Socket.prototype.send, dgram.Socket.prototype.connect, dns.lookup, dns.promises.resolve4].every((f, i) => f !== originals[i]), 'every function is wrapped');
+			const err = await new Promise<Error | null>(r => sock.send('x', 53, '8.8.8.8', e => r(e)));
+			assert.strictEqual(err?.message, blockedMessage('8.8.8.8:53'));
+			await assert.rejects(dns.promises.resolve4('exfil.example.com'), (e: Error) => e.message === blockedMessage('dns://exfil.example.com'));
+			assert.deepStrictEqual(guard.recentBlocked.map(b => b.url), ['http://8.8.8.8:53/', 'dns://exfil.example.com/']);
+		} finally {
+			sock.close();
+			hooks.dispose();
+		}
+		assert.deepStrictEqual([dgram.Socket.prototype.send, dgram.Socket.prototype.connect, dns.lookup, dns.promises.resolve4], originals);
 	});
 
 	test('node hooks let loopback sockets through', async () => {

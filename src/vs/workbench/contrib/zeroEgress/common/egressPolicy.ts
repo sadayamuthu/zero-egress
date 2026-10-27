@@ -113,7 +113,27 @@ export function isPrivateHost(host: string): boolean {
 	return !h.includes('.') || ['.local', '.lan', '.internal', '.home.arpa'].some(s => h.endsWith(s));
 }
 
+/**
+ * The name a DNS query is for, normalized like a URL host. The Node hooks describe a name lookup (dns.lookup,
+ * dns.resolve*, ...) as `dns://<name>/`. Undefined for any other URL.
+ */
+function dnsQueryHost(url: string): string | undefined {
+	let u: URL;
+	try { u = new URL(url); } catch { return undefined; }
+	if (u.protocol !== 'dns:' || !u.hostname || u.port || u.username || u.password) { return undefined; }
+	return targetFromUrl(`http://${u.hostname}/`)?.host;
+}
+
+/**
+ * A URL is allowed when it is loopback, matches a configured host and port exactly, or never leaves the
+ * machine. A DNS query (`dns://<name>/`) is allowed for loopback names and for the host of any configured
+ * target, whatever its port: that is the lookup a connection to it needs.
+ */
 export function isAllowed(url: string, targets: readonly EgressTarget[]): boolean {
+	if (url.startsWith('dns:')) {
+		const q = dnsQueryHost(url);
+		return q !== undefined && (isLoopbackHost(q) || targets.some(x => x.host === q));
+	}
 	const t = targetFromUrl(url);
 	if (!t) { return isExplicitNonNetwork(url); }
 	if (isLoopbackHost(t.host)) { return true; }

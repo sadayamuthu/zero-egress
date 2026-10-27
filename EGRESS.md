@@ -45,9 +45,17 @@ Where it is enforced:
 | Process | How |
 |---------|-----|
 | Renderer and webviews | Electron `session.webRequest`, which also covers Electron `net` in the main process |
-| Main | Node `fetch`, `http`/`https` requests and `Socket#connect` |
+| Main | Node `fetch`, `http`/`https` requests, `Socket#connect`, UDP (`dgram` send and connect) and DNS (`dns` lookups and queries) |
 | Extension host | The same Node hooks, layered over VS Code's proxy agent, plus Electron `net.request` and `net.fetch`. The allow-list is pushed to it over the extension host's RPC; until the first list arrives only loopback is allowed |
 | Shared process | The same Node hooks and Electron `net`, loopback only |
+
+UDP is checked like TCP: a datagram is sent, or a UDP socket connected,
+only to loopback or a configured `host:port`. A DNS lookup or query
+(`dns.lookup`, `dns.resolve*`, `dns.reverse`, `dns.lookupService`, the
+promise versions and `dns.Resolver` instances) is allowed only for a
+loopback name or the host of a configured server, so a name can't carry
+data out in a query. A refused one fails with `ENOTFOUND` and is logged as
+`dns://<name>`.
 
 The guard checks the destination at the socket as well as at the request,
 so a request is judged by where it actually dials. Every redirect hop of
@@ -169,7 +177,15 @@ control that doesn't depend on the editor.
   check. Its sockets still go through `Socket#connect`, which is checked.
 - **Chromium-internal traffic** that doesn't pass through
   `session.webRequest` (for example spellchecker dictionary or component
-  downloads) is not covered.
+  downloads, Chromium's own DNS resolver, and WebRTC's UDP in a renderer or
+  webview) is not covered. The Node `dgram` and `dns` hooks don't see it.
+- **A UDP socket's custom `lookup`.** A `dgram` socket created with its own
+  `lookup` function resolves addresses itself, so the address checked at
+  `send` may not be the one it reaches. Ordinary code uses the default,
+  guarded `dns.lookup`.
+- **Multicast group membership.** `addMembership` makes the OS send an
+  IGMP or MLD report to the local network. It carries no data, and the
+  guard does not block it; sends to the group are checked like any other.
 - **The web-worker extension host** is covered only by `session.webRequest`
   (its blocks are labelled `renderer`).
 - **Configured hostnames are trusted to resolve wherever DNS sends them.**

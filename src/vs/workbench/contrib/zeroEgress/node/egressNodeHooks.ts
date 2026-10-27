@@ -17,6 +17,10 @@
 // log line) before any socket exists; a blocked request is built as a bare ClientRequest that never dials,
 // so proxy-agent's patched request (which may attach its own agent) is never involved.
 // Optionally also wraps Electron's `net.request` / `net.fetch` (used by the shared process).
+// Optionally also polices UDP (dgram Socket#send / Socket#connect, same host:port policy as TCP) and DNS: every
+// dns lookup/resolve/reverse call, module-level, promise-based and on Resolver instances, is checked as
+// `dns://<name>/`, which the policy allows only for loopback names and configured hosts. Node's own net.connect
+// looks a hostname up through dns.lookup, so an allowed connection's lookup is an allowed query.
 // Pass the CommonJS module objects (require('http'), ...); patches are mirrored to ESM namespace imports.
 //
 // Time-of-check/time-of-use: a caller's object is read exactly once (snapshotOptions / fetchInput), every
@@ -25,6 +29,7 @@
 
 import type * as httpType from 'http';
 import type * as netType from 'net';
+import type * as dgramType from 'dgram';
 import * as dns from 'dns';
 import * as nodeUrl from 'url';
 import { isIP } from 'net';
@@ -40,6 +45,10 @@ export interface EgressHookTargets {
 	readonly net: typeof netType;
 	/** Electron's `net` module, where its requests do not go through a session's webRequest filter. */
 	readonly electronNet?: { request: Function; fetch?: Function };
+	/** UDP: Socket#send and Socket#connect are checked like a TCP destination. */
+	readonly dgram?: typeof dgramType;
+	/** Name lookups and DNS queries (callback and promise APIs, module functions and Resolver). */
+	readonly dns?: typeof dns;
 }
 
 export function egressBlockedError(url: string): Error {
@@ -457,11 +466,105 @@ export function installEgressNodeHooks(check: (url: string) => boolean, t: Egres
 		});
 	}
 
+	if (t.dgram) { patchDgram(t.dgram, check, patch); }
+	if (t.dns) { patchDns(t.dns, check, patch); }
+
 	syncBuiltinESMExports();
 	return toDisposable(() => {
 		while (restore.length) { restore.pop()!(); }
 		syncBuiltinESMExports();
 	});
+}
+
+type Patch = <O extends object, K extends keyof O>(obj: O, key: K, wrap: (original: O[K]) => O[K]) => void;
+
+/** Fails a dgram call the way Node fails it asynchronously: through the callback if there is one, else 'error'. */
+function failDgram(socket: dgramType.Socket, err: Error, callback: unknown): void {
+	process.nextTick(() => typeof callback === 'function' ? callback(err) : socket.emit('error', err));
+}
+
+function isConnected(socket: dgramType.Socket): boolean {
+	try {
+		socket.remoteAddress();
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * UDP. A send on an unconnected socket and a connect name a destination; both are checked as `host:port`
+ * (an omitted address is Node's loopback default). A connected socket's sends go where its checked connect
+ * went. Node accepts only a number or string port and a string address, so nothing can answer differently later.
+ */
+function patchDgram(dgram: typeof dgramType, check: (url: string) => boolean, patch: Patch): void {
+	patch(dgram.Socket.prototype, 'send', original => function (this: dgramType.Socket, ...args: unknown[]) {
+		if (!isConnected(this)) {
+			// Node's argument shuffle: send(msg, offset, length, port, address, cb) or send(msg, port, address, cb)
+			let [port, address, callback] = args[4] || (args[3] && typeof args[3] !== 'function') ? [args[3], args[4], args[5]] : [args[1], args[2], args[3]];
+			if (typeof address === 'function') { callback = address; address = undefined; }
+			const url = destinationUrl(address, port);
+			if (!check(url)) { return failDgram(this, egressBlockedError(url), callback); }
+		}
+		return (original as Function).apply(this, args);
+	} as typeof original);
+	patch(dgram.Socket.prototype, 'connect', original => function (this: dgramType.Socket, ...args: unknown[]) {
+		const [port, address, callback] = typeof args[1] === 'function' ? [args[0], undefined, args[1]] : args;
+		const url = destinationUrl(address, port);
+		if (!check(url)) { return failDgram(this, egressBlockedError(url), callback); }
+		return (original as Function).apply(this, args);
+	} as typeof original);
+}
+
+/** The callback-style dns functions and Resolver methods that send a query (or read the hosts file) for a name. */
+const DNS_QUERY_METHODS = ['lookup', 'lookupService', 'resolve', 'resolve4', 'resolve6', 'resolveAny', 'resolveCaa', 'resolveCname', 'resolveMx', 'resolveNaptr', 'resolveNs', 'resolvePtr', 'resolveSoa', 'resolveSrv', 'resolveTxt', 'reverse'] as const;
+
+function dnsQueryUrl(name: unknown): string {
+	if (typeof name !== 'string') { return 'invalid-host://non-string'; }
+	if (!name || URL_CONFUSING_HOST.test(name) || /[[\]]/.test(name)) { return `invalid-host://${encodeURIComponent(name)}`; }
+	return `dns://${bracket(name)}/`;
+}
+
+/**
+ * DNS. A query carries its name to whichever resolver the OS (or a Resolver's setServers) uses, so a name is
+ * data leaving the machine even when no connection follows. Every query function is checked before it runs:
+ * the dns module's own functions (bound to the default resolver, so patching the prototype does not reach them),
+ * dns.Resolver.prototype, and the same for dns.promises. A refused query fails as Node fails a lookup, with
+ * the error passed to the callback or the promise rejected; it is never sent. The name is a primitive string
+ * (Node rejects anything else), so it cannot answer differently later.
+ */
+function patchDns(dns: typeof import('dns'), check: (url: string) => boolean, patch: Patch): void {
+	// lookup() of an IP literal answers locally (getaddrinfo with a numeric host; dgram's bind and send call it
+	// for every address), so it is not a query. resolve*() and reverse() of an IP do send one.
+	const guardCallback = (obj: any) => {
+		for (const key of DNS_QUERY_METHODS) {
+			if (typeof obj[key] !== 'function') { continue; }
+			patch(obj, key, (original: Function) => function (this: unknown, name: unknown, ...rest: unknown[]) {
+				const url = dnsQueryUrl(name);
+				if (typeof name !== 'string' || (key === 'lookup' && isIP(name) !== 0) || check(url)) { return original.call(this, name, ...rest); }
+				const callback = rest[rest.length - 1];
+				const err = Object.assign(egressBlockedError(url), { code: 'ENOTFOUND', hostname: name });
+				if (typeof callback === 'function') { process.nextTick(callback, err); return undefined; }
+				throw err;
+			});
+		}
+	};
+	const guardPromise = (obj: any) => {
+		for (const key of DNS_QUERY_METHODS) {
+			if (typeof obj[key] !== 'function') { continue; }
+			patch(obj, key, (original: Function) => function (this: unknown, name: unknown, ...rest: unknown[]) {
+				const url = dnsQueryUrl(name);
+				if (typeof name !== 'string' || (key === 'lookup' && isIP(name) !== 0) || check(url)) { return original.call(this, name, ...rest); }
+				return Promise.reject(Object.assign(egressBlockedError(url), { code: 'ENOTFOUND', hostname: name }));
+			});
+		}
+	};
+	guardCallback(dns);
+	guardCallback(dns.Resolver.prototype);
+	if (dns.promises) {
+		guardPromise(dns.promises);
+		guardPromise(dns.promises.Resolver.prototype);
+	}
 }
 
 /**
@@ -475,5 +578,5 @@ export function installLoopbackOnlyEgressHooks(onBlocked: (url: string) => void,
 		onBlocked(url);
 		return false;
 	};
-	return installEgressNodeHooks(check, { global: globalThis, http: require('http'), https: require('https'), net: require('net'), electronNet });
+	return installEgressNodeHooks(check, { global: globalThis, http: require('http'), https: require('https'), net: require('net'), dgram: require('dgram'), dns: require('dns'), electronNet });
 }
