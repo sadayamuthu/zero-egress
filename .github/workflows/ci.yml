@@ -22,6 +22,8 @@ jobs:
       PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       # The gates and their own tests need no dependencies, so they run first.
       - name: Brand gate tests
@@ -55,14 +57,7 @@ jobs:
       # VS Code's postinstall deletes the @parcel/watcher prebuilds, which
       # test-node needs. Restore the one the lockfile pins (see CONTRIBUTING.md).
       - name: Restore @parcel/watcher prebuild
-        run: |
-          set -e
-          v=$(node -p "require('./node_modules/@parcel/watcher/package.json').version")
-          pkg=@parcel/watcher-linux-x64-glibc
-          cd "$RUNNER_TEMP"
-          npm pack "$pkg@$v"
-          mkdir -p "$GITHUB_WORKSPACE/node_modules/$pkg"
-          tar -xzf parcel-watcher-linux-x64-glibc-$v.tgz --strip-components=1 -C "$GITHUB_WORKSPACE/node_modules/$pkg"
+        run: bash build/zero-egress/restore-parcel-watcher.sh linux-x64-glibc
       - name: Build the ZeroEgress UI
         run: npm run buildreact
       # The default 2 GB V8 heap is too small for the full compile.
