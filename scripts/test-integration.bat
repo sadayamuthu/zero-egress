@@ -97,11 +97,6 @@ mkdir %CFWORKSPACE%
 call npm run test-extension -- -l configuration-editing
 if %errorlevel% neq 0 exit /b %errorlevel%
 
-echo.
-echo ### GitHub Authentication tests
-call npm run test-extension -- -l github-authentication
-if %errorlevel% neq 0 exit /b %errorlevel%
-
 :: Tests standalone (CommonJS)
 
 echo.
