@@ -1,0 +1,42 @@
+ZeroEgress v0.1.0 runtime egress test (Task 16 Method B), run 2026-10-26 (local time, UTC-4)
+Build: published ZeroEgress-0.1.0-arm64-unsigned.dmg, sha256 64b7eff08e1d5c9a73d9a701c214a14cd434341664328d0ed3486a45b550605e (matches SHA256SUMS)
+product.json: zeroEgressVersion 0.1.0, commit 2cd4bae5e506f4820dfdc62dabbde5182104b8a0. The app ran from a scratch copy of the mounted dmg, not /Applications.
+Host: macOS arm64. The LAN address of the test machine is written as <lan-ip>.
+
+== Setup
+node scripts/zero-egress/egress-proxy.mjs --log egress.jsonl --port 18080
+HTTPS_PROXY=HTTP_PROXY=ALL_PROXY=http://127.0.0.1:18080  NO_PROXY=127.0.0.1,localhost
+Fresh HOME, --user-data-dir and --extensions-dir; --use-mock-keychain (the fresh HOME has no login keychain); --remote-debugging-port for CDP driving.
+Loopback model servers: Ollama 127.0.0.1:11434 (real), mock vLLM 127.0.0.1:8000, mock LM Studio 127.0.0.1:1234.
+Extra independent check: a watcher ran 'lsof -nP -i' every 0.5 s over every process of the session and logged each non-loopback socket.
+
+== Scripted session (driven over CDP)
+1. Start: launched 20:31:57, workbench page ready 20:32:01 (this was a first launch: fresh profile and HOME).
+2. Chat sidebar open: true
+3. Local Providers lists: Ollama, vLLM, LM Studio (nothing else)
+4. Extensions view, search 'python': 'EXTENSIONS: MARKETPLACE | python | No extensions found.'
+5. Local .vsix install (bundled CLI, same env): Extension 't20-hello.vsix' was successfully installed. The extension activated.
+6. vLLM endpoint set to http://10.255.255.1:8000; one message sent with vLLM/mock-chat. 10.255.255.1 does not route, so the request stayed pending (expected).
+7. Renderer: fetch('https://10.255.255.2:1234/') -> rejected: Failed to fetch
+8. Quit (SIGTERM to the main process): quit cleanly in 1s
+
+== Proxy log (egress.jsonl)
+(empty: no request reached the proxy)
+
+== Verdict: node scripts/zero-egress/egress-verdict.mjs egress.jsonl --allow 10.255.255.1:8000
+EGRESS TEST PASSED
+(exit 0)
+
+== Output channel 'ZeroEgress: Network' (whole session)
+2026-10-27T00:34:10.946Z blocked 10.255.255.2:1234 (caller: renderer)
+
+== Main log, guard lines (whole session)
+2026-10-26 20:34:10.946 [warning] [ZeroEgress] blocked connection to 10.255.255.2:1234 from renderer
+
+== Socket watcher: distinct non-loopback sockets seen (count of samples)
+  69 <lan-ip>:64305->10.255.255.1:8000 (SYN_SENT)
+  63 <lan-ip>:64306->10.255.255.1:8000 (SYN_SENT)
+(only the configured vLLM endpoint 10.255.255.1:8000, pending SYN_SENT; first seen 20:33:52.427, last seen 20:34:32.146)
+
+Result: EGRESS TEST PASSED. The only outbound attempt was the configured vLLM server. The one unconfigured attempt (step 7) was blocked by the in-app guard and logged.
+Limits: this is Method B (proxy) plus an lsof socket watcher, not an OS firewall (Method A). The app is the unsigned v0.1.0 build, because no signed build exists yet.
