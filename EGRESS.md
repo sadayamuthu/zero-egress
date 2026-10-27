@@ -226,20 +226,30 @@ proxy logs `{host, port, time}` for each attempt and forwards nothing:
 
 ```sh
 node scripts/zero-egress/egress-proxy.mjs --log egress.jsonl --port 18080 &
-export HTTPS_PROXY=http://127.0.0.1:18080 HTTP_PROXY=http://127.0.0.1:18080 ALL_PROXY=http://127.0.0.1:18080
-export NO_PROXY=127.0.0.1,localhost
-# start the app with a fresh --user-data-dir and --extensions-dir, run the session, quit
-node scripts/zero-egress/egress-verdict.mjs egress.jsonl --allow 10.255.255.1:8000
+# Do not export HTTP(S)_PROXY / NO_PROXY: each window would replace the --proxy-server rules below
+# with them and bypass loopback, so the positive control would never reach the proxy. The extension
+# host resolves its proxy through the same Chromium session.
+# start the app with a fresh --user-data-dir and --extensions-dir, plus
+#   --proxy-server=http://127.0.0.1:18080 --proxy-bypass-list='<-loopback>'
+# run the session, including the positive control fetch('https://127.0.0.1:19999/'), quit
+node scripts/zero-egress/egress-verdict.mjs egress.jsonl --expect 127.0.0.1:19999 --allow 10.255.255.1:8000
 ```
 
 Expected output:
 
 ```
-EGRESS TEST PASSED
+EGRESS TEST PASSED (1 logged attempts, positive control seen: 127.0.0.1:19999)
 ```
 
 with exit code 0. A failing run lists each offending `host:port` and exits
-1. A proxy only sees clients that honor proxy settings, so block direct
+1. The positive control is a loopback request the session makes on purpose
+through the proxy: the verdict fails if it is missing, or if the log is
+empty or absent, so an app that ignored the proxy, or a proxy that never
+started, can't pass. Each release build also runs this check
+automatically: the release workflow's smoke jobs start the packaged app on
+Linux (under `xvfb`), macOS and Windows behind the logging proxy, check
+that the workbench comes up, that an unconfigured address is blocked and
+logged, and run the verdict. A proxy only sees clients that honor proxy settings, so block direct
 egress at the firewall as well when you can.
 
 Keep the proxy log, the verdict and the firewall log with the build you

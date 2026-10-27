@@ -7,8 +7,8 @@ import { tmpdir } from 'node:os';
 const here = dirname(fileURLToPath(import.meta.url));
 const verdict = join(here, '..', 'egress-verdict.mjs');
 const dir = mkdtempSync(join(tmpdir(), 'egress-verdict-'));
-const CONTROL = { host: '127.0.0.1', port: 9 };
-const EXPECT = ['--expect', '127.0.0.1:9'];
+const CONTROL = { host: '127.0.0.1', port: 19999 };
+const EXPECT = ['--expect', '127.0.0.1:19999'];
 
 /** Runs the verdict on a log of `lines` plus the positive control, with --expect for it. */
 function run(lines, args = []) {
@@ -54,7 +54,7 @@ r = runRaw([{ host: '127.0.0.1', port: 11434 }]);
 check('a clean log without --expect fails', r.status === 1 && r.stdout.includes('no --expect'), r);
 
 r = runRaw([{ host: '127.0.0.1', port: 11434 }], EXPECT);
-check('a log that lacks the positive control fails', r.status === 1 && r.stdout.includes('positive control 127.0.0.1:9 never appeared'), r);
+check('a log that lacks the positive control fails', r.status === 1 && r.stdout.includes('positive control 127.0.0.1:19999 never appeared'), r);
 
 r = spawnSync(process.execPath, [verdict, join(dir, 'missing.jsonl'), ...EXPECT], { encoding: 'utf8' });
 check('a missing log fails', r.status === 1 && r.stdout.includes('does not exist'), r);

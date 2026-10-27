@@ -6,6 +6,10 @@ name: Release
 # zeroEgressVersion. A tag with a "-" (v0.2.0-rc.1) is published as a
 # prerelease and does not touch the cask.
 #
+# Before anything is published, smoke jobs install each package (silent Inno
+# Setup on Windows, apt for the .deb), launch it behind a logging proxy and
+# check the workbench, the guard and the egress verdict (smoke.mjs).
+#
 # Run it manually (Actions -> Release -> Run workflow) to build the installers
 # and upload them as workflow artifacts (kept 7 days) without publishing
 # anything, even when run on a tag ref. The "platforms" input limits a manual
@@ -336,11 +340,165 @@ jobs:
           retention-days: 7
           compression-level: 0
 
+  # Smoke: install (where there is an installer), launch the packaged app with a
+  # fresh profile behind the logging proxy, and check over CDP that the
+  # workbench renders, that an unconfigured address is refused and logged by
+  # the guard, and that only loopback reached the proxy, positive control
+  # included (scripts/zero-egress/smoke.mjs). Node 22 for its global WebSocket.
+  smoke-mac:
+    needs: [test, build-mac]
+    if: needs.test.outputs.mac != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.test.outputs.mac) }}
+    name: smoke-mac (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v4
+        with:
+          name: mac-${{ matrix.arch }}
+          path: dist
+      - name: Copy the app out of the dmg
+        run: |
+          set -euo pipefail
+          dmg="$(ls dist/*.dmg)"
+          mnt="$(mktemp -d)"
+          hdiutil attach -nobrowse -readonly -mountpoint "$mnt" "$dmg"
+          cp -R "$mnt/ZeroEgress.app" "$RUNNER_TEMP/"
+          hdiutil detach "$mnt"
+          file "$RUNNER_TEMP/ZeroEgress.app/Contents/MacOS/ZeroEgress"
+      - name: Launch smoke and egress check
+        run: node scripts/zero-egress/smoke.mjs --app "$RUNNER_TEMP/ZeroEgress.app/Contents/MacOS/ZeroEgress" --out "$RUNNER_TEMP/smoke"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: smoke-mac-${{ matrix.arch }}
+          path: ${{ runner.temp }}/smoke/user-data/logs
+          if-no-files-found: ignore
+          retention-days: 7
+
+  smoke-win:
+    needs: [test, build-win]
+    if: needs.test.outputs.win == 'true'
+    runs-on: windows-2022
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v4
+        with:
+          name: win-x64
+          path: dist
+      # The user installer first (no admin), then the all-users one; each is
+      # installed silently, launched, and uninstalled silently.
+      - name: 'User installer: install, launch, uninstall'
+        run: |
+          set -euo pipefail
+          setup="$(ls dist/ZeroEgress-*-x64-user-setup*.exe)"
+          dir="$LOCALAPPDATA/Programs/ZeroEgress"
+          powershell -NoProfile -Command "\$p = Start-Process -FilePath '$(cygpath -w "$setup")' -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/MERGETASKS=!runcode' -Wait -PassThru; exit \$p.ExitCode"
+          test -f "$dir/ZeroEgress.exe"
+          node scripts/zero-egress/smoke.mjs --app "$dir/ZeroEgress.exe" --out "$RUNNER_TEMP/smoke-user"
+          powershell -NoProfile -Command "\$p = Start-Process -FilePath '$(cygpath -w "$dir/unins000.exe")' -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait -PassThru; exit \$p.ExitCode"
+          for i in $(seq 1 30); do [ -f "$dir/ZeroEgress.exe" ] || break; sleep 2; done
+          if [ -f "$dir/ZeroEgress.exe" ]; then echo "::error::the user uninstaller left ZeroEgress.exe behind"; exit 1; fi
+      - name: 'All-users installer: install, launch, uninstall'
+        run: |
+          set -euo pipefail
+          setup="$(ls dist/ZeroEgress-*-x64-setup*.exe | grep -v user-setup)"
+          dir="$PROGRAMFILES/ZeroEgress"
+          powershell -NoProfile -Command "\$p = Start-Process -FilePath '$(cygpath -w "$setup")' -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/MERGETASKS=!runcode' -Wait -PassThru; exit \$p.ExitCode"
+          test -f "$dir/ZeroEgress.exe"
+          node scripts/zero-egress/smoke.mjs --app "$dir/ZeroEgress.exe" --out "$RUNNER_TEMP/smoke-system"
+          powershell -NoProfile -Command "\$p = Start-Process -FilePath '$(cygpath -w "$dir/unins000.exe")' -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait -PassThru; exit \$p.ExitCode"
+          for i in $(seq 1 30); do [ -f "$dir/ZeroEgress.exe" ] || break; sleep 2; done
+          if [ -f "$dir/ZeroEgress.exe" ]; then echo "::error::the all-users uninstaller left ZeroEgress.exe behind"; exit 1; fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: smoke-win-x64
+          path: |
+            ${{ runner.temp }}/smoke-user/user-data/logs
+            ${{ runner.temp }}/smoke-system/user-data/logs
+          if-no-files-found: ignore
+          retention-days: 7
+
+  # Also installs the .deb with apt and checks what it does to the system: no
+  # apt repository or key added (the 0.1.0 .deb added Microsoft's), and
+  # ZeroEgress package metadata and version in the .deb and the .rpm.
+  smoke-linux:
+    needs: [test, build-linux]
+    if: needs.test.outputs.linux == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-x64
+          path: dist
+      - name: Install the .deb and check its effect and metadata
+        env:
+          V: ${{ needs.test.outputs.version }}
+        run: |
+          set -euo pipefail
+          snapshot() { ls -la /etc/apt/sources.list.d /etc/apt/trusted.gpg.d /usr/share/keyrings 2>/dev/null | grep -v ' \.\.\?$' || true; }
+          snapshot > "$RUNNER_TEMP/apt-before.txt"
+          sudo apt-get update
+          sudo apt-get install -y xvfb rpm "./dist/zero-egress_${V}_amd64.deb"
+          snapshot > "$RUNNER_TEMP/apt-after.txt"
+          diff "$RUNNER_TEMP/apt-before.txt" "$RUNNER_TEMP/apt-after.txt" || { echo "::error::installing the .deb changed apt's sources or keys"; exit 1; }
+          if grep -rqs 'packages.microsoft.com' /etc/apt/sources.list /etc/apt/sources.list.d; then echo "::error::an apt source points at packages.microsoft.com"; exit 1; fi
+          dpkg-query -W -f='${Version}\n${Maintainer}\n${Homepage}\n' zero-egress | tee "$RUNNER_TEMP/deb-fields.txt"
+          case "$(sed -n 1p "$RUNNER_TEMP/deb-fields.txt")" in "1:${V}-"*) ;; *) echo "::error::.deb version is not 1:${V}-<rev>"; exit 1;; esac
+          grep -qx 'ZeroEgress <4604648+sadayamuthu@users.noreply.github.com>' "$RUNNER_TEMP/deb-fields.txt" || { echo "::error::.deb Maintainer is not ZeroEgress"; exit 1; }
+          grep -qx 'https://github.com/sadayamuthu/zero-egress' "$RUNNER_TEMP/deb-fields.txt" || { echo "::error::.deb Homepage is not the repository"; exit 1; }
+          rpm -qp --queryformat '%{EPOCH}:%{VERSION}\n%{VENDOR}\n%{URL}\n' "dist/zero-egress-${V}-1.x86_64.rpm" | tee "$RUNNER_TEMP/rpm-fields.txt"
+          grep -qx "1:${V}" "$RUNNER_TEMP/rpm-fields.txt" || { echo "::error::.rpm version is not 1:${V}"; exit 1; }
+          grep -qx 'ZeroEgress <4604648+sadayamuthu@users.noreply.github.com>' "$RUNNER_TEMP/rpm-fields.txt" || { echo "::error::.rpm Vendor is not ZeroEgress"; exit 1; }
+          grep -qx 'https://github.com/sadayamuthu/zero-egress' "$RUNNER_TEMP/rpm-fields.txt" || { echo "::error::.rpm URL is not the repository"; exit 1; }
+          if grep -rqiE 'microsoft\.com|visualstudio\.com' /usr/share/appdata/zero-egress.appdata.xml /usr/share/applications/zero-egress*.desktop; then echo "::error::installed metadata mentions a Microsoft host"; exit 1; fi
+      - name: Launch smoke and egress check (installed .deb, under xvfb)
+        run: xvfb-run -a node scripts/zero-egress/smoke.mjs --app /usr/share/zero-egress/zero-egress --out "$RUNNER_TEMP/smoke"
+      - name: Remove the .deb
+        run: |
+          set -euo pipefail
+          sudo apt-get remove -y zero-egress
+          ls -la /etc/apt/sources.list.d /etc/apt/trusted.gpg.d /usr/share/keyrings 2>/dev/null | grep -v ' \.\.\?$' > "$RUNNER_TEMP/apt-removed.txt" || true
+          diff "$RUNNER_TEMP/apt-before.txt" "$RUNNER_TEMP/apt-removed.txt" || { echo "::error::removing the .deb changed apt's sources or keys"; exit 1; }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: smoke-linux-x64
+          path: ${{ runner.temp }}/smoke/user-data/logs
+          if-no-files-found: ignore
+          retention-days: 7
+
   # Checks every expected file is present and writes SHA256SUMS, the SBOM and
   # the rendered cask. Runs on manual runs too (when every platform was built)
   # so they are exercised before a tag; it publishes nothing.
   release-files:
-    needs: [test, build-mac, build-win, build-linux]
+    needs: [test, build-mac, build-win, build-linux, smoke-mac, smoke-win, smoke-linux]
     if: needs.test.outputs.all == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20

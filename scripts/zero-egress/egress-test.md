@@ -17,7 +17,11 @@ An unconfigured private IP is blocked, and the block shows in the Output channel
    (Use `https:`; the workbench's content security policy refuses a plain `http:` fetch from the
    page before the guard sees it. Don't use a provider endpoint field for this: an address entered
    there is configured, and so allowed.)
-8. Quit.
+8. Positive control (Method B): in the same Console run `fetch('https://127.0.0.1:19999/')`. It is
+   loopback, so the guard allows it; with the proxy flags below Chromium sends it to the proxy,
+   which logs `127.0.0.1:19999`. The verdict requires that line, so it proves the proxy saw the app.
+   (Use a high port: Chromium refuses "unsafe" ports such as 9 before any proxy sees them.)
+9. Quit.
 
 ## Method A: OS firewall
 Run the session with an outbound-deny firewall that logs blocked attempts for the app's process
@@ -28,14 +32,22 @@ Do not change firewall rules on a machine you do not own; use a VM.
 ## Method B: logging proxy (CI-friendly)
 ```
 node scripts/zero-egress/egress-proxy.mjs --log egress.jsonl --port 18080 &
-export HTTPS_PROXY=http://127.0.0.1:18080 HTTP_PROXY=http://127.0.0.1:18080 ALL_PROXY=http://127.0.0.1:18080
-export NO_PROXY=127.0.0.1,localhost
-./scripts/code.sh --user-data-dir <fresh> --extensions-dir <fresh>
-# ... run the scripted session, quit ...
-node scripts/zero-egress/egress-verdict.mjs egress.jsonl --allow 10.255.255.1:8000
+# Do not export HTTP(S)_PROXY / NO_PROXY: each window would replace the --proxy-server rules below
+# with them and bypass loopback, so the positive control would never reach the proxy. The extension
+# host resolves its proxy through the same Chromium session.
+./scripts/code.sh --user-data-dir <fresh> --extensions-dir <fresh> \
+  --proxy-server=http://127.0.0.1:18080 --proxy-bypass-list='<-loopback>'
+# ... run the scripted session, including the positive control (step 8), quit ...
+node scripts/zero-egress/egress-verdict.mjs egress.jsonl --expect 127.0.0.1:19999 --allow 10.255.255.1:8000
 ```
 The proxy logs `{host, port, time}` per attempt and never forwards anything. The verdict prints
-`EGRESS TEST PASSED` (exit 0), or lists each offending `host:port` (exit 1).
+`EGRESS TEST PASSED` (exit 0), or lists each offending `host:port` (exit 1). It also fails when the
+`--expect` positive control is missing from the log, when the log is empty or absent, and when no
+`--expect` is given: an empty log alone cannot tell a clean run from an observer that saw nothing.
+
+`scripts/zero-egress/smoke.mjs` automates steps 1, 7 and 8 (plus a check of the main log for the
+block line) against a packaged build; the release workflow runs it on every platform.
+
 Block direct egress at the OS firewall as well. A proxy only sees clients that honor proxy settings;
 Node sockets in the extension host and Chromium traffic with a proxy bypass can go around it.
 
