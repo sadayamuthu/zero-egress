@@ -70,9 +70,12 @@ fi
 # only because their product.json fields are absent, not because any code
 # enforces it. This check makes that a real, enforced gate: an upstream
 # merge that re-populates any of these fields fails the audit even though
-# no code path changed. PRODUCT_JSON_PATH may override the default location
-# (repo-root product.json) for testing.
-PRODUCT_JSON="${PRODUCT_JSON_PATH:-$HERE/../../product.json}"
+# no code path changed. When <scan-dir> is a packaged app, the product.json
+# that ships in it (resources/app/product.json, which the build rewrites) is
+# the one checked; otherwise the repo-root product.json. PRODUCT_JSON_PATH
+# overrides both, for testing.
+packaged_product_json="$(find "$SCAN_DIR" -ipath '*/resources/app/product.json' -not -path '*/node_modules/*' 2>/dev/null | head -1 || true)"
+PRODUCT_JSON="${PRODUCT_JSON_PATH:-${packaged_product_json:-$HERE/../../product.json}}"
 echo "== product.json egress-config invariant check ($PRODUCT_JSON) =="
 if [ ! -f "$PRODUCT_JSON" ]; then
   echo "PRODUCT.JSON INVARIANT: '$PRODUCT_JSON' not found" >&2
