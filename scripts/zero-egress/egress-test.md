@@ -7,7 +7,7 @@ An unconfigured private IP is blocked, and the block shows in the Output channel
 ## Scripted session (both methods)
 1. Start the app (fresh `--user-data-dir` and `--extensions-dir`) and wait for the workbench.
 2. Open the chat sidebar.
-3. Open ZeroEgress Settings, then Local Providers. Only Ollama, vLLM and LM Studio appear.
+3. Open ZeroEgress Settings, then Local Providers. Only Ollama, vLLM, LM Studio and oMLX appear.
 4. Open the Extensions view and search. No gallery results, no outbound attempt.
 5. Install a local `.vsix`. It installs (local, allowed).
 6. Configure vLLM at `http://10.255.255.1:8000` and send one message.

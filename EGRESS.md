@@ -15,7 +15,7 @@ check a release yourself without trusting any of this.
 
 | Area | What changed |
 |------|--------------|
-| Model providers | Only Ollama, vLLM and LM Studio, at endpoints you set. No cloud providers; their API hosts (`api.openai.com`, `api.anthropic.com`, `openrouter.ai`, `generativelanguage.googleapis.com` and others) are on the static deny list |
+| Model providers | Only Ollama, vLLM, LM Studio and oMLX, at endpoints you set (optional API key for OpenAI-compatible locals). No cloud providers; their API hosts (`api.openai.com`, `api.anthropic.com`, `openrouter.ai`, `generativelanguage.googleapis.com` and others) are on the static deny list |
 | Analytics | The PostHog client and the `posthog-node` dependency are gone. `IMetricsService` is a no-op |
 | Telemetry | `product.json` has no telemetry or experiment keys (`enableTelemetry`, `aiConfig`, `tasConfig`), so VS Code's telemetry never starts. The TypeScript extension's experimentation service (which fetched `default.exp-tas.com`), its telemetry reporter and both dependencies are deleted. Other built-in extensions still bundle Microsoft's telemetry library, with their instrumentation keys (`aiKey`) blanked; it stays idle because telemetry is off, and the guard would block it |
 | Updates | No update URL, no background check, no GitHub API call. **ZeroEgress: Check for Updates** says "Updates are manual: download new versions from github.com/sadayamuthu/zero-egress/releases." |

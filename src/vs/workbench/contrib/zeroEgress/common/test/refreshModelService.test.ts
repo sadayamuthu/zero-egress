@@ -56,7 +56,7 @@ suite('RefreshModelService', () => {
 		const { probes, type, dispose } = createService();
 		try {
 		await timeout(0);
-		assert.deepStrictEqual(probes, ['ollama http://127.0.0.1:11434', 'vLLM http://localhost:8000', 'lmStudio http://localhost:1234'], 'initial probe');
+		assert.deepStrictEqual(probes, ['ollama http://127.0.0.1:11434', 'vLLM http://localhost:8000', 'lmStudio http://localhost:1234', 'oMLX http://127.0.0.1:8000'], 'initial probe');
 		probes.length = 0;
 
 		// 60 keys at 100 ms: longer than the 5 s poll interval

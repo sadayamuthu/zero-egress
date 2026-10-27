@@ -45,8 +45,9 @@ export type RefreshModelStateOfProvider = Record<RefreshableProviderName, Refres
 
 const refreshBasedOn: { [k in RefreshableProviderName]: (keyof SettingsOfProvider[k])[] } = {
 	ollama: ['_didFillInProviderSettings', 'endpoint'],
-	vLLM: ['_didFillInProviderSettings', 'endpoint'],
-	lmStudio: ['_didFillInProviderSettings', 'endpoint'],
+	vLLM: ['_didFillInProviderSettings', 'endpoint', 'apiKey'],
+	lmStudio: ['_didFillInProviderSettings', 'endpoint', 'apiKey'],
+	oMLX: ['_didFillInProviderSettings', 'endpoint', 'apiKey'],
 }
 const REFRESH_INTERVAL = 5_000
 // The endpoint field saves on every keystroke; probe only a value that has stood this long, never "https://gp".
@@ -126,19 +127,13 @@ export class RefreshModelService extends Disposable implements IRefreshModelServ
 								return
 							}
 
-							// if it was just enabled, or there was a change and it wasn't to the enabled state, refresh
-							if ((enabled && !prevEnabled) || (!enabled && !prevEnabled)) {
-								// if user just clicked enable, refresh
-								this.startRefreshingModels(providerName, autoOptions)
-							}
-							else {
-								// else if user just clicked disable, don't refresh
-
-								// //give cooldown before re-enabling (or at least re-fetching)
-								// const timeoutId = setTimeout(() => this.refreshModels(providerName, !enabled), COOLDOWN_TIMEOUT)
-								// this._setTimeoutId(providerName, timeoutId)
-							}
 							prevVals = newVals
+							// just disabled: stop probing until something else changes
+							if (prevEnabled && !enabled) {
+								return
+							}
+							// filled-in flipped on, still empty, or optional fields like apiKey changed
+							this.startRefreshingModels(providerName, autoOptions)
 						}
 					})
 				)
@@ -159,6 +154,7 @@ export class RefreshModelService extends Disposable implements IRefreshModelServ
 		ollama: { state: 'init', timeoutId: null },
 		vLLM: { state: 'init', timeoutId: null },
 		lmStudio: { state: 'init', timeoutId: null },
+		oMLX: { state: 'init', timeoutId: null },
 	}
 
 
@@ -189,6 +185,7 @@ export class RefreshModelService extends Disposable implements IRefreshModelServ
 						if (providerName === 'ollama') return (model as OllamaModelResponse).name;
 						else if (providerName === 'vLLM') return (model as OpenaiCompatibleModelResponse).id;
 						else if (providerName === 'lmStudio') return (model as OpenaiCompatibleModelResponse).id;
+						else if (providerName === 'oMLX') return (model as OpenaiCompatibleModelResponse).id;
 						else throw new Error('refreshMode fn: unknown provider', providerName);
 					}),
 					{ enableProviderOnSuccess: options.enableProviderOnSuccess, hideRefresh: options.doNotFire }
