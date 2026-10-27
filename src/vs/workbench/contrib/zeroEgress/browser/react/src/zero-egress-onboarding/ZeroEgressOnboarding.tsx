@@ -530,22 +530,6 @@ const ZeroEgressOnboardingContent = () => {
 	</div>
 
 
-	// cannot be md
-	const basicDescOfWantToUseOption: { [wantToUseOption in WantToUseOption]: string } = {
-		smart: "Models with the best performance on benchmarks.",
-		private: "Host on your computer or local network for full data privacy.",
-		cheap: "Free and affordable options.",
-		all: "",
-	}
-
-	// can be md
-	const detailedDescOfWantToUseOption: { [wantToUseOption in WantToUseOption]: string } = {
-		smart: "Most intelligent and best for agent mode.",
-		private: "Private-hosted so your data never leaves your computer or network.",
-		cheap: "Use great deals like Gemini 2.5 Pro, or self-host a model with Ollama or vLLM for free.",
-		all: "",
-	}
-
 	// Modified: initialize separate provider states on initial render instead of watching wantToUseOption changes
 	useEffect(() => {
 		if (selectedIntelligentProvider === undefined) {
