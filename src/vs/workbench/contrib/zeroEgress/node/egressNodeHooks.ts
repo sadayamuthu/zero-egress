@@ -209,6 +209,9 @@ function electronRequestUrls(options: unknown): string[] {
 	return urls;
 }
 
+/** Electron ClientRequests whose redirects guardRedirects polices. electronFetch follows hops only on these. */
+const guardedRequests = new WeakSet<object>();
+
 /** Chromium's limit (and the fetch standard's): the 21st redirect of one fetch is an error. */
 const MAX_FETCH_REDIRECTS = 20;
 
@@ -267,6 +270,13 @@ function electronFetch(request: Function, input: string | Request, init: Request
 		if (follow) {
 			let redirects = 0;
 			r.on('redirect', () => {
+				if (!guardedRequests.has(r)) {
+					// guardRedirects could not wrap this request (an unexpected Electron shape): its followRedirect()
+					// would follow unchecked, so refuse the redirect instead.
+					reject(new Error('ZeroEgress refused a redirect it could not check'));
+					r.abort();
+					return;
+				}
 				if (++redirects > MAX_FETCH_REDIRECTS) {
 					reject(new Error('net::ERR_TOO_MANY_REDIRECTS'));
 					r.abort();
@@ -377,7 +387,9 @@ export function installEgressNodeHooks(check: (url: string) => boolean, t: Egres
 	 * So a hop is followed only through the wrapped followRedirect, which checks the hop's URL first (once per
 	 * hop, so one log line). `autoFollow` (the caller asked for 'follow') follows every allowed hop itself; the
 	 * caller's listeners still see each 'redirect'. A refused hop's cancellation error is replaced by our error.
-	 * Fail-closed: if the shape is not as expected, nothing follows and Electron cancels every redirect.
+	 * If the shape is not as expected the request is returned unwrapped. A caller of net.request then follows
+	 * only by calling Electron's own followRedirect() (Electron cancels any redirect it does not); our net.fetch
+	 * checks guardedRequests and refuses every redirect of such a request rather than follow it unchecked.
 	 */
 	const guardRedirects = (request: any, autoFollow: boolean): unknown => {
 		if (!request || typeof request.prependListener !== 'function' || typeof request.followRedirect !== 'function' || typeof request.emit !== 'function') {
@@ -416,6 +428,7 @@ export function installEgressNodeHooks(check: (url: string) => boolean, t: Egres
 		if (autoFollow) {
 			request.prependListener('redirect', () => { if (hop && allowed(hop)) { followOriginal.call(request); } });
 		}
+		guardedRequests.add(request);
 		return request;
 	};
 

@@ -639,6 +639,18 @@ suite('egressNodeHooks', () => {
 		assert.strictEqual((await flipped.response).body, null);
 	});
 
+	test('electron net.fetch: a request the guard could not wrap follows no redirect at all', async () => {
+		const { fakeNet, requests } = fakeElectronNet();
+		const request = fakeNet.request;
+		// an unexpected Electron shape: no prependListener, so guardRedirects leaves the request unwrapped
+		fakeNet.request = (o: unknown) => { const r = request(o); (r as any).prependListener = undefined; return r; };
+		hooks = installEgressNodeHooks(loopbackOnly, { global: globalThis, http, https, net, electronNet: fakeNet });
+		const f = await startFetch(fakeNet, requests, 'http://127.0.0.1:1/start');
+		f.req.serverRedirects('http://localhost:2/allowed-but-unchecked');
+		await assert.rejects(f.response, (e: Error) => e.message === 'ZeroEgress refused a redirect it could not check');
+		assert.deepStrictEqual(f.req.followed, []);
+	});
+
 	test('electron net.fetch: at most 20 redirects are followed', async () => {
 		const { fakeNet, requests } = fakeElectronNet();
 		hooks = installEgressNodeHooks(loopbackOnly, { global: globalThis, http, https, net, electronNet: fakeNet });
