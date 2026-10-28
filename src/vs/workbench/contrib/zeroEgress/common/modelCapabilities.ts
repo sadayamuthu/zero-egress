@@ -15,9 +15,15 @@ export const defaultProviderSettings = {
 	},
 	vLLM: {
 		endpoint: 'http://localhost:8000',
+		apiKey: '', // optional; empty means send a placeholder key
 	},
 	lmStudio: {
 		endpoint: 'http://localhost:1234',
+		apiKey: '',
+	},
+	oMLX: {
+		endpoint: 'http://127.0.0.1:8000',
+		apiKey: '',
 	},
 
 } as const
@@ -31,6 +37,7 @@ export const defaultModelsOfProvider = {
 	vLLM: [ // autodetected
 	],
 	lmStudio: [], // autodetected
+	oMLX: [], // autodetected
 
 } as const satisfies Record<ProviderName, string[]>
 
@@ -439,6 +446,15 @@ const lmStudioSettings: ZeroEgressStaticProviderInfo = {
 	},
 }
 
+const oMLXSettings: ZeroEgressStaticProviderInfo = {
+	modelOptionsFallback: (modelName) => extensiveModelOptionsFallback(modelName, { downloadable: { sizeGb: 'not-known' } }),
+	modelOptions: {},
+	providerReasoningIOSettings: {
+		input: { includeInPayload: openAICompatIncludeInPayloadReasoning },
+		output: { nameOfFieldInDelta: 'reasoning_content' },
+	},
+}
+
 const ollamaSettings: ZeroEgressStaticProviderInfo = {
 	modelOptionsFallback: (modelName) => extensiveModelOptionsFallback(modelName, { downloadable: { sizeGb: 'not-known' } }),
 	modelOptions: ollamaModelOptions,
@@ -455,6 +471,7 @@ const modelSettingsOfProvider: { [providerName in ProviderName]: ZeroEgressStati
 	ollama: ollamaSettings,
 	vLLM: vLLMSettings,
 	lmStudio: lmStudioSettings,
+	oMLX: oMLXSettings,
 } as const
 
 

@@ -6,7 +6,7 @@
 
 An AI code editor that works offline. ZeroEgress has chat, an agent mode,
 quick edit and autocomplete, and talks only to model servers you run
-yourself: Ollama, vLLM or LM Studio on your laptop, or one on your own
+yourself: Ollama, vLLM, LM Studio or oMLX on your laptop, or one on your own
 network. It connects to loopback and to the servers you configure, and
 nothing else. Telemetry, auto-update, the online extension marketplace,
 analytics and cloud sign-in are removed. A runtime guard blocks every other
@@ -122,10 +122,12 @@ Local Ollama, in three steps:
    (**Ctrl+L** on Windows and Linux) to chat, and **Cmd+K** (**Ctrl+K**) to
    edit the selected code.
 
-vLLM (default `http://localhost:8000`) and LM Studio (default
-`http://localhost:1234`) work the same way: start the server, and change the
-endpoint in ZeroEgress Settings if yours is different. Open Settings with
-the gear at the top of the chat panel, or run **ZeroEgress: Open Settings**
+vLLM (default `http://localhost:8000`), LM Studio (default
+`http://localhost:1234`) and oMLX (default `http://127.0.0.1:8000`) work the
+same way: start the server, and change the endpoint in ZeroEgress Settings
+if yours is different. If the server requires an API key (common with
+oMLX), enter it in the optional **API Key** field. Open Settings with the
+gear at the top of the chat panel, or run **ZeroEgress: Open Settings**
 from the Command Palette. Endpoints are under **Local Providers**.
 Autocomplete is off by default; turn it on under **Feature Options**.
 
@@ -135,7 +137,7 @@ Run the model on a bigger machine and point ZeroEgress at it. In
 ZeroEgress Settings, under **Local Providers**, set the endpoint to the
 server's address, for example:
 
-- vLLM: `http://192.168.1.50:8000`
+- vLLM / oMLX: `http://192.168.1.50:8000`
 - Ollama: `http://192.168.1.50:11434`
 
 Enter the address without `/v1`; ZeroEgress adds it. The guard allows that

@@ -26,7 +26,7 @@ change, and anything the guard can't cover is written down in
 - **Close a known limit.** [EGRESS.md](EGRESS.md#known-limits) lists what
   the guard can't see yet. Each one closed needs a test that fails before
   the change.
-- **Try it with your model server** (Ollama, vLLM or LM Studio, on your
+- **Try it with your model server** (Ollama, vLLM, LM Studio or oMLX, on your
   laptop or your network) and open an issue for what breaks.
 
 For anything larger than a small fix, open an issue first so we can agree on
@@ -116,6 +116,18 @@ The egress tests live in:
   model-request leases, update and metrics no-ops, the audit pipeline.
 - `src/vs/workbench/contrib/zeroEgress/node/test/egressNodeHooks.test.ts`:
   the Node and Electron `net` hooks, redirects included.
+
+## Releases on main
+
+After CI passes on a push to `main`, [Bump and release](.github/workflows/bump-release.yml)
+patch-bumps `product.json` (`zeroEgressVersion` 0.1.0 → 0.1.1, and the
+`zeroEgressRelease` counter), commits `chore: release vX.Y.Z`, pushes the
+tag, and starts the [Release](.github/workflows/release.yml) workflow with
+`publish=true`. That builds the installers and publishes the GitHub Release.
+
+To skip a bump for one merge, include `[skip release]` in the merge commit
+message. Manual tag pushes (`git tag vX.Y.Z && git push origin vX.Y.Z`) still
+work as before.
 
 ## The gates
 

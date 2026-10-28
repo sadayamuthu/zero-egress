@@ -16,7 +16,7 @@ type UnionOfKeys<T> = T extends T ? keyof T : never;
 export type ProviderName = keyof typeof defaultProviderSettings
 export const providerNames = Object.keys(defaultProviderSettings) as ProviderName[]
 
-export const localProviderNames = ['ollama', 'vLLM', 'lmStudio'] satisfies ProviderName[] // all local names
+export const localProviderNames = ['ollama', 'vLLM', 'lmStudio', 'oMLX'] satisfies ProviderName[] // all local names
 export const nonlocalProviderNames = providerNames.filter((name) => !(localProviderNames as string[]).includes(name)) // all non-local names
 
 type CustomSettingName = UnionOfKeys<typeof defaultProviderSettings[ProviderName]>
@@ -67,6 +67,9 @@ export const displayInfoOfProviderName = (providerName: ProviderName): DisplayIn
 	else if (providerName === 'lmStudio') {
 		return { title: 'LM Studio', }
 	}
+	else if (providerName === 'oMLX') {
+		return { title: 'oMLX', }
+	}
 
 	throw new Error(`descOfProviderName: Unknown provider name: "${providerName}"`)
 }
@@ -76,6 +79,7 @@ export const subTextMdOfProviderName = (providerName: ProviderName): string => {
 	if (providerName === 'ollama') return 'Read more about custom [Endpoints here](https://github.com/ollama/ollama/blob/main/docs/faq.md#how-can-i-expose-ollama-on-my-network).'
 	if (providerName === 'vLLM') return 'Read more about custom [Endpoints here](https://docs.vllm.ai/en/latest/getting_started/quickstart.html#openai-compatible-server).'
 	if (providerName === 'lmStudio') return 'Read more about custom [Endpoints here](https://lmstudio.ai/docs/app/api/endpoints/openai).'
+	if (providerName === 'oMLX') return 'Read more about [oMLX](https://github.com/jundot/omlx). Enter the API key from `omlx serve --api-key` or the admin setup if you set one.'
 
 	throw new Error(`subTextMdOfProviderName: Unknown provider name: "${providerName}"`)
 }
@@ -88,17 +92,22 @@ type DisplayInfo = {
 export const displayInfoOfSettingName = (providerName: ProviderName, settingName: SettingName): DisplayInfo => {
 	if (settingName === 'endpoint') {
 		return {
-			title: providerName === 'ollama' ? 'Endpoint' :
-				providerName === 'vLLM' ? 'Endpoint' :
-					providerName === 'lmStudio' ? 'Endpoint' :
-						'(never)',
+			title: 'Endpoint',
 
 			placeholder: providerName === 'ollama' ? defaultProviderSettings.ollama.endpoint
 				: providerName === 'vLLM' ? defaultProviderSettings.vLLM.endpoint
 					: providerName === 'lmStudio' ? defaultProviderSettings.lmStudio.endpoint
-						: '(never)',
+						: providerName === 'oMLX' ? defaultProviderSettings.oMLX.endpoint
+							: '(never)',
 
 
+		}
+	}
+	else if (settingName === 'apiKey') {
+		return {
+			title: 'API Key',
+			placeholder: 'Optional',
+			isPasswordField: true,
 		}
 	}
 	else if (settingName === '_didFillInProviderSettings') {
@@ -120,6 +129,7 @@ export const displayInfoOfSettingName = (providerName: ProviderName, settingName
 
 const defaultCustomSettings: Record<CustomSettingName, undefined> = {
 	endpoint: undefined,
+	apiKey: undefined,
 }
 
 
@@ -151,6 +161,12 @@ export const defaultSettingsOfProvider: SettingsOfProvider = {
 		...defaultCustomSettings,
 		...defaultProviderSettings.lmStudio,
 		...modelInfoOfDefaultModelNames(defaultModelsOfProvider.lmStudio),
+		_didFillInProviderSettings: undefined,
+	},
+	oMLX: {
+		...defaultCustomSettings,
+		...defaultProviderSettings.oMLX,
+		...modelInfoOfDefaultModelNames(defaultModelsOfProvider.oMLX),
 		_didFillInProviderSettings: undefined,
 	},
 }

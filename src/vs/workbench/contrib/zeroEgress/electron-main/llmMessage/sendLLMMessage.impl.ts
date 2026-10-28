@@ -43,6 +43,12 @@ const invalidApiKeyMessage = (providerName: ProviderName) => `Invalid ${displayI
 
 
 
+const apiKeyOfProvider = (settingsOfProvider: SettingsOfProvider, providerName: ProviderName): string => {
+	const config = settingsOfProvider[providerName] as { apiKey?: string }
+	const key = config.apiKey?.trim()
+	return key ? key : 'noop'
+}
+
 const newOpenAICompatibleSDK = async ({ settingsOfProvider, providerName, includeInPayload }: { settingsOfProvider: SettingsOfProvider, providerName: ProviderName, includeInPayload?: { [s: string]: any } }) => {
 	const commonPayloadOpts: ClientOptions = {
 		dangerouslyAllowBrowser: true,
@@ -50,15 +56,19 @@ const newOpenAICompatibleSDK = async ({ settingsOfProvider, providerName, includ
 	}
 	if (providerName === 'ollama') {
 		const thisConfig = settingsOfProvider[providerName]
-		return new OpenAI({ baseURL: `${thisConfig.endpoint}/v1`, apiKey: 'noop', ...commonPayloadOpts })
+		return new OpenAI({ baseURL: `${thisConfig.endpoint}/v1`, apiKey: apiKeyOfProvider(settingsOfProvider, providerName), ...commonPayloadOpts })
 	}
 	else if (providerName === 'vLLM') {
 		const thisConfig = settingsOfProvider[providerName]
-		return new OpenAI({ baseURL: `${thisConfig.endpoint}/v1`, apiKey: 'noop', ...commonPayloadOpts })
+		return new OpenAI({ baseURL: `${thisConfig.endpoint}/v1`, apiKey: apiKeyOfProvider(settingsOfProvider, providerName), ...commonPayloadOpts })
 	}
 	else if (providerName === 'lmStudio') {
 		const thisConfig = settingsOfProvider[providerName]
-		return new OpenAI({ baseURL: `${thisConfig.endpoint}/v1`, apiKey: 'noop', ...commonPayloadOpts })
+		return new OpenAI({ baseURL: `${thisConfig.endpoint}/v1`, apiKey: apiKeyOfProvider(settingsOfProvider, providerName), ...commonPayloadOpts })
+	}
+	else if (providerName === 'oMLX') {
+		const thisConfig = settingsOfProvider[providerName]
+		return new OpenAI({ baseURL: `${thisConfig.endpoint}/v1`, apiKey: apiKeyOfProvider(settingsOfProvider, providerName), ...commonPayloadOpts })
 	}
 
 	else throw new Error(`ZeroEgress providerName was invalid: ${providerName}.`)
@@ -387,6 +397,11 @@ export const sendLLMMessageToProviderImplementation = {
 	},
 	lmStudio: {
 		// lmStudio has no suffix parameter in /completions, so sendFIM might not work
+		sendChat: (params) => _sendOpenAICompatibleChat(params),
+		sendFIM: (params) => _sendOpenAICompatibleFIM(params),
+		list: (params) => _openaiCompatibleList(params),
+	},
+	oMLX: {
 		sendChat: (params) => _sendOpenAICompatibleChat(params),
 		sendFIM: (params) => _sendOpenAICompatibleFIM(params),
 		list: (params) => _openaiCompatibleList(params),
