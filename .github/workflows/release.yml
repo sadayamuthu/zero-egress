@@ -6,14 +6,18 @@ name: Release
 # zeroEgressVersion. A tag with a "-" (v0.2.0-rc.1) is published as a
 # prerelease and does not touch the cask.
 #
+# Bump and release (bump-release.yml) also starts this workflow after a green
+# CI on main, with publish=true on the new tag (GITHUB_TOKEN tag pushes do not
+# re-fire on.push).
+#
 # Before anything is published, smoke jobs install each package (silent Inno
 # Setup on Windows, apt for the .deb), launch it behind a logging proxy and
 # check the workbench, the guard and the egress verdict (smoke.mjs).
 #
 # Run it manually (Actions -> Release -> Run workflow) to build the installers
-# and upload them as workflow artifacts (kept 7 days) without publishing
-# anything, even when run on a tag ref. The "platforms" input limits a manual
-# run to some platforms.
+# and upload them as workflow artifacts (kept 7 days). Set publish=true to also
+# create the GitHub Release (and Homebrew update) when running on a tag ref.
+# The "platforms" input limits a manual run to some platforms.
 #
 # Artifacts (<v> = zeroEgressVersion; unsigned builds add "-unsigned" before
 # the extension of the macOS and Windows files):
@@ -52,6 +56,11 @@ on:
         required: false
         default: all
         type: string
+      publish:
+        description: 'Publish a GitHub Release (and Homebrew cask) when this run is on a v*.*.* tag'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -587,11 +596,15 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  # Tag pushes only: a manual run on a tag ref (gh workflow run --ref v0.1.0)
-  # has a tag GITHUB_REF too, and must not publish.
+  # Tag pushes always publish. workflow_dispatch publishes only when
+  # publish=true (used by bump-release.yml); a plain manual run on a tag
+  # still builds artifacts only.
   publish:
     needs: [test, release-files]
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    if: >
+      startsWith(github.ref, 'refs/tags/v') &&
+      (github.event_name == 'push' ||
+       (github.event_name == 'workflow_dispatch' && inputs.publish == true))
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -616,14 +629,23 @@ jobs:
           (cd dist && sha256sum -c SHA256SUMS)
           prerelease=""
           [[ "$TAG" == *-* ]] && prerelease="--prerelease"
-          gh release create "$TAG" dist/* \
-            --repo "$GITHUB_REPOSITORY" --title "ZeroEgress ${TAG#v}" --generate-notes $prerelease
+          # Idempotent if bump-release re-runs after a partial publish.
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$TAG" dist/* \
+              --repo "$GITHUB_REPOSITORY" --title "ZeroEgress ${TAG#v}" --generate-notes $prerelease
+          fi
 
   # Updates Casks/zero-egress.rb in sadayamuthu/homebrew-tap. Skipped for
   # prereleases, and with a warning when HOMEBREW_TAP_TOKEN is unset.
   homebrew:
     needs: [publish]
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-')
+    if: >
+      startsWith(github.ref, 'refs/tags/v') &&
+      !contains(github.ref_name, '-') &&
+      (github.event_name == 'push' ||
+       (github.event_name == 'workflow_dispatch' && inputs.publish == true))
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # The token reaches only the step that pushes; the others test this boolean.

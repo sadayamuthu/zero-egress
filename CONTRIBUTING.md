@@ -117,6 +117,18 @@ The egress tests live in:
 - `src/vs/workbench/contrib/zeroEgress/node/test/egressNodeHooks.test.ts`:
   the Node and Electron `net` hooks, redirects included.
 
+## Releases on main
+
+After CI passes on a push to `main`, [Bump and release](.github/workflows/bump-release.yml)
+patch-bumps `product.json` (`zeroEgressVersion` 0.1.0 → 0.1.1, and the
+`zeroEgressRelease` counter), commits `chore: release vX.Y.Z`, pushes the
+tag, and starts the [Release](.github/workflows/release.yml) workflow with
+`publish=true`. That builds the installers and publishes the GitHub Release.
+
+To skip a bump for one merge, include `[skip release]` in the merge commit
+message. Manual tag pushes (`git tag vX.Y.Z && git push origin vX.Y.Z`) still
+work as before.
+
 ## The gates
 
 Run these before you push. Each one is fatal in CI.

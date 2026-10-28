@@ -1,0 +1,101 @@
+name: Bump and release
+
+# After CI succeeds on a push to main, patch-bump product.json, push a
+# "chore: release vX.Y.Z" commit + tag, and dispatch the Release workflow
+# with publish=true. Tag pushes from GITHUB_TOKEN do not re-trigger workflows,
+# so Release is started explicitly.
+#
+# Skips its own release commits (message prefix "chore: release ") so the
+# version bump does not loop. Skip a one-off with "[skip release]" in the
+# merge commit message.
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+concurrency:
+  group: bump-release-main
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  bump-and-release:
+    if: >
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      !startsWith(github.event.workflow_run.head_commit.message, 'chore: release ') &&
+      !contains(github.event.workflow_run.head_commit.message, '[skip release]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout the green main SHA
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+          # Default token can push commits/tags; Release is started via gh below.
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Ensure tip of main still matches
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          tip="$(git rev-parse origin/main)"
+          head="${{ github.event.workflow_run.head_sha }}"
+          if [ "$tip" != "$head" ]; then
+            echo "main moved ($tip != $head); another push will release. Skipping."
+            exit 0
+          fi
+          echo "still_tip=true" >> "$GITHUB_ENV"
+
+      - name: Bump version
+        if: env.still_tip == 'true'
+        id: bump
+        run: |
+          set -euo pipefail
+          version="$(node scripts/zero-egress/bump-version.mjs)"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${version}" >> "$GITHUB_OUTPUT"
+          echo "Bumped to ${version} (release counter $(node -p "require('./product.json').zeroEgressRelease"))"
+
+      - name: Commit, tag, push
+        if: env.still_tip == 'true'
+        id: push
+        env:
+          VERSION: ${{ steps.bump.outputs.version }}
+          TAG: ${{ steps.bump.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
+            echo "::error::Tag ${TAG} already exists"
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add product.json
+          git commit -m "chore: release ${TAG}"
+          git tag -a "${TAG}" -m "ZeroEgress ${VERSION}"
+          git push origin HEAD:main
+          git push origin "refs/tags/${TAG}"
+          echo "pushed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Dispatch Release (publish)
+        if: env.still_tip == 'true' && steps.push.outputs.pushed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.bump.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # GITHUB_TOKEN tag pushes do not fire on.push; start Release explicitly.
+          gh workflow run Release \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref "$TAG" \
+            -f platforms=all \
+            -f publish=true
+          echo "Dispatched Release for ${TAG} (publish=true)"

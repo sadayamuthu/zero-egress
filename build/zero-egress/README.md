@@ -7,7 +7,12 @@ gates, signing, dmg staging, installer naming, AppImage).
 
 The release workflow (`.github/workflows/release.yml`) runs these same scripts
 on GitHub-hosted runners: a `v*.*.*` tag publishes a release, a manual run
-builds everything without publishing.
+builds everything without publishing (unless `publish=true`).
+
+Every green CI run on `main` also patch-bumps `product.json`
+`zeroEgressVersion` / `zeroEgressRelease`, tags `vX.Y.Z`, and dispatches
+Release with `publish=true` (see `.github/workflows/bump-release.yml`). Put
+`[skip release]` in a merge commit message to skip one bump.
 
 ## Build matrix
 
