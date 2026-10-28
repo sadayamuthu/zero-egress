@@ -21,7 +21,7 @@ jobs:
       ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
       PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -43,7 +43,7 @@ jobs:
       - name: Version bump script tests
         run: node scripts/zero-egress/test/bump-version.test.mjs
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: npm
