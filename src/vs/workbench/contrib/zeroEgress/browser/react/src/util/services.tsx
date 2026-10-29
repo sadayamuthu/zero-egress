@@ -55,6 +55,7 @@ import { ITerminalService } from '../../../../../terminal/browser/terminal.js'
 import { ISearchService } from '../../../../../../services/search/common/search.js'
 import { IExtensionManagementService } from '../../../../../../../platform/extensionManagement/common/extensionManagement.js'
 import { IMCPService } from '../../../../common/mcpService.js';
+import { ILocalModelDetectionService } from '../../../localModelDetectionService.js';
 import { IStorageService, StorageScope } from '../../../../../../../platform/storage/common/storage.js'
 
 
@@ -238,6 +239,7 @@ const getReactAccessor = (accessor: ServicesAccessor) => {
 		IMCPService: accessor.get(IMCPService),
 		IPendingFileOpsService: accessor.get(IPendingFileOpsService),
 		IBackgroundAgentsService: accessor.get(IBackgroundAgentsService),
+		ILocalModelDetectionService: accessor.get(ILocalModelDetectionService),
 
 		IStorageService: accessor.get(IStorageService),
 
