@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------*/
 
 import React, { useCallback, useEffect, useMemo, useState, useRef } from 'react'; // Added useRef import just in case it was missed, though likely already present
-import { ProviderName, SettingName, displayInfoOfSettingName, providerNames, ZeroEgressStatefulModelInfo, customSettingNamesOfProvider, RefreshableProviderName, refreshableProviderNames, displayInfoOfProviderName, localProviderNames, GlobalSettingName, featureNames, displayInfoOfFeatureName, isProviderNameDisabled, FeatureName, hasDownloadButtonsOnModelsProviderNames, subTextMdOfProviderName } from '../../../../common/zeroEgressSettingsTypes.js'
+import { ProviderName, SettingName, displayInfoOfSettingName, providerNames, ZeroEgressStatefulModelInfo, customSettingNamesOfProvider, RefreshableProviderName, refreshableProviderNames, displayInfoOfProviderName, localProviderNames, GlobalSettingName, featureNames, displayInfoOfFeatureName, isProviderNameDisabled, FeatureName, hasDownloadButtonsOnModelsProviderNames, subTextMdOfProviderName, parallelRequestsOf, clampConcurrency, PARALLEL_REQUESTS_HINT } from '../../../../common/zeroEgressSettingsTypes.js'
 import ErrorBoundary from '../sidebar-tsx/ErrorBoundary.js'
 import { ZeroEgressButtonBgDarken, ZeroEgressCustomDropdownBox, ZeroEgressInputBox2, ZeroEgressSimpleInputBox, ZeroEgressSwitch } from '../util/inputs.js'
 import { useAccessor, useIsDark, useRefreshModelListener, useRefreshModelState, useSettingsState } from '../util/services.js'
@@ -743,10 +743,47 @@ export const SettingsForProvider = ({ providerName, showProviderTitle, showProvi
 }
 
 
+// how many LLM requests this provider runs at once (shared by the docked chat and background agents)
+const ParallelRequestsSetting = ({ providerName }: { providerName: ProviderName }) => {
+	const accessor = useAccessor()
+	const zeroEgressSettingsService = accessor.get('IZeroEgressSettingsService')
+	const settingsState = useSettingsState()
+	const value = parallelRequestsOf(settingsState.settingsOfProvider[providerName])
+
+	const handleChangeValue = useCallback((newVal: string) => {
+		const trimmed = newVal.trim()
+		if (!/^\d+$/.test(trimmed)) return // wait for a whole number
+		zeroEgressSettingsService.setSettingOfProvider(providerName, 'parallelRequests', clampConcurrency(parseInt(trimmed, 10), 1))
+	}, [zeroEgressSettingsService, providerName])
+
+	return <ErrorBoundary>
+		<div className='my-1'>
+			<div className='flex items-center gap-2 px-1'>
+				<span className='text-sm whitespace-nowrap'>Parallel requests</span>
+				<ZeroEgressSimpleInputBox
+					value={String(value)}
+					onChangeValue={handleChangeValue}
+					placeholder='1'
+					compact={true}
+					className='max-w-16'
+					inputMode='numeric'
+					aria-label='Parallel requests'
+				/>
+			</div>
+			<div className='py-1 px-3 opacity-50 text-sm'>
+				{PARALLEL_REQUESTS_HINT}
+			</div>
+		</div>
+	</ErrorBoundary>
+}
+
 export const ZeroEgressProviderSettings = ({ providerNames }: { providerNames: ProviderName[] }) => {
 	return <>
 		{providerNames.map(providerName =>
-			<SettingsForProvider key={providerName} providerName={providerName} showProviderTitle={true} showProviderSuggestions={true} />
+			<div key={providerName}>
+				<SettingsForProvider providerName={providerName} showProviderTitle={true} showProviderSuggestions={true} />
+				<ParallelRequestsSetting providerName={providerName} />
+			</div>
 		)}
 	</>
 }

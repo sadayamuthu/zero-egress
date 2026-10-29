@@ -43,6 +43,14 @@ import { AGENT_WORKTREE_REMOVED_MESSAGE, agentRootOf, BackgroundAgentInfo, ToolR
 import { resolveAgentPath } from '../common/agentPaths.js';
 import { checkTerminalOwner } from '../common/terminalOwnership.js';
 import { ITerminalToolService } from './terminalToolService.js';
+import { RunPhase } from '../common/agentStatus.js';
+import { SlotQueue } from '../common/slotQueue.js';
+import { CancellationTokenSource } from '../../../../base/common/cancellation.js';
+import { isCancellationError } from '../../../../base/common/errors.js';
+import { IDisposable } from '../../../../base/common/lifecycle.js';
+import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
+import { AGENTS_MAX_CONCURRENT_DEFAULT, AGENTS_MAX_CONCURRENT_SETTING } from '../common/zeroEgressConfiguration.js';
+import { clampConcurrency, parallelRequestsOf } from '../common/zeroEgressSettingsTypes.js';
 
 
 // related to retrying when LLM message has error
@@ -160,12 +168,8 @@ export type ThreadsState = {
 	currentThreadId: string; // intended for internal use only
 }
 
-export type IsRunningType =
-	| 'LLM' // the LLM is currently streaming
-	| 'tool' // whether a tool is currently running
-	| 'awaiting_user' // awaiting user call
-	| 'idle' // nothing is running now, but the chat should still appear like it's going (used in-between calls)
-	| undefined
+// 'LLM' | 'tool' | 'awaiting_user' | 'idle' | 'waiting_for_model' | undefined (see RunPhase)
+export type IsRunningType = RunPhase
 
 export type ThreadStreamState = {
 	[threadId: string]: undefined | {
@@ -209,6 +213,12 @@ export type ThreadStreamState = {
 		llmInfo?: undefined;
 		toolInfo?: undefined;
 		interrupt: 'not_needed' | Promise<() => void>; // calling this should have no effect on state - would be too confusing. it just cancels the tool
+	} | { // queued for a slot in the shared model queue
+		isRunning: 'waiting_for_model';
+		error?: undefined;
+		llmInfo?: undefined;
+		toolInfo?: undefined;
+		interrupt: Promise<() => void>; // leaves the queue
 	}
 }
 
@@ -239,6 +249,7 @@ export interface IChatThreadService {
 
 	readonly state: ThreadsState;
 	readonly streamState: ThreadStreamState; // not persistent
+	readonly slotQueue: SlotQueue; // one queue shared by every thread: model slots per provider, plus background-run slots
 
 	onDidChangeCurrentThread: Event<void>;
 	onDidChangeStreamState: Event<{ threadId: string }>
@@ -312,6 +323,7 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 	readonly onDidChangeStreamState: Event<{ threadId: string }> = this._onDidChangeStreamState.event;
 
 	readonly streamState: ThreadStreamState = {}
+	readonly slotQueue: SlotQueue = this._register(new SlotQueue())
 	state: ThreadsState // allThreads is persisted, currentThread is not
 
 	// used in checkpointing
@@ -335,6 +347,7 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 		@IFileService private readonly _fileService: IFileService,
 		@IMCPService private readonly _mcpService: IMCPService,
 		@ITerminalToolService private readonly _terminalToolService: ITerminalToolService,
+		@IConfigurationService private readonly _configurationService: IConfigurationService,
 	) {
 		super()
 		this.state = { allThreads: {}, currentThreadId: null as unknown as string } // default state
@@ -585,6 +598,9 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 		else if (this.streamState[threadId]?.isRunning === 'idle') {
 			// do nothing
 		}
+		else if (this.streamState[threadId]?.isRunning === 'waiting_for_model') {
+			// nothing was said yet; the interrupt below leaves the queue
+		}
 
 		this._addUserCheckpoint({ threadId })
 
@@ -777,6 +793,32 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 
 
 
+	private _maxConcurrentAgents(): number {
+		return clampConcurrency(this._configurationService.getValue<number>(AGENTS_MAX_CONCURRENT_SETTING), AGENTS_MAX_CONCURRENT_DEFAULT)
+	}
+
+	/**
+	 * Queues for a slot while the thread shows 'waiting_for_model'. Returns undefined if the user interrupted the wait
+	 * (abortRunning then resets the stream state). `onInterrupt` also runs if the interrupt lands just after the slot was granted.
+	 */
+	private async _waitForSlot(threadId: string, key: string, limit: number, priority: boolean, onInterrupt: () => void): Promise<IDisposable | undefined> {
+		const cts = new CancellationTokenSource()
+		let interrupted = false
+		this._setStreamState(threadId, { isRunning: 'waiting_for_model', interrupt: Promise.resolve(() => { interrupted = true; cts.cancel(); onInterrupt() }) })
+		try {
+			const slot = await this.slotQueue.acquire(key, limit, { priority, token: cts.token })
+			if (interrupted) { slot.dispose(); return undefined }
+			return slot
+		}
+		catch (e) {
+			if (isCancellationError(e)) return undefined
+			throw e
+		}
+		finally {
+			cts.dispose()
+		}
+	}
+
 	private async _runChatAgent({
 		threadId,
 		modelSelection,
@@ -802,164 +844,196 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 		const agentRoot = backgroundAgent ? { folder: agentRootOf(backgroundAgent), depsMayBeMissing: !backgroundAgent.setup?.command, agentId: backgroundAgent.agentId } : undefined
 		const { overridesOfModel } = this._settingsService.state
 
-		let nMessagesSent = 0
-		let shouldSendAnotherMessage = true
-		let isRunningWhenEnd: IsRunningType = undefined
-
-		// before enter loop, call tool
-		if (callThisToolFirst) {
-			const { interrupted } = await this._runToolCall(threadId, callThisToolFirst.name, callThisToolFirst.id, callThisToolFirst.mcpServerName, { preapproved: true, unvalidatedToolParams: callThisToolFirst.rawParams, validatedParams: callThisToolFirst.params })
-			if (interrupted) {
-				this._setStreamState(threadId, undefined)
-				this._addUserCheckpoint({ threadId })
-
-			}
+		// a background run holds one of the 'agents' slots from start to end; the docked thread never takes one
+		let agentSlot: IDisposable | undefined
+		if (backgroundAgent) {
+			agentSlot = await this._waitForSlot(threadId, 'agents', this._maxConcurrentAgents(), false, () => { interruptedWhenIdle = true })
+			if (!agentSlot || interruptedWhenIdle) { agentSlot?.dispose(); return }
 		}
-		this._setStreamState(threadId, { isRunning: 'idle', interrupt: 'not_needed' })  // just decorative, for clarity
 
+		try {
 
-		// tool use loop
-		while (shouldSendAnotherMessage) {
-			// false by default each iteration
-			shouldSendAnotherMessage = false
-			isRunningWhenEnd = undefined
-			nMessagesSent += 1
+			let nMessagesSent = 0
+			let shouldSendAnotherMessage = true
+			let isRunningWhenEnd: IsRunningType = undefined
 
-			this._setStreamState(threadId, { isRunning: 'idle', interrupt: idleInterruptor })
+			// before enter loop, call tool
+			if (callThisToolFirst) {
+				const { interrupted } = await this._runToolCall(threadId, callThisToolFirst.name, callThisToolFirst.id, callThisToolFirst.mcpServerName, { preapproved: true, unvalidatedToolParams: callThisToolFirst.rawParams, validatedParams: callThisToolFirst.params })
+				if (interrupted) {
+					this._setStreamState(threadId, undefined)
+					this._addUserCheckpoint({ threadId })
 
-			const chatMessages = this.state.allThreads[threadId]?.messages ?? []
-			const { messages, separateSystemMessage } = await this._convertToLLMMessagesService.prepareLLMChatMessages({
-				chatMessages,
-				modelSelection,
-				chatMode,
-				agentRoot,
-			})
-
-			if (interruptedWhenIdle) {
-				this._setStreamState(threadId, undefined)
-				return
+				}
 			}
+			this._setStreamState(threadId, { isRunning: 'idle', interrupt: 'not_needed' })  // just decorative, for clarity
 
-			let shouldRetryLLM = true
-			let nAttempts = 0
-			while (shouldRetryLLM) {
-				shouldRetryLLM = false
-				nAttempts += 1
 
-				type ResTypes =
-					| { type: 'llmDone', toolCall?: RawToolCallObj, info: { fullText: string, fullReasoning: string, anthropicReasoning: AnthropicReasoning[] | null } }
-					| { type: 'llmError', error?: { message: string; fullError: Error | null; } }
-					| { type: 'llmAborted' }
+			// tool use loop
+			while (shouldSendAnotherMessage) {
+				// false by default each iteration
+				shouldSendAnotherMessage = false
+				isRunningWhenEnd = undefined
+				nMessagesSent += 1
 
-				let resMessageIsDonePromise: (res: ResTypes) => void // resolves when user approves this tool use (or if tool doesn't require approval)
-				const messageIsDonePromise = new Promise<ResTypes>((res, rej) => { resMessageIsDonePromise = res })
+				this._setStreamState(threadId, { isRunning: 'idle', interrupt: idleInterruptor })
 
-				const llmCancelToken = this._llmMessageService.sendLLMMessage({
-					messagesType: 'chatMessages',
-					chatMode,
-					messages: messages,
+				const chatMessages = this.state.allThreads[threadId]?.messages ?? []
+				const { messages, separateSystemMessage } = await this._convertToLLMMessagesService.prepareLLMChatMessages({
+					chatMessages,
 					modelSelection,
-					modelSelectionOptions,
-					overridesOfModel,
-					logging: { loggingName: `Chat - ${chatMode}`, loggingExtras: { threadId, nMessagesSent, chatMode } },
-					separateSystemMessage: separateSystemMessage,
-					onText: ({ fullText, fullReasoning, toolCall }) => {
-						this._setStreamState(threadId, { isRunning: 'LLM', llmInfo: { displayContentSoFar: fullText, reasoningSoFar: fullReasoning, toolCallSoFar: toolCall ?? null }, interrupt: Promise.resolve(() => { if (llmCancelToken) this._llmMessageService.abort(llmCancelToken) }) })
-					},
-					onFinalMessage: async ({ fullText, fullReasoning, toolCall, anthropicReasoning, }) => {
-						resMessageIsDonePromise({ type: 'llmDone', toolCall, info: { fullText, fullReasoning, anthropicReasoning } }) // resolve with tool calls
-					},
-					onError: async (error) => {
-						resMessageIsDonePromise({ type: 'llmError', error: error })
-					},
-					onAbort: () => {
-						// stop the loop to free up the promise, but don't modify state (already handled by whatever stopped it)
-						resMessageIsDonePromise({ type: 'llmAborted' })
-						this._metricsService.capture('Agent loop done (Aborted)', { nMessagesSent, chatMode })
-					},
+					chatMode,
+					agentRoot,
 				})
 
-				// mark as streaming
-				if (!llmCancelToken) {
-					this._setStreamState(threadId, { isRunning: undefined, error: { message: 'There was an unexpected error when sending your chat message.', fullError: null } })
-					break
-				}
-
-				this._setStreamState(threadId, { isRunning: 'LLM', llmInfo: { displayContentSoFar: '', reasoningSoFar: '', toolCallSoFar: null }, interrupt: Promise.resolve(() => this._llmMessageService.abort(llmCancelToken)) })
-				const llmRes = await messageIsDonePromise // wait for message to complete
-
-				// if something else started running in the meantime
-				if (this.streamState[threadId]?.isRunning !== 'LLM') {
-					// console.log('Chat thread interrupted by a newer chat thread', this.streamState[threadId]?.isRunning)
-					return
-				}
-
-				// llm res aborted
-				if (llmRes.type === 'llmAborted') {
+				if (interruptedWhenIdle) {
 					this._setStreamState(threadId, undefined)
 					return
 				}
-				// llm res error
-				else if (llmRes.type === 'llmError') {
-					// error, should retry
-					if (nAttempts < CHAT_RETRIES) {
-						shouldRetryLLM = true
-						this._setStreamState(threadId, { isRunning: 'idle', interrupt: idleInterruptor })
-						await timeout(RETRY_DELAY)
-						if (interruptedWhenIdle) {
-							this._setStreamState(threadId, undefined)
-							return
-						}
-						else
-							continue // retry
-					}
-					// error, but too many attempts
-					else {
-						const { error } = llmRes
-						const { displayContentSoFar, reasoningSoFar, toolCallSoFar } = this.streamState[threadId].llmInfo
-						this._addMessageToThread(threadId, { role: 'assistant', displayContent: displayContentSoFar, reasoning: reasoningSoFar, anthropicReasoning: null })
-						if (toolCallSoFar) this._addMessageToThread(threadId, { role: 'interrupted_streaming_tool', name: toolCallSoFar.name, mcpServerName: this._computeMCPServerOfToolName(toolCallSoFar.name) })
 
-						this._setStreamState(threadId, { isRunning: undefined, error })
-						this._addUserCheckpoint({ threadId })
+				let shouldRetryLLM = true
+				let nAttempts = 0
+				while (shouldRetryLLM) {
+					shouldRetryLLM = false
+					nAttempts += 1
+
+					type ResTypes =
+						| { type: 'llmDone', toolCall?: RawToolCallObj, info: { fullText: string, fullReasoning: string, anthropicReasoning: AnthropicReasoning[] | null } }
+						| { type: 'llmError', error?: { message: string; fullError: Error | null; } }
+						| { type: 'llmAborted' }
+
+					let resMessageIsDonePromise: (res: ResTypes) => void // resolves when user approves this tool use (or if tool doesn't require approval)
+					const messageIsDonePromise = new Promise<ResTypes>((res, rej) => { resMessageIsDonePromise = res })
+
+					// wait for a slot on this provider (shared with every other thread); the docked thread goes first
+					let llmCancelToken: string | null = null
+					let modelSlot: IDisposable | undefined
+					if (modelSelection) {
+						const limit = parallelRequestsOf(this._settingsService.state.settingsOfProvider[modelSelection.providerName])
+						modelSlot = await this._waitForSlot(threadId, `model:${modelSelection.providerName}`, limit, !backgroundAgent, () => {
+							interruptedWhenIdle = true
+							if (llmCancelToken) this._llmMessageService.abort(llmCancelToken) // interrupted just as the request started
+						})
+						if (!modelSlot || interruptedWhenIdle) { modelSlot?.dispose(); return }
+					}
+					const releaseModelSlot = () => modelSlot?.dispose() // idempotent
+
+					try {
+						llmCancelToken = this._llmMessageService.sendLLMMessage({
+							messagesType: 'chatMessages',
+							chatMode,
+							messages: messages,
+							modelSelection,
+							modelSelectionOptions,
+							overridesOfModel,
+							logging: { loggingName: `Chat - ${chatMode}`, loggingExtras: { threadId, nMessagesSent, chatMode } },
+							separateSystemMessage: separateSystemMessage,
+							onText: ({ fullText, fullReasoning, toolCall }) => {
+								this._setStreamState(threadId, { isRunning: 'LLM', llmInfo: { displayContentSoFar: fullText, reasoningSoFar: fullReasoning, toolCallSoFar: toolCall ?? null }, interrupt: Promise.resolve(() => { if (llmCancelToken) this._llmMessageService.abort(llmCancelToken) }) })
+							},
+							onFinalMessage: async ({ fullText, fullReasoning, toolCall, anthropicReasoning, }) => {
+								releaseModelSlot()
+								resMessageIsDonePromise({ type: 'llmDone', toolCall, info: { fullText, fullReasoning, anthropicReasoning } }) // resolve with tool calls
+							},
+							onError: async (error) => {
+								releaseModelSlot()
+								resMessageIsDonePromise({ type: 'llmError', error: error })
+							},
+							onAbort: () => {
+								releaseModelSlot()
+								// stop the loop to free up the promise, but don't modify state (already handled by whatever stopped it)
+								resMessageIsDonePromise({ type: 'llmAborted' })
+								this._metricsService.capture('Agent loop done (Aborted)', { nMessagesSent, chatMode })
+							},
+						})
+					} catch (e) { releaseModelSlot(); throw e }
+
+					// mark as streaming
+					if (!llmCancelToken) {
+						releaseModelSlot()
+						this._setStreamState(threadId, { isRunning: undefined, error: { message: 'There was an unexpected error when sending your chat message.', fullError: null } })
+						break
+					}
+
+					this._setStreamState(threadId, { isRunning: 'LLM', llmInfo: { displayContentSoFar: '', reasoningSoFar: '', toolCallSoFar: null }, interrupt: Promise.resolve(() => { if (llmCancelToken) this._llmMessageService.abort(llmCancelToken) }) })
+					const llmRes = await messageIsDonePromise // wait for message to complete
+					releaseModelSlot() // already released by the callback that resolved it; kept for safety
+
+					// if something else started running in the meantime
+					if (this.streamState[threadId]?.isRunning !== 'LLM') {
+						// console.log('Chat thread interrupted by a newer chat thread', this.streamState[threadId]?.isRunning)
 						return
 					}
-				}
 
-				// llm res success
-				const { toolCall, info } = llmRes
-
-				this._addMessageToThread(threadId, { role: 'assistant', displayContent: info.fullText, reasoning: info.fullReasoning, anthropicReasoning: info.anthropicReasoning })
-
-				this._setStreamState(threadId, { isRunning: 'idle', interrupt: 'not_needed' }) // just decorative for clarity
-
-				// call tool if there is one
-				if (toolCall) {
-					const mcpTools = this._mcpService.getMCPTools()
-					const mcpTool = mcpTools?.find(t => t.name === toolCall.name)
-
-					const { awaitingUserApproval, interrupted } = await this._runToolCall(threadId, toolCall.name, toolCall.id, mcpTool?.mcpServerName, { preapproved: false, unvalidatedToolParams: toolCall.rawParams })
-					if (interrupted) {
+					// llm res aborted
+					if (llmRes.type === 'llmAborted') {
 						this._setStreamState(threadId, undefined)
 						return
 					}
-					if (awaitingUserApproval) { isRunningWhenEnd = 'awaiting_user' }
-					else { shouldSendAnotherMessage = true }
+					// llm res error
+					else if (llmRes.type === 'llmError') {
+						// error, should retry
+						if (nAttempts < CHAT_RETRIES) {
+							shouldRetryLLM = true
+							this._setStreamState(threadId, { isRunning: 'idle', interrupt: idleInterruptor })
+							await timeout(RETRY_DELAY)
+							if (interruptedWhenIdle) {
+								this._setStreamState(threadId, undefined)
+								return
+							}
+							else
+								continue // retry
+						}
+						// error, but too many attempts
+						else {
+							const { error } = llmRes
+							const { displayContentSoFar, reasoningSoFar, toolCallSoFar } = this.streamState[threadId].llmInfo
+							this._addMessageToThread(threadId, { role: 'assistant', displayContent: displayContentSoFar, reasoning: reasoningSoFar, anthropicReasoning: null })
+							if (toolCallSoFar) this._addMessageToThread(threadId, { role: 'interrupted_streaming_tool', name: toolCallSoFar.name, mcpServerName: this._computeMCPServerOfToolName(toolCallSoFar.name) })
 
-					this._setStreamState(threadId, { isRunning: 'idle', interrupt: 'not_needed' }) // just decorative, for clarity
-				}
+							this._setStreamState(threadId, { isRunning: undefined, error })
+							this._addUserCheckpoint({ threadId })
+							return
+						}
+					}
 
-			} // end while (attempts)
-		} // end while (send message)
+					// llm res success
+					const { toolCall, info } = llmRes
 
-		// if awaiting user approval, keep isRunning true, else end isRunning
-		this._setStreamState(threadId, { isRunning: isRunningWhenEnd })
+					this._addMessageToThread(threadId, { role: 'assistant', displayContent: info.fullText, reasoning: info.fullReasoning, anthropicReasoning: info.anthropicReasoning })
 
-		// add checkpoint before the next user message
-		if (!isRunningWhenEnd) this._addUserCheckpoint({ threadId })
+					this._setStreamState(threadId, { isRunning: 'idle', interrupt: 'not_needed' }) // just decorative for clarity
 
-		// capture number of messages sent
-		this._metricsService.capture('Agent loop done', { nMessagesSent, chatMode })
+					// call tool if there is one
+					if (toolCall) {
+						const mcpTools = this._mcpService.getMCPTools()
+						const mcpTool = mcpTools?.find(t => t.name === toolCall.name)
+
+						const { awaitingUserApproval, interrupted } = await this._runToolCall(threadId, toolCall.name, toolCall.id, mcpTool?.mcpServerName, { preapproved: false, unvalidatedToolParams: toolCall.rawParams })
+						if (interrupted) {
+							this._setStreamState(threadId, undefined)
+							return
+						}
+						if (awaitingUserApproval) { isRunningWhenEnd = 'awaiting_user' }
+						else { shouldSendAnotherMessage = true }
+
+						this._setStreamState(threadId, { isRunning: 'idle', interrupt: 'not_needed' }) // just decorative, for clarity
+					}
+
+				} // end while (attempts)
+			} // end while (send message)
+
+			// if awaiting user approval, keep isRunning true, else end isRunning
+			this._setStreamState(threadId, { isRunning: isRunningWhenEnd })
+
+			// add checkpoint before the next user message
+			if (!isRunningWhenEnd) this._addUserCheckpoint({ threadId })
+
+			// capture number of messages sent
+			this._metricsService.capture('Agent loop done', { nMessagesSent, chatMode })
+		} finally {
+			agentSlot?.dispose() // the loop exited for any reason
+		}
 	}
 
 

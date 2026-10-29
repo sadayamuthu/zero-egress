@@ -3056,6 +3056,9 @@ export const SidebarChat = () => {
 		{isRunning === 'LLM' || isRunning === 'idle' && !toolIsGenerating ? <ProseWrapper>
 			{<IconLoading className='opacity-50 text-sm' />}
 		</ProseWrapper> : null}
+		{isRunning === 'waiting_for_model' ? <ProseWrapper>
+			<span className='opacity-50 text-sm'>Waiting for model</span> <IconLoading className='opacity-50 text-sm' />
+		</ProseWrapper> : null}
 
 
 		{/* error message */}
