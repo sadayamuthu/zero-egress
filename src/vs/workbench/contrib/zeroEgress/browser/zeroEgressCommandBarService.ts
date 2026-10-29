@@ -15,6 +15,8 @@ import { mountZeroEgressCommandBar } from './react/out/zero-egress-editor-widget
 import { deepClone } from '../../../../base/common/objects.js';
 import { InstantiationType, registerSingleton } from '../../../../platform/instantiation/common/extensions.js';
 import { IEditCodeService } from './editCodeServiceInterface.js';
+import { IPendingFileOpsService } from './pendingFileOpsService.js';
+import { onUnexpectedError } from '../../../../base/common/errors.js';
 import { ITextModel } from '../../../../editor/common/model.js';
 import { IModelService } from '../../../../editor/common/services/model.js';
 import { generateUuid } from '../../../../base/common/uuid.js';
@@ -100,6 +102,7 @@ export class ZeroEgressCommandBarService extends Disposable implements IZeroEgre
 		@ICodeEditorService private readonly _codeEditorService: ICodeEditorService,
 		@IModelService private readonly _modelService: IModelService,
 		@IEditCodeService private readonly _editCodeService: IEditCodeService,
+		@IPendingFileOpsService private readonly _pendingFileOpsService: IPendingFileOpsService,
 		@IZeroEgressModelService private readonly _zeroEgressModelService: IZeroEgressModelService,
 	) {
 		super();
@@ -483,6 +486,8 @@ export class ZeroEgressCommandBarService extends Disposable implements IZeroEgre
 		for (const uri of this.sortedURIs) {
 			this._editCodeService.acceptOrRejectAllDiffAreas({ uri, behavior, removeCtrlKs: false })
 		}
+		// pending file creates and deletes
+		this._pendingFileOpsService.resolveAll(behavior).catch(onUnexpectedError)
 	}
 
 
@@ -777,7 +782,8 @@ registerAction2(class extends Action2 {
 		const editCodeService = accessor.get(IEditCodeService);
 		const metricsService = accessor.get(IMetricsService);
 
-		const activeURI = commandBarService.activeURI;
+		// a file with only a pending create/delete has no diffs, so fall back to the focused editor's file
+		const activeURI = commandBarService.activeURI ?? accessor.get(ICodeEditorService).getActiveCodeEditor()?.getModel()?.uri;
 		if (!activeURI) return;
 
 		metricsService.capture('Accept File', { keyboard: true });
@@ -786,6 +792,7 @@ registerAction2(class extends Action2 {
 			behavior: 'accept',
 			removeCtrlKs: true
 		});
+		await accessor.get(IPendingFileOpsService).resolveAll('accept', activeURI);
 	}
 });
 
@@ -808,7 +815,8 @@ registerAction2(class extends Action2 {
 		const editCodeService = accessor.get(IEditCodeService);
 		const metricsService = accessor.get(IMetricsService);
 
-		const activeURI = commandBarService.activeURI;
+		// a file with only a pending create/delete has no diffs, so fall back to the focused editor's file
+		const activeURI = commandBarService.activeURI ?? accessor.get(ICodeEditorService).getActiveCodeEditor()?.getModel()?.uri;
 		if (!activeURI) return;
 
 		metricsService.capture('Reject File', { keyboard: true });
@@ -817,6 +825,7 @@ registerAction2(class extends Action2 {
 			behavior: 'reject',
 			removeCtrlKs: true
 		});
+		await accessor.get(IPendingFileOpsService).resolveAll('reject', activeURI);
 	}
 });
 

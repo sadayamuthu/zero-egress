@@ -6,6 +6,7 @@ import { createDecorator, IInstantiationService } from '../../../../platform/ins
 import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js'
 import { QueryBuilder } from '../../../services/search/common/queryBuilder.js'
 import { ISearchService } from '../../../services/search/common/search.js'
+import { IPendingFileOpsService } from './pendingFileOpsService.js';
 import { IEditCodeService } from './editCodeServiceInterface.js'
 import { ITerminalToolService } from './terminalToolService.js'
 import { LintErrorItem, BuiltinToolCallParams, BuiltinToolResultType, BuiltinToolName } from '../common/toolsServiceTypes.js'
@@ -153,6 +154,7 @@ export class ToolsService implements IToolsService {
 		@IDirectoryStrService private readonly directoryStrService: IDirectoryStrService,
 		@IMarkerService private readonly markerService: IMarkerService,
 		@IZeroEgressSettingsService private readonly zeroEgressSettingsService: IZeroEgressSettingsService,
+		@IPendingFileOpsService pendingFileOpsService: IPendingFileOpsService,
 	) {
 		const queryBuilder = instantiationService.createInstance(QueryBuilder);
 
@@ -396,17 +398,14 @@ export class ToolsService implements IToolsService {
 
 			// ---
 
+			// creates and deletes wait for the user's review (pendingFileOpsService)
 			create_file_or_folder: async ({ uri, isFolder }) => {
-				if (isFolder)
-					await fileService.createFolder(uri)
-				else {
-					await fileService.createFile(uri)
-				}
+				await pendingFileOpsService.create(uri, isFolder)
 				return { result: {} }
 			},
 
 			delete_file_or_folder: async ({ uri, isRecursive }) => {
-				await fileService.del(uri, { recursive: isRecursive })
+				await pendingFileOpsService.markDeleted(uri, !!isRecursive)
 				return { result: {} }
 			},
 
@@ -507,10 +506,10 @@ export class ToolsService implements IToolsService {
 			},
 			// ---
 			create_file_or_folder: (params, result) => {
-				return `URI ${params.uri.fsPath} successfully created.`
+				return `URI ${params.uri.fsPath} created. The user will review the new file.`
 			},
 			delete_file_or_folder: (params, result) => {
-				return `URI ${params.uri.fsPath} successfully deleted.`
+				return `Deletion of ${params.uri.fsPath} is pending the user's review. The file stays on disk until they accept; do not recreate or edit it.`
 			},
 			edit_file: (params, result) => {
 				const lintErrsString = (

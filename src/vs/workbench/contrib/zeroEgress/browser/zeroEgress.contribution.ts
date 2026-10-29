@@ -63,6 +63,7 @@ import './fileService.js'
 
 // register source control management
 import './zeroEgressSCMService.js'
+import './pendingFileOpsService.js'
 import './egressTargetsContribution.js'
 import './localStatusContribution.js'
 
