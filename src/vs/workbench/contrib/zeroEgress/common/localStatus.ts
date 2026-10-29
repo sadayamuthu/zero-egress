@@ -3,10 +3,12 @@
  *  Licensed under the Apache License, Version 2.0. See LICENSE.txt for more information.
  *--------------------------------------------------------------------------------------*/
 
-// Pure logic behind the "Local / LAN / Internet" indicator. It classifies the destinations the app
-// actually uses; it never claims a byte count, because the guard does not count bytes.
+// Pure logic behind the "Local / LAN / Internet" indicator. It classifies every destination the egress
+// guard allows. It does not try to guess which of them are "in use": model lists are polled from every
+// provider's endpoint whether or not a model is selected, and MCP and audit targets can share a host with
+// a provider. It never claims a byte count, because the guard does not count bytes.
 
-import { EgressTarget, isLoopbackHost, isPrivateHost, targetFromUrl } from './egressPolicy.js';
+import { EgressTarget, isLoopbackHost, isPrivateHost } from './egressPolicy.js';
 
 export type LocalStatusKind = 'local' | 'lan' | 'internet';
 
@@ -19,19 +21,6 @@ export interface LocalStatus {
 /** `host:port`, with IPv6 hosts in brackets. */
 export function targetLabel(t: EgressTarget): string {
 	return `${t.host.includes(':') ? `[${t.host}]` : t.host}:${t.port}`;
-}
-
-const sameTarget = (a: EgressTarget, b: EgressTarget) => a.host === b.host && a.port === b.port;
-
-function targetsOf(urls: readonly string[]): EgressTarget[] {
-	return urls.map(u => u ? targetFromUrl(u) : undefined).filter((t): t is EgressTarget => !!t);
-}
-
-/** Drops a target only when it belongs to an unused provider endpoint and to no used one. */
-export function inUseTargets(all: readonly EgressTarget[], unusedProviderEndpoints: readonly string[], usedProviderEndpoints: readonly string[]): EgressTarget[] {
-	const unused = targetsOf(unusedProviderEndpoints);
-	const used = targetsOf(usedProviderEndpoints);
-	return all.filter(t => !unused.some(u => sameTarget(u, t)) || used.some(u => sameTarget(u, t)));
 }
 
 /** Internet beats LAN beats local. */
@@ -65,11 +54,11 @@ export function formatLocalStatus(s: LocalStatus | undefined, blocked: number): 
 			break;
 		case 'lan':
 			text = `$(circle-filled) LAN · ${where}`;
-			tooltip = `Sends to your network: ${s.hosts.join(', ')}`;
+			tooltip = `Connects to your network: ${s.hosts.join(', ')}`;
 			break;
 		case 'internet':
 			text = `$(warning) Internet · ${where}`;
-			tooltip = `Sends to the internet: ${s.hosts.join(', ')}`;
+			tooltip = `Connects to the internet: ${s.hosts.join(', ')}`;
 			break;
 	}
 	if (blocked > 0) {

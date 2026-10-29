@@ -3,24 +3,20 @@
  *  Licensed under the Apache License, Version 2.0. See LICENSE.txt for more information.
  *--------------------------------------------------------------------------------------*/
 
-// Shows where model traffic goes (Local / LAN / Internet) in the status bar and the title bar, and adds the
-// ZeroEgress mark to the title bar. Only endpoints in use count (see common/localStatus.ts). With a native
-// title bar there is no custom title area, so only the status bar entry shows.
+// Shows where the app may connect (Local / LAN / Internet) in the status bar and the title bar, and adds the
+// ZeroEgress mark to the title bar. Every destination the egress guard allows counts (see common/localStatus.ts).
 
 import { $, append } from '../../../../base/browser/dom.js';
 import { mainWindow } from '../../../../base/browser/window.js';
 import { Disposable, toDisposable } from '../../../../base/common/lifecycle.js';
 import { CommandsRegistry, ICommandService } from '../../../../platform/commands/common/commands.js';
-import { themeColorFromId } from '../../../../platform/theme/common/themeService.js';
 import { IWorkbenchContribution, registerWorkbenchContribution2, WorkbenchPhase } from '../../../common/contributions.js';
-import { STATUS_BAR_WARNING_ITEM_BACKGROUND } from '../../../common/theme.js';
 import { IWorkbenchLayoutService, Parts } from '../../../services/layout/browser/layoutService.js';
 import { IOutputService } from '../../../services/output/common/output.js';
 import { IStatusbarEntryAccessor, IStatusbarService, StatusbarAlignment } from '../../../services/statusbar/browser/statusbar.js';
 import { IEgressGuardService } from '../common/egressGuardService.js';
-import { formatLocalStatus, inUseTargets, LocalStatus, localStatusOf } from '../common/localStatus.js';
+import { formatLocalStatus, LocalStatus, localStatusOf } from '../common/localStatus.js';
 import { IZeroEgressSettingsService } from '../common/zeroEgressSettingsService.js';
-import { providerNames } from '../common/zeroEgressSettingsTypes.js';
 import { NETWORK_OUTPUT_CHANNEL_ID } from './egressTargetsContribution.js';
 
 const SHOW_NETWORK_LOG_COMMAND_ID = 'zeroEgress.showNetworkLog';
@@ -76,14 +72,9 @@ class LocalStatusContribution extends Disposable implements IWorkbenchContributi
 
 	private async refresh(): Promise<void> {
 		const seq = ++this.refreshSeq;
-		const { settingsOfProvider, modelSelectionOfFeature } = this.settingsService.state;
-		const usedProviders = new Set(Object.values(modelSelectionOfFeature).filter(s => !!s).map(s => s!.providerName));
-		const endpointOf = (p: typeof providerNames[number]) => (settingsOfProvider[p] as { endpoint?: string }).endpoint ?? '';
-		const used = providerNames.filter(p => usedProviders.has(p)).map(endpointOf);
-		const unused = providerNames.filter(p => !usedProviders.has(p)).map(endpointOf);
 		let status: LocalStatus | undefined;
 		try {
-			status = localStatusOf(inUseTargets(await this.egressGuardService.getTargets(), unused, used));
+			status = localStatusOf(await this.egressGuardService.getTargets());
 		} catch {
 			status = undefined;
 		}
@@ -101,7 +92,7 @@ class LocalStatusContribution extends Disposable implements IWorkbenchContributi
 			tooltip,
 			ariaLabel: text.replace(/\$\([^)]*\)\s*/g, ''),
 			command: SHOW_NETWORK_LOG_COMMAND_ID,
-			backgroundColor: this.status?.kind === 'internet' ? themeColorFromId(STATUS_BAR_WARNING_ITEM_BACKGROUND) : undefined,
+			kind: this.status?.kind === 'internet' ? 'warning' as const : 'standard' as const, // warning kind sets both foreground and background
 		};
 		if (this.entry) {
 			this.entry.update(props);

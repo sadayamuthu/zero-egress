@@ -6,7 +6,7 @@
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { targetFromUrl } from '../egressPolicy.js';
-import { formatLocalStatus, inUseTargets, LocalStatus, localStatusOf, targetLabel } from '../localStatus.js';
+import { formatLocalStatus, LocalStatus, localStatusOf, targetLabel } from '../localStatus.js';
 
 const T = (u: string) => targetFromUrl(u)!;
 
@@ -30,19 +30,11 @@ suite('localStatus', () => {
 		assert.strictEqual(targetLabel(T('http://[fd00::1]:8000')), '[fd00::1]:8000');
 	});
 
-	test('unused provider dropped', () => {
+	test('a configured LAN provider counts even when no feature selects it', () => {
+		// model lists are polled from every provider's endpoint, used or not (refreshModelService),
+		// so every target the guard allows counts
 		const all = [T('http://localhost:11434'), T('http://10.0.0.5:8000')];
-		assert.deepStrictEqual(inUseTargets(all, ['http://10.0.0.5:8000/v1'], ['http://localhost:11434']), [T('http://localhost:11434')]);
-	});
-
-	test('shared endpoint stays', () => {
-		const all = [T('http://10.0.0.5:8000')];
-		assert.deepStrictEqual(inUseTargets(all, ['http://10.0.0.5:8000/a'], ['http://10.0.0.5:8000/b']), all);
-	});
-
-	test('ignores junk', () => {
-		const all = [T('http://localhost:11434')];
-		assert.deepStrictEqual(inUseTargets(all, ['', 'not a url'], ['']), all);
+		assert.deepStrictEqual(localStatusOf(all), { kind: 'lan', hosts: ['10.0.0.5:8000'] });
 	});
 
 	test('format', () => {
