@@ -225,3 +225,13 @@
 	color: var(--vscode-statusBarItem-warningForeground);
 	background-color: var(--vscode-statusBarItem-warningBackground);
 }
+
+/* A file the agent wants to delete, pending review (pendingDeleteDecorations.ts) */
+.monaco-editor .ze-pending-delete {
+	background-color: var(--vscode-zeroEgress-redBG);
+}
+
+.monaco-editor .ze-pending-delete-text {
+	text-decoration: line-through;
+	opacity: 0.8;
+}

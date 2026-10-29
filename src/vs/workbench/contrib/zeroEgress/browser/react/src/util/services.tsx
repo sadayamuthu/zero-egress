@@ -44,6 +44,8 @@ import { ILanguageService } from '../../../../../../../editor/common/languages/l
 import { IZeroEgressModelService } from '../../../../common/zeroEgressModelService.js'
 import { IWorkspaceContextService } from '../../../../../../../platform/workspace/common/workspace.js'
 import { IZeroEgressCommandBarService } from '../../../zeroEgressCommandBarService.js'
+import { IPendingFileOpsService } from '../../../pendingFileOpsService.js'
+import { PendingFileOp } from '../../../../common/pendingFileOps.js'
 import { INativeHostService } from '../../../../../../../platform/native/common/native.js';
 import { IEditCodeService } from '../../../editCodeServiceInterface.js'
 import { IToolsService } from '../../../toolsService.js'
@@ -81,6 +83,7 @@ const commandBarURIStateListeners: Set<(uri: URI) => void> = new Set();
 const activeURIListeners: Set<(uri: URI | null) => void> = new Set();
 
 const mcpListeners: Set<() => void> = new Set()
+const pendingFileOpsListeners: Set<() => void> = new Set()
 
 
 // must call this before you can use any of the hooks below
@@ -175,6 +178,12 @@ export const _registerServices = (accessor: ServicesAccessor) => {
 		})
 	)
 
+	disposables.push(
+		accessor.get(IPendingFileOpsService).onDidChange(() => {
+			pendingFileOpsListeners.forEach(l => l())
+		})
+	)
+
 
 	return disposables
 }
@@ -226,6 +235,7 @@ const getReactAccessor = (accessor: ServicesAccessor) => {
 		IExtensionManagementService: accessor.get(IExtensionManagementService),
 		IExtensionTransferService: accessor.get(IExtensionTransferService),
 		IMCPService: accessor.get(IMCPService),
+		IPendingFileOpsService: accessor.get(IPendingFileOpsService),
 
 		IStorageService: accessor.get(IStorageService),
 
@@ -398,6 +408,19 @@ export const useMCPServiceState = () => {
 		const listener = () => { ss(mcpService.state) }
 		mcpListeners.add(listener);
 		return () => { mcpListeners.delete(listener) };
+	}, []);
+	return s
+}
+
+// agent file creates and deletes waiting for review
+export const usePendingFileOps = (): readonly PendingFileOp[] => {
+	const accessor = useAccessor()
+	const pendingFileOpsService = accessor.get('IPendingFileOpsService')
+	const [s, ss] = useState(pendingFileOpsService.ops)
+	useEffect(() => {
+		const listener = () => { ss(pendingFileOpsService.ops) }
+		pendingFileOpsListeners.add(listener);
+		return () => { pendingFileOpsListeners.delete(listener) };
 	}, []);
 	return s
 }

@@ -6,7 +6,7 @@
 import React, { ButtonHTMLAttributes, FormEvent, FormHTMLAttributes, Fragment, KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 
-import { useAccessor, useChatThreadsState, useChatThreadsStreamState, useSettingsState, useActiveURI, useCommandBarState, useFullChatThreadsStreamState } from '../util/services.js';
+import { useAccessor, useChatThreadsState, useChatThreadsStreamState, useSettingsState, useActiveURI, useCommandBarState, useFullChatThreadsStreamState, usePendingFileOps } from '../util/services.js';
 import { ScrollType } from '../../../../../../../editor/common/editorCommon.js';
 
 import { ChatMarkdownRender, ChatMessageLocation, getApplyBoxId } from '../markdown/ChatMarkdownRender.js';
@@ -2581,7 +2581,8 @@ const _ChatBubble = ({ threadId, chatMessage, currCheckpointIdx, isCommitted, me
 
 const CommandBarInChat = () => {
 	const { stateOfURI: commandBarStateOfURI, sortedURIs: sortedCommandBarURIs } = useCommandBarState()
-	const numFilesChanged = sortedCommandBarURIs.length
+	const pendingFileOps = usePendingFileOps()
+	const numFilesChanged = new Set([...sortedCommandBarURIs.map(uri => uri.fsPath), ...pendingFileOps.map(op => op.path)]).size
 
 	const accessor = useAccessor()
 	const editCodeService = accessor.get('IEditCodeService')
@@ -2618,8 +2619,8 @@ const CommandBarInChat = () => {
 
 
 	const isFinishedMakingThreadChanges = (
-		// there are changed files
-		commandBarState.sortedURIs.length !== 0
+		// there are changed files (edits, or pending creates/deletes)
+		numFilesChanged !== 0
 		// none of the files are streaming
 		&& commandBarState.sortedURIs.every(uri => !commandBarState.stateOfURI[uri.fsPath]?.isStreaming)
 	)
@@ -2646,7 +2647,9 @@ const CommandBarInChat = () => {
 	// acceptall + rejectall
 	// popup info about each change (each with num changes + acceptall + rejectall of their own)
 
-	const numChangesPending = sortedCommandBarURIs.reduce((n, uri) => n + (commandBarStateOfURI[uri.fsPath]?.sortedDiffIds?.length ?? 0), 0)
+	const numChangesPending = sortedCommandBarURIs.reduce((n, uri) => n + (commandBarStateOfURI[uri.fsPath]?.sortedDiffIds?.length ?? 0), 0) + pendingFileOps.length
+	const pendingFileOpsService = accessor.get('IPendingFileOpsService')
+	const zeroEgressCommandBarService = accessor.get('IZeroEgressCommandBarService')
 	const numFilesChangedStr = numFilesChanged === 0 ? 'No files with changes'
 		: `${numChangesPending} change${numChangesPending === 1 ? '' : 's'} pending · ${numFilesChanged} file${numFilesChanged === 1 ? '' : 's'}`
 	const keybindingService = accessor.get('IKeybindingService')
@@ -2665,30 +2668,53 @@ const CommandBarInChat = () => {
 		<button
 			type='button'
 			className='px-2 py-0.5 rounded-[6px] border border-ze-border-2 bg-ze-bg-2 text-ze-fg-1 hover:bg-ze-bg-2-hover cursor-pointer'
-			onClick={() => {
-				sortedCommandBarURIs.forEach(uri => {
-					editCodeService.acceptOrRejectAllDiffAreas({ uri, removeCtrlKs: true, behavior: "reject", _addToHistory: true, });
-				});
-			}}
+			onClick={() => { zeroEgressCommandBarService.acceptOrRejectAllFiles({ behavior: 'reject' }) }}
 			{...rejectAllKeybinding ? { 'data-tooltip-id': 'ze-tooltip', 'data-tooltip-place': 'top', 'data-tooltip-content': rejectAllKeybinding } : {}}
 		>Reject all</button>
 
 		<button
 			type='button'
 			className='px-2 py-0.5 rounded-[6px] bg-ze-accent text-ze-on-accent hover:bg-ze-accent-hover font-medium cursor-pointer'
-			onClick={() => {
-				sortedCommandBarURIs.forEach(uri => {
-					editCodeService.acceptOrRejectAllDiffAreas({ uri, removeCtrlKs: true, behavior: "accept", _addToHistory: true, });
-				});
-			}}
+			onClick={() => { zeroEgressCommandBarService.acceptOrRejectAllFiles({ behavior: 'accept' }) }}
 			{...acceptAllKeybinding ? { 'data-tooltip-id': 'ze-tooltip', 'data-tooltip-place': 'top', 'data-tooltip-content': acceptAllKeybinding } : {}}
 		>Accept all</button>
 
 	</div>
 
 
+	const fileOpRows = pendingFileOps.map(op => (
+		<div key={`op-${op.id}`} className="flex justify-between items-center">
+			<div className="flex items-center gap-2">
+				<span
+					className={`text-ze-fg-3 ${op.isFolder && op.kind === 'delete' ? '' : 'hover:brightness-125 cursor-pointer'}`}
+					onClick={() => { if (!(op.isFolder && op.kind === 'delete')) { zeroEgressOpenFileFn(URI.file(op.path), accessor) } }}
+				>{getBasename(op.path)}</span>
+				{op.kind === 'create'
+					? <span className="text-ze-ok">new file</span>
+					: <span className="line-through text-[var(--vscode-errorForeground)]">deleted</span>}
+			</div>
+			<div className="flex items-center gap-0.5">
+				<IconShell1
+					Icon={X}
+					onClick={() => { pendingFileOpsService.resolve(op.id, 'reject') }}
+					data-tooltip-id='ze-tooltip'
+					data-tooltip-place='top'
+					data-tooltip-content={op.kind === 'create' ? 'Reject (remove the new file)' : 'Reject (keep the file)'}
+				/>
+				<IconShell1
+					Icon={Check}
+					onClick={() => { pendingFileOpsService.resolve(op.id, 'accept') }}
+					data-tooltip-id='ze-tooltip'
+					data-tooltip-place='top'
+					data-tooltip-content={op.kind === 'create' ? 'Accept (keep the new file)' : 'Accept (delete the file)'}
+				/>
+			</div>
+		</div>
+	))
+
 	// !select-text cursor-auto
 	const fileDetailsContent = <div className="px-2 gap-1 w-full overflow-y-auto">
+		{fileOpRows}
 		{sortedCommandBarURIs.map((uri, i) => {
 			const basename = getBasename(uri.fsPath)
 
