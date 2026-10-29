@@ -16,7 +16,7 @@ import { ErrorDisplay } from './ErrorDisplay.js';
 import { BlockCode, TextAreaFns, ZeroEgressCustomDropdownBox, ZeroEgressInputBox2, ZeroEgressSlider, ZeroEgressSwitch, ZeroEgressDiffEditor } from '../util/inputs.js';
 import { ModelDropdown, } from '../zero-egress-settings-tsx/ModelDropdown.js';
 import { PastThreadsList } from './SidebarThreadSelector.js';
-import { ZERO_EGRESS_CTRL_L_ACTION_ID } from '../../../actionIDs.js';
+import { ZERO_EGRESS_ACCEPT_ALL_DIFFS_ACTION_ID, ZERO_EGRESS_CTRL_L_ACTION_ID, ZERO_EGRESS_REJECT_ALL_DIFFS_ACTION_ID } from '../../../actionIDs.js';
 import { ZERO_EGRESS_OPEN_SETTINGS_ACTION_ID } from '../../../zeroEgressSettingsPane.js';
 import { ChatMode, displayInfoOfProviderName, FeatureName, isFeatureNameDisabled } from '../../../../../../../workbench/contrib/zeroEgress/common/zeroEgressSettingsTypes.js';
 import { ICommandService } from '../../../../../../../platform/commands/common/commands.js';
@@ -343,10 +343,10 @@ export const ZeroEgressChatArea: React.FC<ZeroEgressChatAreaProps> = ({
 			className={`
 				gap-x-1
                 flex flex-col p-2 relative input text-left shrink-0
-                rounded-md
-                bg-ze-bg-1
+                rounded-[10px]
+                bg-ze-bg-2
 				transition-all duration-200
-				border border-ze-border-3 focus-within:border-ze-border-1 hover:border-ze-border-1
+				border border-ze-border-2 focus-within:border-ze-accent hover:border-ze-border-1
 				max-h-[80vh] overflow-y-auto
                 ${className}
             `}
@@ -422,7 +422,7 @@ export const ButtonSubmit = ({ className, disabled, ...props }: ButtonProps & Re
 	return <button
 		type='button'
 		className={`rounded-full flex-shrink-0 flex-grow-0 flex items-center justify-center
-			${disabled ? 'bg-vscode-disabled-fg cursor-default' : 'bg-white cursor-pointer'}
+			${disabled ? 'bg-vscode-disabled-fg text-ze-bg-2 cursor-default' : 'bg-ze-accent text-ze-on-accent hover:bg-ze-accent-hover cursor-pointer'}
 			${className}
 		`}
 		// data-tooltip-id='ze-tooltip'
@@ -437,7 +437,7 @@ export const ButtonSubmit = ({ className, disabled, ...props }: ButtonProps & Re
 export const ButtonStop = ({ className, ...props }: ButtonHTMLAttributes<HTMLButtonElement>) => {
 	return <button
 		className={`rounded-full flex-shrink-0 flex-grow-0 cursor-pointer flex items-center justify-center
-			bg-white
+			bg-ze-accent text-ze-on-accent hover:bg-ze-accent-hover
 			${className}
 		`}
 		type='button'
@@ -820,9 +820,9 @@ const ToolHeaderWrapper = ({
 	>{desc1}</span>
 
 	return (<div className=''>
-		<div className={`w-full border border-ze-border-3 rounded px-2 py-1 bg-ze-bg-3 overflow-hidden ${className}`}>
+		<div className={`w-full border-l-2 border-ze-border-4 pl-2 py-0.5 text-sm overflow-hidden ${className}`}>
 			{/* header */}
-			<div className={`select-none flex items-center min-h-[24px]`}>
+			<div className={`select-none flex items-center min-h-[20px]`}>
 				<div className={`flex items-center w-full gap-x-2 overflow-hidden justify-between ${isRejected ? 'line-through' : ''}`}>
 					{/* left */}
 					<div // container for if desc1 is clickable
@@ -1187,9 +1187,9 @@ const UserMessageComponent = ({ chatMessage, messageIdx, isCheckpointGhost, curr
 		<div
 			// style chatbubble according to role
 			className={`
-            text-left rounded-lg max-w-full
+            text-left rounded-[10px] max-w-full
             ${mode === 'edit' ? ''
-					: mode === 'display' ? 'p-2 flex flex-col bg-ze-bg-1 text-ze-fg-1 overflow-x-auto cursor-pointer' : ''
+					: mode === 'display' ? 'px-3 py-2 flex flex-col bg-[color-mix(in_srgb,var(--ze-accent)_12%,var(--ze-bg-2))] text-ze-fg-1 overflow-x-auto cursor-pointer' : ''
 				}
         `}
 			onClick={() => { if (mode === 'display') { onOpenEdit() } }}
@@ -2646,57 +2646,43 @@ const CommandBarInChat = () => {
 	// acceptall + rejectall
 	// popup info about each change (each with num changes + acceptall + rejectall of their own)
 
+	const numChangesPending = sortedCommandBarURIs.reduce((n, uri) => n + (commandBarStateOfURI[uri.fsPath]?.sortedDiffIds?.length ?? 0), 0)
 	const numFilesChangedStr = numFilesChanged === 0 ? 'No files with changes'
-		: `${sortedCommandBarURIs.length} file${numFilesChanged === 1 ? '' : 's'} with changes`
+		: `${numChangesPending} change${numChangesPending === 1 ? '' : 's'} pending · ${numFilesChanged} file${numFilesChanged === 1 ? '' : 's'}`
+	const keybindingService = accessor.get('IKeybindingService')
+	const acceptAllKeybinding = keybindingService.lookupKeybinding(ZERO_EGRESS_ACCEPT_ALL_DIFFS_ACTION_ID)?.getLabel()
+	const rejectAllKeybinding = keybindingService.lookupKeybinding(ZERO_EGRESS_REJECT_ALL_DIFFS_ACTION_ID)?.getLabel()
 
 
 
 
 	const acceptRejectAllButtons = <div
 		// do this with opacity so that the height remains the same at all times
-		className={`flex items-center gap-0.5
+		className={`flex items-center gap-1.5 flex-shrink-0
 			${isFinishedMakingThreadChanges ? '' : 'opacity-0 pointer-events-none'}`
 		}
 	>
-		<IconShell1 // RejectAllButtonWrapper
-			// text="Reject All"
-			// className="text-xs"
-			Icon={X}
+		<button
+			type='button'
+			className='px-2 py-0.5 rounded-[6px] border border-ze-border-2 bg-ze-bg-2 text-ze-fg-1 hover:bg-ze-bg-2-hover cursor-pointer'
 			onClick={() => {
 				sortedCommandBarURIs.forEach(uri => {
-					editCodeService.acceptOrRejectAllDiffAreas({
-						uri,
-						removeCtrlKs: true,
-						behavior: "reject",
-						_addToHistory: true,
-					});
+					editCodeService.acceptOrRejectAllDiffAreas({ uri, removeCtrlKs: true, behavior: "reject", _addToHistory: true, });
 				});
 			}}
-			data-tooltip-id='ze-tooltip'
-			data-tooltip-place='top'
-			data-tooltip-content='Reject all'
-		/>
+			{...rejectAllKeybinding ? { 'data-tooltip-id': 'ze-tooltip', 'data-tooltip-place': 'top', 'data-tooltip-content': rejectAllKeybinding } : {}}
+		>Reject all</button>
 
-		<IconShell1 // AcceptAllButtonWrapper
-			// text="Accept All"
-			// className="text-xs"
-			Icon={Check}
+		<button
+			type='button'
+			className='px-2 py-0.5 rounded-[6px] bg-ze-accent text-ze-on-accent hover:bg-ze-accent-hover font-medium cursor-pointer'
 			onClick={() => {
 				sortedCommandBarURIs.forEach(uri => {
-					editCodeService.acceptOrRejectAllDiffAreas({
-						uri,
-						removeCtrlKs: true,
-						behavior: "accept",
-						_addToHistory: true,
-					});
+					editCodeService.acceptOrRejectAllDiffAreas({ uri, removeCtrlKs: true, behavior: "accept", _addToHistory: true, });
 				});
 			}}
-			data-tooltip-id='ze-tooltip'
-			data-tooltip-place='top'
-			data-tooltip-content='Accept all'
-		/>
-
-
+			{...acceptAllKeybinding ? { 'data-tooltip-id': 'ze-tooltip', 'data-tooltip-place': 'top', 'data-tooltip-content': acceptAllKeybinding } : {}}
+		>Accept all</button>
 
 	</div>
 
@@ -2781,7 +2767,7 @@ const CommandBarInChat = () => {
 
 	const fileDetailsButton = (
 		<button
-			className={`flex items-center gap-1 rounded ${numFilesChanged === 0 ? 'cursor-pointer' : 'cursor-pointer hover:brightness-125 transition-all duration-200'}`}
+			className={`flex items-center gap-1 rounded min-w-0 ${numFilesChanged === 0 ? 'cursor-pointer' : 'cursor-pointer hover:brightness-125 transition-all duration-200'}`}
 			onClick={() => isFileDetailsOpened ? setFileDetailsOpenedState('user-closed') : setFileDetailsOpenedState('user-opened')}
 			type='button'
 			disabled={numFilesChanged === 0}
@@ -2794,9 +2780,14 @@ const CommandBarInChat = () => {
 				}}
 				xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="18 15 12 9 6 15"></polyline>
 			</svg>
-			{numFilesChangedStr}
+			<span className='truncate'>{numFilesChangedStr}</span>
 		</button>
 	)
+
+	// Shown only while there is something to review, or while the agent is working (for its status)
+	if (numFilesChanged === 0 && !chatThreadsStreamState?.isRunning) {
+		return null
+	}
 
 	return (
 		<>
@@ -2819,15 +2810,15 @@ const CommandBarInChat = () => {
 			<div
 				className={`
 					select-none
-					flex w-full rounded-t-lg bg-ze-bg-3
-					text-ze-fg-3 text-xs text-nowrap
-					border-t border-l border-r border-zinc-300/10
+					flex w-full items-center rounded-t-[10px] bg-ze-bg-2
+					text-ze-fg-2 text-xs text-nowrap
+					border-t border-l border-r border-ze-border-2
 
-					px-2 py-1
+					px-2.5 py-1.5 gap-2
 					justify-between
 				`}
 			>
-				<div className="flex gap-2 items-center">
+				<div className="flex gap-2 items-center min-w-0">
 					{fileDetailsButton}
 				</div>
 				<div className="flex gap-2 items-center">
@@ -3078,7 +3069,7 @@ export const SidebarChat = () => {
 		<ZeroEgressInputBox2
 			enableAtToMention
 			className={`min-h-[81px] px-0.5 py-0.5`}
-			placeholder={`@ to mention, ${keybindingString ? `${keybindingString} to add a selection. ` : ''}Enter instructions...`}
+			placeholder={`Ask, or @ a file…${keybindingString ? ` (${keybindingString} adds the selection)` : ''}`}
 			onChangeText={onChangeText}
 			onKeyDown={onKeyDown}
 			onFocus={() => { chatThreadsService.setCurrentlyFocusedMessageIdx(undefined) }}
