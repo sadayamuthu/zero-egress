@@ -32,4 +32,12 @@ import { resolveAgentPath } from '../agentPaths.js';
 	test('other absolute path is refused', () => {
 		assert.throws(() => resolveAgentPath('/etc/hosts', roots), /Path is outside this agent's worktree: \/etc\/hosts/);
 	});
+
+	test('.git path segments are refused', () => {
+		for (const p of ['/data/wt/ab12cd34/pkg/.git', '/data/wt/ab12cd34/pkg/.git/config', '/repo/pkg/sub/.git/hooks/pre-commit', '.git/HEAD', 'sub/.GIT/x']) {
+			assert.throws(() => resolveAgentPath(p, roots), (e: Error) => e.message === `Path is outside this agent's worktree: ${p}`, p);
+		}
+		assert.strictEqual(resolveAgentPath('/repo/pkg/.github/workflows/ci.yml', roots), '/data/wt/ab12cd34/pkg/.github/workflows/ci.yml');
+		assert.strictEqual(resolveAgentPath('/repo/pkg/a.git', roots), '/data/wt/ab12cd34/pkg/a.git');
+	});
 });

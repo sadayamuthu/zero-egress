@@ -5,7 +5,7 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { acceptHunk, classifyHunk, computeHunks, rejectHunk, reviewFile } from '../agentReview.js';
+import { acceptHunk, classifyHunk, computeHunks, decodeReviewText, linesMatch, minimalEdit, rejectHunk, reviewFile } from '../agentReview.js';
 
 suite('agentReview', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
@@ -109,5 +109,55 @@ suite('agentReview', () => {
 		const r = reviewFile('f', 'a', 'b', 'a', true);
 		assert.strictEqual(r.kind, 'binary');
 		assert.deepStrictEqual(r.hunks, []);
+	});
+
+	test('linesMatch ignores a trailing newline and line endings only', () => {
+		assert.strictEqual(linesMatch('a\nb\n', 'a\nb'), true);
+		assert.strictEqual(linesMatch('a\r\nb\r\n', 'a\nb\n'), true);
+		assert.strictEqual(linesMatch(null, null), true);
+		assert.strictEqual(linesMatch(null, ''), false);
+		assert.strictEqual(linesMatch('', null), false);
+		assert.strictEqual(linesMatch('a\n', 'b\n'), false);
+	});
+
+	test('accepting a hunk that only differs in the trailing newline leaves nothing pending', () => {
+		const base = 'a\nb\n', agent = 'a\nB';
+		const [hunk] = computeHunks(base, agent);
+		const r = acceptHunk(classifyHunk(hunk, base, base), base, base);
+		assert.strictEqual(r.base, 'a\nB\n');
+		assert.strictEqual(linesMatch(r.base, agent), true);
+		assert.deepStrictEqual(computeHunks(r.base, agent), []);
+	});
+
+	test('CRLF agent against an LF base has no hunks and matches', () => {
+		assert.deepStrictEqual(computeHunks('a\nb\n', 'a\r\nb\r\n'), []);
+		assert.strictEqual(linesMatch('a\nb\n', 'a\r\nb\r\n'), true);
+	});
+
+	test('decodeReviewText strips a BOM and refuses bytes that are not UTF-8', () => {
+		assert.deepStrictEqual(decodeReviewText(new Uint8Array([0x61, 0x0a])), { text: 'a\n', bom: false });
+		assert.deepStrictEqual(decodeReviewText(new Uint8Array([0xef, 0xbb, 0xbf, 0x61, 0x0a])), { text: 'a\n', bom: true });
+		assert.deepStrictEqual(decodeReviewText(new Uint8Array([0xc3, 0xa9])), { text: '\u00e9', bom: false });
+		assert.strictEqual(decodeReviewText(new Uint8Array([0x63, 0x61, 0x66, 0xe9, 0x0a])), undefined); // latin1 "café"
+		assert.deepStrictEqual(decodeReviewText(new Uint8Array([0xef, 0xbf, 0xbd])), { text: '\ufffd', bom: false }); // a real U+FFFD is fine
+	});
+
+	test('minimalEdit replaces only the changed lines', () => {
+		const apply = (old: string, e: { start: number; end: number; text: string }) => old.slice(0, e.start) + e.text + old.slice(e.end);
+		const cases: [string, string][] = [
+			['a\nb\nc\n', 'a\nB\nc\n'],
+			['a\nb\nc\n', 'a\nb\nc\n'],
+			['a\nb', 'a\nb\nc'],
+			['x\n', ''],
+			['', 'new\n'],
+			['a\nb\nb\nc\n', 'a\nb\nc\n'],
+			['a\r\nb\r\nc\r\n', 'a\r\nX\r\nY\r\nc\r\n'],
+		];
+		for (const [old, next] of cases) {
+			assert.strictEqual(apply(old, minimalEdit(old, next)), next, JSON.stringify([old, next]));
+		}
+		assert.deepStrictEqual(minimalEdit('a\nb\nc\n', 'a\nB\nc\n'), { start: 2, end: 4, text: 'B\n' });
+		assert.deepStrictEqual(minimalEdit('a\nb\nc\n', 'a\nb\nc\n'), { start: 6, end: 6, text: '' });
+		assert.deepStrictEqual(minimalEdit('a\nb\nc\nd\n', 'a\nb\nc\nd\ne\n'), { start: 8, end: 8, text: 'e\n' });
 	});
 });

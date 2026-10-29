@@ -24,6 +24,10 @@ import { VSBuffer } from '../../../../base/common/buffer.js'
 import { AGENT_WORKTREE_REMOVED_MESSAGE, agentRootOf, ToolRunContext } from '../common/backgroundAgentTypes.js'
 import { applySearchReplaceBlocks } from '../common/helpers/searchReplace.js'
 import { checkTerminalOwner } from '../common/terminalOwnership.js'
+import { IMainProcessService } from '../../../../platform/ipc/common/mainProcessService.js'
+import { ProxyChannel } from '../../../../base/parts/ipc/common/ipc.js'
+import { IZeroEgressWorktreeService, WORKTREE_CHANNEL } from '../common/worktreeTypes.js'
+import { extUriBiasedIgnorePathCase } from '../../../../base/common/resources.js'
 
 
 // tool use for AI
@@ -165,8 +169,17 @@ export class ToolsService implements IToolsService {
 		@IMarkerService private readonly markerService: IMarkerService,
 		@IZeroEgressSettingsService private readonly zeroEgressSettingsService: IZeroEgressSettingsService,
 		@IPendingFileOpsService pendingFileOpsService: IPendingFileOpsService,
+		@IMainProcessService mainProcessService: IMainProcessService,
 	) {
 		const queryBuilder = instantiationService.createInstance(QueryBuilder);
+		const worktreeService = ProxyChannel.toService<IZeroEgressWorktreeService>(mainProcessService.getChannel(WORKTREE_CHANNEL))
+
+		// background writes, creates and deletes never ask, so a symlink in the worktree must not lead them outside it:
+		// the real path of the nearest existing ancestor has to be inside the agent's real root (paths were already confined lexically)
+		const checkBackgroundTarget = async (uri: URI, ctx: ToolRunContext) => {
+			if (ctx.kind !== 'background') return
+			await worktreeService.checkAgentPath(ctx.agent.worktreePath, ctx.agent.subdir, uri.fsPath)
+		}
 
 		// background agents read and write their worktree on disk directly (no text models, no diff zones)
 		const readDiskText = async (uri: URI): Promise<{ text: string, crlf: boolean } | null> => {
@@ -438,7 +451,8 @@ export class ToolsService implements IToolsService {
 			},
 
 			read_lint_errors: async ({ uri }, ctx) => {
-				backgroundRootOf(ctx)
+				// the worktree's files are not open in the editor, so there are no markers for them
+				if (backgroundRootOf(ctx) !== undefined) return { result: { lintErrors: null } }
 				await timeout(1000)
 				const { lintErrors } = this._getLintErrors(uri)
 				return { result: { lintErrors } }
@@ -450,6 +464,7 @@ export class ToolsService implements IToolsService {
 			// background: they go straight to disk in the agent's worktree, reviewed later as a whole
 			create_file_or_folder: async ({ uri, isFolder }, ctx) => {
 				if (backgroundRootOf(ctx) !== undefined) {
+					await checkBackgroundTarget(uri, ctx)
 					if (await fileService.exists(uri)) {
 						throw new Error(`${uri.fsPath} already exists. Edit it instead of creating it.`)
 					}
@@ -462,7 +477,12 @@ export class ToolsService implements IToolsService {
 			},
 
 			delete_file_or_folder: async ({ uri, isRecursive }, ctx) => {
-				if (backgroundRootOf(ctx) !== undefined) {
+				const root = backgroundRootOf(ctx)
+				if (root !== undefined) {
+					if (extUriBiasedIgnorePathCase.isEqual(uri, URI.file(root))) {
+						throw new Error(`Cannot delete this agent's root folder: ${uri.fsPath}`)
+					}
+					await checkBackgroundTarget(uri, ctx)
 					const stat = await fileService.stat(uri).catch(() => undefined)
 					if (!stat) {
 						throw new Error(`${uri.fsPath} does not exist.`)
@@ -479,6 +499,7 @@ export class ToolsService implements IToolsService {
 
 			rewrite_file: async ({ uri, newContent }, ctx) => {
 				if (backgroundRootOf(ctx) !== undefined) {
+					await checkBackgroundTarget(uri, ctx)
 					const disk = await readDiskText(uri)
 					await writeDiskText(uri, newContent, disk?.crlf ?? false)
 					return { result: Promise.resolve({ lintErrors: null }) }
@@ -500,6 +521,7 @@ export class ToolsService implements IToolsService {
 
 			edit_file: async ({ uri, searchReplaceBlocks }, ctx) => {
 				if (backgroundRootOf(ctx) !== undefined) {
+					await checkBackgroundTarget(uri, ctx)
 					const disk = await readDiskText(uri)
 					let newText: string
 					try {
@@ -598,7 +620,8 @@ export class ToolsService implements IToolsService {
 				}).join('\n\n');
 				return lines;
 			},
-			read_lint_errors: (params, result) => {
+			read_lint_errors: (params, result, ctx) => {
+				if (ctx?.kind === 'background') return 'Lint information is not available in background agents.'
 				return result.lintErrors ?
 					stringifyLintErrors(result.lintErrors)
 					: 'No lint errors found.'

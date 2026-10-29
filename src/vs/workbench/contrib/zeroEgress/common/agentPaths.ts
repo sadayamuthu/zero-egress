@@ -20,10 +20,17 @@ const isUnder = (p: string, root: string) => {
 	return a === b || a.startsWith(b.endsWith(sep) ? b : b + sep)
 }
 
+/** `p` is `root` or under it; true when a segment below `root` is `.git` (any case: macOS and Windows ignore it) */
+const hasGitSegment = (p: string, root: string) => {
+	const lib = pathLib()
+	return lib.relative(root, p).split(/[\\/]/).some(s => s.toLowerCase() === '.git')
+}
+
 /**
  * Confines a path to a background agent's root. Paths under the agent root pass (normalized),
  * paths under the user's folder are remapped to the same relative path in the agent root,
- * anything else throws. This is a path check, not an OS sandbox.
+ * anything else throws. A `.git` segment throws too: git's own files are not the agent's to edit. This is a path check
+ * (symlinks are checked separately, before writes), not an OS sandbox.
  */
 export function resolveAgentPath(path: string, roots: { agentRoot: string; userRoot: string }): string {
 	const lib = pathLib()
@@ -31,10 +38,17 @@ export function resolveAgentPath(path: string, roots: { agentRoot: string; userR
 	const userRoot = stripTrailingSep(lib.normalize(roots.userRoot))
 	const p = stripTrailingSep(lib.resolve(agentRoot, path))
 
-	if (isUnder(p, agentRoot)) return p
+	const outside = () => new Error(`Path is outside this agent's worktree: ${path}`)
+
+	if (isUnder(p, agentRoot)) {
+		if (hasGitSegment(p, agentRoot)) throw outside()
+		return p
+	}
 	if (isUnder(p, userRoot)) {
 		const rel = lib.relative(userRoot, p)
-		return rel ? lib.join(agentRoot, rel) : agentRoot
+		const mapped = rel ? lib.join(agentRoot, rel) : agentRoot
+		if (hasGitSegment(mapped, agentRoot)) throw outside()
+		return mapped
 	}
-	throw new Error(`Path is outside this agent's worktree: ${path}`)
+	throw outside()
 }

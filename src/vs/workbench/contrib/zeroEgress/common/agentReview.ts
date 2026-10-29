@@ -17,7 +17,7 @@ export type FileKind = 'modified' | 'added' | 'deleted' | 'binary';
 export interface FileReview { path: string; kind: FileKind; hunks: HunkState[]; added: number; removed: number; fileConflict: boolean }
 
 /** Empty text is zero lines; a trailing newline does not add an empty last line. */
-function splitLines(text: string): string[] {
+export function splitLines(text: string): string[] {
 	if (text === '') {
 		return [];
 	}
@@ -26,6 +26,60 @@ function splitLines(text: string): string[] {
 		lines.pop();
 	}
 	return lines;
+}
+
+/**
+ * Whether two texts are the same for review: both absent, or both present with equal lines. A missing trailing newline and
+ * CRLF vs LF are not differences, since no hunk can show them.
+ */
+export function linesMatch(a: string | null, b: string | null): boolean {
+	if (a === null || b === null) {
+		return a === b;
+	}
+	if (a === b) {
+		return true;
+	}
+	const x = splitLines(a);
+	const y = splitLines(b);
+	return x.length === y.length && x.every((line, i) => line === y[i]);
+}
+
+/**
+ * Decodes a file for review. A UTF-8 BOM is stripped (`bom` says it was there, so a write can put it back). Bytes that are not
+ * valid UTF-8 give `undefined`: such a file is reviewed as binary, so it is never decoded lossily and written back.
+ */
+export function decodeReviewText(bytes: Uint8Array): { text: string; bom: boolean } | undefined {
+	const bom = bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf;
+	try {
+		return { text: new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bom ? bytes.subarray(3) : bytes), bom };
+	} catch {
+		return undefined;
+	}
+}
+
+/** Lines with their line terminators. */
+function lineChunks(text: string): string[] {
+	return text === '' ? [] : text.split(/(?<=\n)/);
+}
+
+/**
+ * The smallest whole-line replacement turning `oldText` into `newText`: replace `oldText.slice(start, end)` with `text`.
+ * Lines shared at the start and at the end are left alone.
+ */
+export function minimalEdit(oldText: string, newText: string): { start: number; end: number; text: string } {
+	const a = lineChunks(oldText);
+	const b = lineChunks(newText);
+	let prefix = 0;
+	while (prefix < a.length && prefix < b.length && a[prefix] === b[prefix]) {
+		prefix++;
+	}
+	let suffix = 0;
+	while (suffix < a.length - prefix && suffix < b.length - prefix && a[a.length - 1 - suffix] === b[b.length - 1 - suffix]) {
+		suffix++;
+	}
+	const start = a.slice(0, prefix).reduce((n, l) => n + l.length, 0);
+	const end = oldText.length - a.slice(a.length - suffix).reduce((n, l) => n + l.length, 0);
+	return { start, end, text: b.slice(prefix, b.length - suffix).join('') };
 }
 
 interface LineChange { baseStart: number; baseEnd: number; delta: number }

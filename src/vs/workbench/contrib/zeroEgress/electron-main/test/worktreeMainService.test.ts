@@ -9,7 +9,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { IEnvironmentMainService } from '../../../../../platform/environment/electron-main/environmentMainService.js';
-import { WorktreeMainService } from '../worktreeMainService.js';
+import { GIT_CONFIG_ARGS, gitEnv, WorktreeMainService } from '../worktreeMainService.js';
 
 suite('WorktreeMainService', function () {
 	this.timeout(30000);
@@ -35,6 +35,9 @@ suite('WorktreeMainService', function () {
 		git(repo, 'commit', '-q', '-m', 'init');
 		return repo;
 	};
+
+	/** sets the mtime two days back, past prune's 24h guard */
+	const age = (p: string) => { const t = new Date(Date.now() - 48 * 3600 * 1000); fs.utimesSync(p, t, t); };
 
 	setup(() => {
 		tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ze-worktree-')));
@@ -236,6 +239,8 @@ suite('WorktreeMainService', function () {
 		const drop = await service.create(repo, '11110002');
 		const foreign = await service.create(other, '22220001');
 		await service.writeBase('11110002', 'a.txt', 'X');
+		age(drop.worktreePath);
+		age(path.join(userData, 'agent-worktrees', '11110002.base.json'));
 
 		await service.prune(repo, ['11110001']);
 		assert.ok(fs.existsSync(keep.worktreePath));
@@ -244,5 +249,156 @@ suite('WorktreeMainService', function () {
 		assert.ok(fs.existsSync(foreign.worktreePath));
 		assert.strictEqual(git(repo, 'branch', '--list', 'ze/agent-*', '--format=%(refname:short)'), 'ze/agent-11110001');
 		assert.strictEqual(git(other, 'branch', '--list', 'ze/agent-*', '--format=%(refname:short)'), 'ze/agent-22220001');
+	});
+
+	test('userFileMatchesBase compares the user file with the base bytes', async () => {
+		const repo = makeRepo('repo');
+		write(path.join(repo, 'img.bin'), Buffer.from([0, 1, 2]));
+		git(repo, 'add', '-A');
+		git(repo, 'commit', '-q', '-m', 'img');
+		const { worktreePath: wt, baseCommit } = await service.create(repo, 'a1a10001');
+		const user = (rel: string) => path.join(repo, rel);
+
+		write(path.join(wt, 'img.bin'), Buffer.from([0, 7, 7]));
+		assert.strictEqual(await service.userFileMatchesBase('a1a10001', wt, baseCommit, 'img.bin', user('img.bin')), true);
+		write(user('img.bin'), Buffer.from([0, 9, 9]));
+		assert.strictEqual(await service.userFileMatchesBase('a1a10001', wt, baseCommit, 'img.bin', user('img.bin')), false);
+		fs.rmSync(user('img.bin'));
+		assert.strictEqual(await service.userFileMatchesBase('a1a10001', wt, baseCommit, 'img.bin', user('img.bin')), false);
+
+		// absent at base: the user's file must not exist
+		write(path.join(wt, 'new.bin'), Buffer.from([0, 5]));
+		assert.strictEqual(await service.userFileMatchesBase('a1a10001', wt, baseCommit, 'new.bin', user('new.bin')), true);
+		write(user('new.bin'), Buffer.from([0, 6]));
+		assert.strictEqual(await service.userFileMatchesBase('a1a10001', wt, baseCommit, 'new.bin', user('new.bin')), false);
+
+		// after an accept, the accepted bytes are the base
+		fs.copyFileSync(path.join(wt, 'new.bin'), user('new.bin'));
+		await service.resolveBinary('a1a10001', wt, baseCommit, 'new.bin', 'accept');
+		write(path.join(wt, 'new.bin'), Buffer.from([0, 5, 5]));
+		assert.strictEqual(await service.userFileMatchesBase('a1a10001', wt, baseCommit, 'new.bin', user('new.bin')), true);
+		write(user('new.bin'), Buffer.from([1]));
+		assert.strictEqual(await service.userFileMatchesBase('a1a10001', wt, baseCommit, 'new.bin', user('new.bin')), false);
+
+		await assert.rejects(service.userFileMatchesBase('a1a10001', wt, baseCommit, '../x', user('x')));
+		await assert.rejects(service.userFileMatchesBase('a1a10001', wt, baseCommit, 'img.bin', 'relative/img.bin'));
+		await assert.rejects(service.userFileMatchesBase('a1a10002', wt, baseCommit, 'img.bin', user('img.bin')));
+		await assert.rejects(service.userFileMatchesBase('a1a10001', wt, 'HEAD', 'img.bin', user('img.bin')));
+	});
+
+	test('changedFiles treats text that is not UTF-8 as binary, on either side', async () => {
+		const repo = makeRepo('repo');
+		write(path.join(repo, 'latin.txt'), Buffer.from('caf\xe9\n', 'latin1'));
+		write(path.join(repo, 'plain.txt'), 'plain\n');
+		git(repo, 'add', '-A');
+		git(repo, 'commit', '-q', '-m', 'latin');
+		const { worktreePath: wt, baseCommit } = await service.create(repo, 'a2a20001');
+
+		write(path.join(wt, 'latin.txt'), Buffer.from('caf\xe9 au lait\n', 'latin1'));
+		write(path.join(wt, 'plain.txt'), Buffer.from('pl\xe4in\n', 'latin1'));
+		write(path.join(wt, 'a.txt'), 'still utf-8 \u00e9\n');
+		const sort = (files: { path: string }[]) => [...files].sort((x, y) => x.path.localeCompare(y.path));
+		assert.deepStrictEqual(sort(await service.changedFiles(wt, baseCommit, '')), [
+			{ path: 'a.txt', status: 'M', binary: false },
+			{ path: 'latin.txt', status: 'M', binary: true },
+			{ path: 'plain.txt', status: 'M', binary: true },
+		]);
+	});
+
+	test('readBase strips a UTF-8 BOM', async () => {
+		const repo = makeRepo('repo');
+		write(path.join(repo, 'bom.txt'), '\ufeffbom\n');
+		git(repo, 'add', '-A');
+		git(repo, 'commit', '-q', '-m', 'bom');
+		const { worktreePath: wt, baseCommit } = await service.create(repo, 'a3a30001');
+		assert.strictEqual(await service.readBase('a3a30001', wt, baseCommit, 'bom.txt'), 'bom\n');
+	});
+
+	test('prune keeps young or dirty orphans and removes old clean ones', async () => {
+		const repo = makeRepo('repo');
+		const young = await service.create(repo, '33330001');
+		const old = await service.create(repo, '33330002');
+		const dirty = await service.create(repo, '33330003');
+		await service.writeBase('33330002', 'a.txt', 'X');
+		write(path.join(dirty.worktreePath, 'a.txt'), 'dirty\n');
+		age(old.worktreePath);
+		age(path.join(userData, 'agent-worktrees', '33330002.base.json'));
+		age(dirty.worktreePath);
+
+		await service.prune(repo, []);
+		assert.ok(fs.existsSync(young.worktreePath), 'young kept');
+		assert.ok(fs.existsSync(dirty.worktreePath), 'dirty kept');
+		assert.strictEqual(fs.existsSync(old.worktreePath), false, 'old clean removed');
+		assert.strictEqual(fs.existsSync(path.join(userData, 'agent-worktrees', '33330002.base.json')), false);
+		assert.deepStrictEqual(git(repo, 'branch', '--list', 'ze/agent-*', '--format=%(refname:short)').split('\n').sort(), ['ze/agent-33330001', 'ze/agent-33330003']);
+	});
+
+	test('prune keeps an old worktree whose base file is young', async () => {
+		const repo = makeRepo('repo');
+		const wt = await service.create(repo, '33340001');
+		age(wt.worktreePath);
+		await service.writeBase('33340001', 'a.txt', 'X');
+		await service.prune(repo, []);
+		assert.ok(fs.existsSync(wt.worktreePath));
+	});
+
+	test('changedFiles refuses a worktree whose .git file is gone or redirected', async () => {
+		// the folder above the worktrees is itself a repo: without a ceiling git would find it
+		git(tmp, 'init', '-q');
+		const repo = makeRepo('repo');
+		const gone = await service.create(repo, '44440001');
+		fs.rmSync(path.join(gone.worktreePath, '.git'));
+		write(path.join(gone.worktreePath, 'x.txt'), 'x\n');
+		await assert.rejects(service.changedFiles(gone.worktreePath, gone.baseCommit, ''));
+		assert.strictEqual(git(tmp, 'diff', '--cached', '--name-only'), '');
+
+		const moved = await service.create(repo, '44440002');
+		write(path.join(moved.worktreePath, '.git'), `gitdir: ${path.join(repo, '.git')}\n`);
+		write(path.join(moved.worktreePath, 'y.txt'), 'y\n');
+		await assert.rejects(service.changedFiles(moved.worktreePath, moved.baseCommit, ''));
+		assert.strictEqual(git(repo, 'diff', '--cached', '--name-only'), '');
+		assert.strictEqual(git(repo, 'status', '--porcelain'), '');
+	});
+
+	test('checkAgentPath follows symlinks', async () => {
+		const repo = makeRepo('repo');
+		const { worktreePath: wt } = await service.create(repo, '55550001');
+		const outside = path.join(tmp, 'outside');
+		fs.mkdirSync(outside);
+		fs.symlinkSync(outside, path.join(wt, 'pkg', 'link'));
+		fs.symlinkSync(path.join(outside, 'victim.txt'), path.join(wt, 'pkg', 'file-link.txt'));
+
+		await service.checkAgentPath(wt, 'pkg', path.join(wt, 'pkg', 'inside.txt'));
+		await service.checkAgentPath(wt, 'pkg', path.join(wt, 'pkg', 'new', 'deeper', 'file.txt'));
+		await service.checkAgentPath(wt, 'pkg', path.join(wt, 'pkg'));
+		await assert.rejects(service.checkAgentPath(wt, 'pkg', path.join(wt, 'pkg', 'link', 'x.txt')), /Path is outside this agent's worktree: /);
+		await assert.rejects(service.checkAgentPath(wt, 'pkg', path.join(wt, 'pkg', 'link')), /Path is outside this agent's worktree: /);
+		await assert.rejects(service.checkAgentPath(wt, 'pkg', path.join(wt, 'pkg', 'file-link.txt')), /Path is outside this agent's worktree: /);
+		await assert.rejects(service.checkAgentPath(wt, 'pkg', path.join(wt, 'a.txt')), /Path is outside this agent's worktree: /);
+		await assert.rejects(service.checkAgentPath(repo, '', path.join(repo, 'a.txt')));
+	});
+
+	test('runSetup only runs inside an agent worktree', async () => {
+		const repo = makeRepo('repo');
+		const { worktreePath: wt } = await service.create(repo, '66660001');
+		assert.strictEqual((await service.runSetup(path.join(wt, 'pkg'), 'echo hi', 10000)).exitCode, 0);
+		assert.strictEqual((await service.runSetup(wt, 'echo hi', 10000)).exitCode, 0);
+		const marker = path.join(tmp, 'ran');
+		await assert.rejects(service.runSetup(repo, `touch "${marker}"`, 10000));
+		await assert.rejects(service.runSetup(path.join(wt, '..'), `touch "${marker}"`, 10000));
+		await assert.rejects(service.runSetup(path.join(userData, 'agent-worktrees', '66660002'), `touch "${marker}"`, 10000));
+		assert.strictEqual(fs.existsSync(marker), false);
+	});
+
+	test('git runs with network protocols, LFS smudge and lazy fetch off', async () => {
+		const env = gitEnv();
+		assert.strictEqual(env.GIT_LFS_SKIP_SMUDGE, '1');
+		assert.strictEqual(env.GIT_NO_LAZY_FETCH, '1');
+		assert.strictEqual(env.GIT_TERMINAL_PROMPT, '0');
+		assert.ok(GIT_CONFIG_ARGS.join(' ').includes('protocol.allow=never'));
+		// a local repo still works with every protocol refused
+		const repo = makeRepo('repo');
+		const { worktreePath: wt } = await service.create(repo, '77770001');
+		assert.strictEqual(fs.readFileSync(path.join(wt, 'a.txt'), 'utf8'), 'a\n');
 	});
 });

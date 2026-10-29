@@ -52,7 +52,9 @@ Registry.as<IConfigurationRegistry>(Extensions.Configuration).registerConfigurat
 			type: 'string',
 			default: '',
 			scope: ConfigurationScope.RESOURCE,
-			description: localize('zeroEgress.agents.setupCommand', "Shell command run in a background agent's new worktree before it starts, e.g. to install dependencies."),
+			// a repo's .vscode/settings.json can set this: ignored in untrusted workspaces, and the command is confirmed before it first runs
+			restricted: true,
+			description: localize('zeroEgress.agents.setupCommand', "Shell command run in a background agent's new worktree before it starts, e.g. to install dependencies. You are asked before a new or changed command runs."),
 		},
 	},
 });

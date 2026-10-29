@@ -12,15 +12,18 @@ import { join } from '../../../../base/common/path.js';
 import { URI } from '../../../../base/common/uri.js';
 import { generateUuid } from '../../../../base/common/uuid.js';
 import { ProxyChannel } from '../../../../base/parts/ipc/common/ipc.js';
+import { Range } from '../../../../editor/common/core/range.js';
 import { IModelService } from '../../../../editor/common/services/model.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
+import { IDialogService } from '../../../../platform/dialogs/common/dialogs.js';
 import { IFileService } from '../../../../platform/files/common/files.js';
 import { InstantiationType, registerSingleton } from '../../../../platform/instantiation/common/extensions.js';
 import { IMainProcessService } from '../../../../platform/ipc/common/mainProcessService.js';
+import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
 import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
 import { IWorkbenchContribution, registerWorkbenchContribution2, WorkbenchPhase } from '../../../common/contributions.js';
 import { ITextFileService } from '../../../services/textfile/common/textfiles.js';
-import { acceptHunk as acceptHunkText, FileReview, HunkState, rejectHunk as rejectHunkText, reviewFile } from '../common/agentReview.js';
+import { acceptHunk as acceptHunkText, computeHunks, decodeReviewText, FileReview, HunkState, linesMatch, minimalEdit, rejectHunk as rejectHunkText, reviewFile } from '../common/agentReview.js';
 import { agentStatus } from '../common/agentStatus.js';
 import { agentRootOf, BackgroundAgentInfo } from '../common/backgroundAgentTypes.js';
 import { ChatMessage } from '../common/chatThreadServiceTypes.js';
@@ -33,6 +36,8 @@ export type { AgentSummary } from './backgroundAgentsServiceInterface.js';
 export { BACKGROUND_AGENTS_UNAVAILABLE, FILE_CONFLICT_ACCEPT_TOOLTIP, IBackgroundAgentsService } from './backgroundAgentsServiceInterface.js';
 
 const SETUP_TIMEOUT_MS = 10 * 60 * 1000;
+/** the setup command the user last approved for this workspace; a different (or first) command asks again */
+const SETUP_APPROVED_KEY = 'zeroEgress.agents.approvedSetupCommand';
 const TITLE_MAX = 60;
 
 /** One changed file, read fresh: base (after overrides), the agent's text and the user's current text. */
@@ -79,6 +84,8 @@ export class BackgroundAgentsService extends Disposable implements IBackgroundAg
 		@IFileService private readonly _fileService: IFileService,
 		@IModelService private readonly _modelService: IModelService,
 		@ITextFileService private readonly _textFileService: ITextFileService,
+		@IDialogService private readonly _dialogService: IDialogService,
+		@IStorageService private readonly _storageService: IStorageService,
 	) {
 		super();
 		this._worktree = ProxyChannel.toService<IZeroEgressWorktreeService>(mainProcessService.getChannel(WORKTREE_CHANNEL));
@@ -167,7 +174,8 @@ export class BackgroundAgentsService extends Disposable implements IBackgroundAg
 			const folder = this._folder()!;
 			const info = await this._worktree.repoInfo(folder.uri.fsPath);
 			if (info) {
-				const keep = this._agentThreads().map(t => t.agent!.agentId);
+				// a thread whose worktree was already removed keeps nothing alive (a failed removal is retried here)
+				const keep = this._agentThreads().filter(t => !!t.agent!.worktreePath).map(t => t.agent!.agentId);
 				await this._worktree.prune(info.repoRoot, keep).catch(onUnexpectedError);
 			}
 		}
@@ -192,6 +200,10 @@ export class BackgroundAgentsService extends Disposable implements IBackgroundAg
 		const info = folder ? await this._worktree.repoInfo(folder.uri.fsPath).catch(() => null) : null;
 		if (!folder || !info) { throw new Error(BACKGROUND_AGENTS_UNAVAILABLE); }
 
+		// the setting may come from the repo's .vscode/settings.json: never run a command the user hasn't seen
+		let command = (this._configurationService.getValue<string>(AGENTS_SETUP_COMMAND_SETTING, { resource: folder.uri }) ?? '').trim();
+		if (command && !await this._approveSetup(command)) { command = ''; }
+
 		const agentId = generateUuid().replace(/-/g, '').slice(0, 8);
 		const created = await this._worktree.create(info.repoRoot, agentId);
 		const agent: BackgroundAgentInfo = {
@@ -206,7 +218,6 @@ export class BackgroundAgentsService extends Disposable implements IBackgroundAg
 		};
 
 		try {
-			const command = (this._configurationService.getValue<string>(AGENTS_SETUP_COMMAND_SETTING, { resource: folder.uri }) ?? '').trim();
 			if (command) {
 				const { exitCode, outputTail } = await this._worktree.runSetup(agentRootOf(agent), command, SETUP_TIMEOUT_MS);
 				agent.setup = { command, exitCode, outputTail };
@@ -220,12 +231,26 @@ export class BackgroundAgentsService extends Disposable implements IBackgroundAg
 		let userMessage = prompt;
 		if (fromThreadId) {
 			messages = (this._chatThreadService.state.allThreads[fromThreadId]?.messages ?? []).filter(m => m.role !== 'checkpoint');
-			userMessage = `Continue the task above. Your working folder is now ${agentRootOf(agent)}.`;
+			userMessage = `Continue the task above using your tools. Your working folder is now ${agentRootOf(agent)}; paths under ${agent.userRoot} in earlier messages refer to the same files there.`;
 		}
 		const threadId = this._chatThreadService.startBackgroundThread(agent, messages, userMessage);
 		this._pending.set(threadId, 0);
 		this._recompute();
 		return threadId;
+	}
+
+	/** asks before the first run of a setup command in this workspace, and again whenever it changes; declined: no setup */
+	private async _approveSetup(command: string): Promise<boolean> {
+		if (this._storageService.get(SETUP_APPROVED_KEY, StorageScope.WORKSPACE) === command) { return true; }
+		const { confirmed } = await this._dialogService.confirm({
+			type: 'warning',
+			message: `Run this setup command in the agent's worktree?`,
+			detail: `${command}\n\nIt comes from the setting ${AGENTS_SETUP_COMMAND_SETTING}, runs with a shell, and is not covered by the network guard. If you don't run it, the agent starts without setup.`,
+			primaryButton: '&&Run',
+			cancelButton: `Don't Run`,
+		});
+		if (confirmed) { this._storageService.store(SETUP_APPROVED_KEY, command, StorageScope.WORKSPACE, StorageTarget.MACHINE); }
+		return confirmed;
 	}
 
 	async deleteAgent(threadId: string): Promise<void> {
@@ -262,36 +287,68 @@ export class BackgroundAgentsService extends Disposable implements IBackgroundAg
 		return URI.file(join(agent.worktreePath, path));
 	}
 
-	private async _readDisk(uri: URI): Promise<string | null> {
+	/**
+	 * The file's text with any UTF-8 BOM stripped (`bom` says it had one); `null` when it does not exist; `undefined` when its
+	 * bytes are not valid UTF-8 (reviewed as binary, never decoded lossily and written back).
+	 */
+	private async _readDiskText(uri: URI): Promise<{ text: string; bom: boolean } | null | undefined> {
+		let bytes: Uint8Array;
 		try {
-			return (await this._fileService.readFile(uri)).value.toString();
+			bytes = (await this._fileService.readFile(uri)).value.buffer;
 		} catch {
 			return null;
 		}
+		return decodeReviewText(bytes);
+	}
+
+	private async _readDisk(uri: URI): Promise<string | null | undefined> {
+		const d = await this._readDiskText(uri);
+		return d ? d.text : d;
+	}
+
+	/** writes `text`, with a BOM when `bom` */
+	private async _writeDisk(uri: URI, text: string, bom: boolean): Promise<void> {
+		await this._fileService.writeFile(uri, VSBuffer.fromString(bom ? `\ufeff${text}` : text));
 	}
 
 	/** the open text model's value if any, else the disk file, else null */
-	private async _readCurrent(uri: URI): Promise<string | null> {
+	private async _readCurrent(uri: URI): Promise<string | null | undefined> {
 		const model = this._modelService.getModel(uri);
 		if (model) { return model.getValue(); }
 		return this._readDisk(uri);
 	}
 
 	private async _readFile(agent: BackgroundAgentInfo, file: ChangedFile): Promise<FileState> {
-		if (file.binary) {
-			return { agent, file, base: null, agentText: null, current: null, review: reviewFile(file.path, null, null, null, true) };
+		if (!file.binary) {
+			const [base, agentText, current] = await Promise.all([
+				this._worktree.readBase(agent.agentId, agent.worktreePath, agent.baseCommit, file.path),
+				file.status === 'D' ? Promise.resolve(null) : this._readDisk(this._worktreeUri(agent, file.path)),
+				this._readCurrent(this._userUri(agent, file.path)),
+			]);
+			if (agentText !== undefined && current !== undefined) {
+				return { agent, file, base, agentText, current, review: reviewFile(file.path, base, agentText, current, false) };
+			}
+			file = { ...file, binary: true }; // the agent's or the user's bytes are not UTF-8
 		}
-		const [base, agentText, current] = await Promise.all([
-			this._worktree.readBase(agent.agentId, agent.worktreePath, agent.baseCommit, file.path),
-			file.status === 'D' ? Promise.resolve(null) : this._readDisk(this._worktreeUri(agent, file.path)),
-			this._readCurrent(this._userUri(agent, file.path)),
-		]);
-		return { agent, file, base, agentText, current, review: reviewFile(file.path, base, agentText, current, false) };
+		return { agent, file, base: null, agentText: null, current: null, review: await this._binaryReview(agent, file.path) };
 	}
 
-	/** binary: still listed by changedFiles. text: base (after overrides) differs from the agent's text. */
+	/** a binary file is a file-level conflict when the user's file no longer has the bytes the agent started from */
+	private async _binaryReview(agent: BackgroundAgentInfo, path: string): Promise<FileReview> {
+		const matches = await this._userMatchesBase(agent, path);
+		return { ...reviewFile(path, null, null, null, true), fileConflict: !matches };
+	}
+
+	private _userMatchesBase(agent: BackgroundAgentInfo, path: string): Promise<boolean> {
+		return this._worktree.userFileMatchesBase(agent.agentId, agent.worktreePath, agent.baseCommit, path, this._userUri(agent, path).fsPath);
+	}
+
+	/**
+	 * binary: still listed by changedFiles. text: base (after overrides) differs from the agent's text by a line; a missing
+	 * trailing newline or CRLF vs LF alone shows no hunk, so it would otherwise stay pending forever.
+	 */
 	private _isPending(s: FileState): boolean {
-		return s.file.binary || s.base !== s.agentText;
+		return s.file.binary || !linesMatch(s.base, s.agentText);
 	}
 
 	private async _pendingFiles(agent: BackgroundAgentInfo): Promise<FileState[]> {
@@ -394,20 +451,25 @@ export class BackgroundAgentsService extends Disposable implements IBackgroundAg
 				return true;
 			}
 			const wasDirty = this._textFileService.isDirty(uri);
-			model.pushStackElement();
-			model.pushEditOperations([], [{ range: model.getFullModelRange(), text }], () => null);
-			model.pushStackElement();
+			// only the changed lines: cursors, folding and other diff zones elsewhere in the file stay put
+			const edit = minimalEdit(expected ?? '', text);
+			if (edit.start !== edit.end || edit.text) {
+				const range = Range.fromPositions(model.getPositionAt(edit.start), model.getPositionAt(edit.end));
+				model.pushStackElement();
+				model.pushEditOperations([], [{ range, text: edit.text }], () => null);
+				model.pushStackElement();
+			}
 			if (!wasDirty) { await this._textFileService.save(uri); }
 			return true;
 		}
-		const disk = await this._readDisk(uri);
+		const disk = await this._readDiskText(uri);
 		if (this._openModel(uri)) { return this._writeUser(uri, expected, text); } // opened meanwhile: go through the model
-		if (disk !== expected) { return false; }
+		if ((disk ? disk.text : disk) !== expected) { return false; }
 		if (text === null) {
 			if (disk !== null) { await this._fileService.del(uri, { useTrash: true }); }
 			return true;
 		}
-		await this._fileService.writeFile(uri, VSBuffer.fromString(text));
+		await this._writeDisk(uri, text, !!disk?.bom);
 		return true;
 	}
 
@@ -418,12 +480,15 @@ export class BackgroundAgentsService extends Disposable implements IBackgroundAg
 			if (await this._fileService.exists(uri)) { await this._fileService.del(uri, { useTrash: false }); }
 			return;
 		}
-		await this._fileService.writeFile(uri, VSBuffer.fromString(text));
+		const old = await this._readDiskText(uri);
+		await this._writeDisk(uri, text, !!old?.bom);
 	}
 
 	private async _acceptBinary(s: FileState): Promise<void> {
 		const { agent, file } = s;
 		const user = this._userUri(agent, file.path);
+		// checked again right before the copy: the user may have changed the file since the review was read
+		if (!await this._userMatchesBase(agent, file.path)) { return; }
 		if (file.status === 'D') {
 			if (await this._fileService.exists(user)) { await this._fileService.del(user, { useTrash: true }); }
 		} else {
@@ -435,8 +500,8 @@ export class BackgroundAgentsService extends Disposable implements IBackgroundAg
 	/** Accepts a whole file; for a modified file, its clean hunks (conflicts stay pending). Never touches a file-level conflict. */
 	private async _acceptWhole(s: FileState): Promise<void> {
 		const { agent, file, review } = s;
-		if (file.binary) { return this._acceptBinary(s); }
 		if (review.fileConflict) { return; }
+		if (file.binary) { return this._acceptBinary(s); }
 		const user = this._userUri(agent, file.path);
 		if (review.kind === 'added') {
 			const ok = s.current === s.agentText ? await this._currentIs(user, s.current) : await this._writeUser(user, s.current, s.agentText);
@@ -459,19 +524,21 @@ export class BackgroundAgentsService extends Disposable implements IBackgroundAg
 			if (!next) { break; }
 			({ base, current } = acceptHunkText(next, base, current));
 		}
-		if (base === s.base) { return; }
-		if (!await this._writeUser(user, s.current, current)) { return; }
-		await this._worktree.writeBase(agent.agentId, file.path, base);
+		// no hunk left but the texts still differ (trailing newline, line endings): the agent's text becomes the base as is
+		const noneLeft = computeHunks(base, s.agentText).length === 0;
+		if (base === s.base && !noneLeft) { return; }
+		if (current !== s.current && !await this._writeUser(user, s.current, current)) { return; }
+		await this._worktree.writeBase(agent.agentId, file.path, noneLeft ? s.agentText : base);
 	}
 
 	/** Rejects the whole file (restores the base in the worktree), or with `onlyClean` just a modified file's clean hunks. */
 	private async _rejectWhole(s: FileState, onlyClean: boolean): Promise<void> {
 		const { agent, file, review } = s;
+		if (onlyClean && review.fileConflict) { return; }
 		if (file.binary) {
 			await this._worktree.resolveBinary(agent.agentId, agent.worktreePath, agent.baseCommit, file.path, 'reject');
 			return;
 		}
-		if (onlyClean && review.fileConflict) { return; }
 		if (!onlyClean || review.kind !== 'modified') {
 			await this._writeWorktree(agent, file.path, s.base);
 			return;
@@ -483,6 +550,8 @@ export class BackgroundAgentsService extends Disposable implements IBackgroundAg
 			if (!next) { break; }
 			agentText = rejectHunkText(next.hunk, agentText);
 		}
+		// no hunk left but the texts still differ (trailing newline, line endings): the base becomes the agent's text as is
+		if (computeHunks(s.base, agentText).length === 0) { agentText = s.base; }
 		if (agentText !== s.agentText) { await this._writeWorktree(agent, file.path, agentText); }
 	}
 
