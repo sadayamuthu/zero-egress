@@ -1,0 +1,144 @@
+{
+	"$schema": "vscode://schemas/color-theme",
+	"name": "ZeroEgress Dark",
+	"include": "./dark_modern.json",
+	"colors": {
+		"activityBar.activeBorder": "#7aa2ff",
+		"activityBar.background": "#15171c",
+		"activityBar.border": "#262a33",
+		"activityBar.foreground": "#d7dae0",
+		"activityBar.inactiveForeground": "#7d8590",
+		"activityBarBadge.background": "#7aa2ff",
+		"activityBarBadge.foreground": "#0b1020",
+		"badge.background": "#7aa2ff",
+		"badge.foreground": "#0b1020",
+		"button.background": "#7aa2ff",
+		"button.foreground": "#0b1020",
+		"button.hoverBackground": "#94b4ff",
+		"button.secondaryBackground": "#1b1e24",
+		"button.secondaryForeground": "#d7dae0",
+		"commandCenter.background": "#0e0f12",
+		"commandCenter.border": "#262a33",
+		"descriptionForeground": "#7d8590",
+		"diffEditor.insertedLineBackground": "#1f3b2a",
+		"diffEditor.removedLineBackground": "#3d1f24",
+		"dropdown.background": "#15171c",
+		"dropdown.border": "#262a33",
+		"editor.background": "#0e0f12",
+		"editor.foreground": "#d7dae0",
+		"editorGroup.border": "#262a33",
+		"editorGroupHeader.tabsBackground": "#15171c",
+		"editorGroupHeader.tabsBorder": "#262a33",
+		"editorWidget.background": "#15171c",
+		"focusBorder": "#7aa2ff",
+		"foreground": "#d7dae0",
+		"input.background": "#15171c",
+		"input.border": "#262a33",
+		"input.placeholderForeground": "#7d8590",
+		"list.activeSelectionBackground": "#1b1e24",
+		"list.hoverBackground": "#1b1e24",
+		"list.inactiveSelectionBackground": "#1b1e24",
+		"panel.background": "#0e0f12",
+		"panel.border": "#262a33",
+		"panelTitle.activeBorder": "#7aa2ff",
+		"progressBar.background": "#7aa2ff",
+		"quickInput.background": "#15171c",
+		"sideBar.background": "#15171c",
+		"sideBar.border": "#262a33",
+		"sideBarSectionHeader.background": "#15171c",
+		"sideBarSectionHeader.border": "#262a33",
+		"statusBar.background": "#15171c",
+		"statusBar.border": "#262a33",
+		"statusBar.foreground": "#7d8590",
+		"statusBar.noFolderBackground": "#15171c",
+		"statusBarItem.remoteBackground": "#7aa2ff",
+		"statusBarItem.remoteForeground": "#0b1020",
+		"tab.activeBackground": "#0e0f12",
+		"tab.activeBorder": "#262a33",
+		"tab.activeBorderTop": "#7aa2ff",
+		"tab.activeForeground": "#d7dae0",
+		"tab.border": "#262a33",
+		"tab.inactiveBackground": "#15171c",
+		"tab.inactiveForeground": "#7d8590",
+		"terminal.background": "#0e0f12",
+		"textLink.foreground": "#7aa2ff",
+		"titleBar.activeBackground": "#15171c",
+		"titleBar.activeForeground": "#d7dae0",
+		"titleBar.border": "#262a33",
+		"titleBar.inactiveBackground": "#15171c",
+		"titleBar.inactiveForeground": "#7d8590",
+		"widget.border": "#262a33",
+		"zeroEgress.greenBG": "#1f3b2a",
+		"zeroEgress.redBG": "#3d1f24"
+	},
+	"tokenColors": [
+		{
+			"name": "Comments",
+			"scope": [
+				"comment"
+			],
+			"settings": {
+				"foreground": "#6b7280"
+			}
+		},
+		{
+			"name": "Keywords",
+			"scope": [
+				"keyword",
+				"storage"
+			],
+			"settings": {
+				"foreground": "#b4a7f5"
+			}
+		},
+		{
+			"name": "Strings",
+			"scope": [
+				"string"
+			],
+			"settings": {
+				"foreground": "#a6d189"
+			}
+		},
+		{
+			"name": "Functions",
+			"scope": [
+				"entity.name.function",
+				"support.function"
+			],
+			"settings": {
+				"foreground": "#8caaee"
+			}
+		},
+		{
+			"name": "Types",
+			"scope": [
+				"entity.name.type",
+				"support.type",
+				"support.class"
+			],
+			"settings": {
+				"foreground": "#e5c890"
+			}
+		},
+		{
+			"name": "Constants",
+			"scope": [
+				"constant.numeric",
+				"constant.language"
+			],
+			"settings": {
+				"foreground": "#ef9f76"
+			}
+		},
+		{
+			"name": "Variables",
+			"scope": [
+				"variable"
+			],
+			"settings": {
+				"foreground": "#d7dae0"
+			}
+		}
+	]
+}

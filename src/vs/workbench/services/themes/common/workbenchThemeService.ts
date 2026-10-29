@@ -39,7 +39,7 @@ export enum ThemeSettings {
 }
 
 export enum ThemeSettingDefaults {
-	COLOR_THEME_DARK = 'Default Dark+', // ZeroEgress changed this from 'Default Dark Modern'
+	COLOR_THEME_DARK = 'ZeroEgress Dark', // ZeroEgress changed this from 'Default Dark Modern'
 	COLOR_THEME_LIGHT = 'Default Light Modern',
 	COLOR_THEME_HC_DARK = 'Default High Contrast',
 	COLOR_THEME_HC_LIGHT = 'Default High Contrast Light',
@@ -51,31 +51,33 @@ export enum ThemeSettingDefaults {
 	PRODUCT_ICON_THEME = 'Default',
 }
 
-export const COLOR_THEME_DARK_INITIAL_COLORS = { // ZeroEgress changed this to match dark+
-	'activityBar.activeBorder': '#ffffff',
-	'activityBar.background': '#333333',
-	'activityBar.border': '#454545',
-	'activityBar.foreground': '#ffffff',
-	'activityBar.inactiveForeground': '#ffffff66',
-	'editorGroup.border': '#444444',
-	'editorGroupHeader.tabsBackground': '#252526',
-	'editorGroupHeader.tabsBorder': '#252526',
-	'statusBar.background': '#007ACC',
-	'statusBar.border': '#454545',
-	'statusBar.foreground': '#ffffff',
-	'statusBar.noFolderBackground': '#68217A',
-	'tab.activeBackground': '#2D2D2D',
-	'tab.activeBorder': '#ffffff',
-	'tab.activeBorderTop': '#007ACC',
-	'tab.activeForeground': '#ffffff',
-	'tab.border': '#252526',
-	'textLink.foreground': '#3794ff',
-	'titleBar.activeBackground': '#3C3C3C',
-	'titleBar.activeForeground': '#CCCCCC',
-	'titleBar.border': '#454545',
-	'titleBar.inactiveBackground': '#2C2C2C',
-	'titleBar.inactiveForeground': '#999999',
-	'welcomePage.tileBackground': '#252526'
+export const COLOR_THEME_DARK_INITIAL_COLORS = { // ZeroEgress changed this to match ZeroEgress Dark
+	'activityBar.activeBorder': '#7aa2ff',
+	'activityBar.background': '#15171c',
+	'activityBar.border': '#262a33',
+	'activityBar.foreground': '#d7dae0',
+	'activityBar.inactiveForeground': '#7d8590',
+	'editor.background': '#0e0f12',
+	'editorGroup.border': '#262a33',
+	'editorGroupHeader.tabsBackground': '#15171c',
+	'editorGroupHeader.tabsBorder': '#262a33',
+	'sideBar.background': '#15171c',
+	'statusBar.background': '#15171c',
+	'statusBar.border': '#262a33',
+	'statusBar.foreground': '#7d8590',
+	'statusBar.noFolderBackground': '#15171c',
+	'tab.activeBackground': '#0e0f12',
+	'tab.activeBorder': '#262a33',
+	'tab.activeBorderTop': '#7aa2ff',
+	'tab.activeForeground': '#d7dae0',
+	'tab.border': '#262a33',
+	'textLink.foreground': '#7aa2ff',
+	'titleBar.activeBackground': '#15171c',
+	'titleBar.activeForeground': '#d7dae0',
+	'titleBar.border': '#262a33',
+	'titleBar.inactiveBackground': '#15171c',
+	'titleBar.inactiveForeground': '#7d8590',
+	'welcomePage.tileBackground': '#15171c'
 };
 
 export const COLOR_THEME_LIGHT_INITIAL_COLORS = {
