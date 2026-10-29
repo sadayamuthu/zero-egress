@@ -30,3 +30,4 @@ vscode.db
 /cli/openssl
 .superpowers/
 *.vsix
+docs/superpowers/
