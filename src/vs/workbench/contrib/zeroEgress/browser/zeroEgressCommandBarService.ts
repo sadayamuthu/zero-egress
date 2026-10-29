@@ -15,6 +15,10 @@ import { mountZeroEgressCommandBar } from './react/out/zero-egress-editor-widget
 import { deepClone } from '../../../../base/common/objects.js';
 import { InstantiationType, registerSingleton } from '../../../../platform/instantiation/common/extensions.js';
 import { IEditCodeService } from './editCodeServiceInterface.js';
+import { ContextKeyExpr } from '../../../../platform/contextkey/common/contextkey.js';
+import { EditorContextKeys } from '../../../../editor/common/editorContextKeys.js';
+import { diffAtLine } from '../common/diffAtLine.js';
+import { CURSOR_ON_PENDING_CHANGE, FILE_HAS_PENDING_CHANGES, pendingDiffsOf } from './pendingChangeContextKeys.js';
 import { IPendingFileOpsService } from './pendingFileOpsService.js';
 import { onUnexpectedError } from '../../../../base/common/errors.js';
 import { ITextModel } from '../../../../editor/common/model.js';
@@ -578,11 +582,16 @@ registerAction2(class extends Action2 {
 			id: ZERO_EGRESS_ACCEPT_DIFF_ACTION_ID,
 			f1: true,
 			title: localize2('zeroEgressAcceptDiffAction', 'ZeroEgress: Accept Diff'),
-			keybinding: {
+			keybinding: [{
 				primary: KeyMod.CtrlCmd | KeyMod.Alt | KeyMod.Shift | KeyCode.Enter,
 				mac: { primary: KeyMod.WinCtrl | KeyMod.Alt | KeyCode.Enter },
 				weight: KeybindingWeight.ZeroEgressExtension,
-			}
+			}, {
+				// only on a pending change, so ⌘N/⌘Y keep their usual meaning elsewhere
+				primary: KeyMod.CtrlCmd | KeyCode.KeyY,
+				when: ContextKeyExpr.and(EditorContextKeys.editorTextFocus, CURSOR_ON_PENDING_CHANGE),
+				weight: KeybindingWeight.ZeroEgressExtension,
+			}]
 		});
 	}
 
@@ -599,7 +608,11 @@ registerAction2(class extends Action2 {
 		if (!commandBarState) return;
 		const diffIdx = commandBarState.diffIdx ?? 0;
 
-		const diffid = commandBarState.sortedDiffIds[diffIdx];
+		// the change under the cursor, else the selected one
+		const editor = accessor.get(ICodeEditorService).getActiveCodeEditor();
+		const cursorLine = editor?.getModel()?.uri.fsPath === activeURI.fsPath ? editor.getPosition()?.lineNumber : undefined;
+		const diffUnderCursor = cursorLine === undefined ? undefined : diffAtLine(pendingDiffsOf(editCodeService, activeURI), cursorLine);
+		const diffid = diffUnderCursor ? String(diffUnderCursor.diffid) : commandBarState.sortedDiffIds[diffIdx];
 		if (!diffid) return;
 
 		metricsService.capture('Accept Diff', { diffid, keyboard: true });
@@ -621,11 +634,16 @@ registerAction2(class extends Action2 {
 			id: ZERO_EGRESS_REJECT_DIFF_ACTION_ID,
 			f1: true,
 			title: localize2('zeroEgressRejectDiffAction', 'ZeroEgress: Reject Diff'),
-			keybinding: {
+			keybinding: [{
 				primary: KeyMod.CtrlCmd | KeyMod.Alt | KeyMod.Shift | KeyCode.Backspace,
 				mac: { primary: KeyMod.WinCtrl | KeyMod.Alt | KeyCode.Backspace },
 				weight: KeybindingWeight.ZeroEgressExtension,
-			}
+			}, {
+				// only on a pending change, so ⌘N/⌘Y keep their usual meaning elsewhere
+				primary: KeyMod.CtrlCmd | KeyCode.KeyN,
+				when: ContextKeyExpr.and(EditorContextKeys.editorTextFocus, CURSOR_ON_PENDING_CHANGE),
+				weight: KeybindingWeight.ZeroEgressExtension,
+			}]
 		});
 	}
 
@@ -641,7 +659,11 @@ registerAction2(class extends Action2 {
 		if (!commandBarState) return;
 		const diffIdx = commandBarState.diffIdx ?? 0;
 
-		const diffid = commandBarState.sortedDiffIds[diffIdx];
+		// the change under the cursor, else the selected one
+		const editor = accessor.get(ICodeEditorService).getActiveCodeEditor();
+		const cursorLine = editor?.getModel()?.uri.fsPath === activeURI.fsPath ? editor.getPosition()?.lineNumber : undefined;
+		const diffUnderCursor = cursorLine === undefined ? undefined : diffAtLine(pendingDiffsOf(editCodeService, activeURI), cursorLine);
+		const diffid = diffUnderCursor ? String(diffUnderCursor.diffid) : commandBarState.sortedDiffIds[diffIdx];
 		if (!diffid) return;
 
 		metricsService.capture('Reject Diff', { diffid, keyboard: true });
@@ -770,10 +792,14 @@ registerAction2(class extends Action2 {
 			id: ZERO_EGRESS_ACCEPT_FILE_ACTION_ID,
 			f1: true,
 			title: localize2('zeroEgressAcceptFileAction', 'ZeroEgress: Accept All Diffs in Current File'),
-			keybinding: {
+			keybinding: [{
 				primary: KeyMod.Alt | KeyMod.Shift | KeyCode.Enter,
 				weight: KeybindingWeight.ZeroEgressExtension,
-			}
+			}, {
+				primary: KeyMod.CtrlCmd | KeyMod.Alt | KeyCode.KeyY,
+				when: ContextKeyExpr.and(EditorContextKeys.editorTextFocus, FILE_HAS_PENDING_CHANGES),
+				weight: KeybindingWeight.ZeroEgressExtension,
+			}]
 		});
 	}
 
@@ -803,10 +829,14 @@ registerAction2(class extends Action2 {
 			id: ZERO_EGRESS_REJECT_FILE_ACTION_ID,
 			f1: true,
 			title: localize2('zeroEgressRejectFileAction', 'ZeroEgress: Reject All Diffs in Current File'),
-			keybinding: {
+			keybinding: [{
 				primary: KeyMod.Alt | KeyMod.Shift | KeyCode.Backspace,
 				weight: KeybindingWeight.ZeroEgressExtension,
-			}
+			}, {
+				primary: KeyMod.CtrlCmd | KeyMod.Alt | KeyCode.KeyN,
+				when: ContextKeyExpr.and(EditorContextKeys.editorTextFocus, FILE_HAS_PENDING_CHANGES),
+				weight: KeybindingWeight.ZeroEgressExtension,
+			}]
 		});
 	}
 
@@ -836,10 +866,15 @@ registerAction2(class extends Action2 {
 			id: ZERO_EGRESS_ACCEPT_ALL_DIFFS_ACTION_ID,
 			f1: true,
 			title: localize2('zeroEgressAcceptAllDiffsAction', 'ZeroEgress: Accept All Diffs in All Files'),
-			keybinding: {
+			keybinding: [{
 				primary: KeyMod.CtrlCmd | KeyMod.Shift | KeyCode.Enter,
 				weight: KeybindingWeight.ZeroEgressExtension,
-			}
+			}, {
+				// ⌘⏎ from the agent panel (the input box handles it itself, see SidebarChat)
+				primary: KeyMod.CtrlCmd | KeyCode.Enter,
+				when: ContextKeyExpr.equals('focusedView', 'workbench.view.zeroEgress'), // ZERO_EGRESS_VIEW_ID (sidebarPane.ts); not imported to avoid an import cycle
+				weight: KeybindingWeight.ZeroEgressExtension,
+			}]
 		});
 	}
 

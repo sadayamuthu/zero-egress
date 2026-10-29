@@ -2932,6 +2932,11 @@ export const SidebarChat = () => {
 
 	const isDisabled = instructionsAreEmpty || !!isFeatureNameDisabled('Chat', settingsState)
 
+	// ⌘⏎ with an empty input accepts every pending change (edits, creates, deletes)
+	const { sortedURIs: pendingURIs } = useCommandBarState()
+	const pendingFileOps = usePendingFileOps()
+	const hasPendingChanges = pendingURIs.length > 0 || pendingFileOps.length > 0
+
 	const sidebarRef = useRef<HTMLDivElement>(null)
 	const scrollContainerRef = useRef<HTMLDivElement | null>(null)
 	const onSubmit = useCallback(async (_forceSubmit?: string) => {
@@ -3073,12 +3078,15 @@ export const SidebarChat = () => {
 		setInstructionsAreEmpty(!newStr)
 	}, [setInstructionsAreEmpty])
 	const onKeyDown = useCallback((e: KeyboardEvent<HTMLTextAreaElement>) => {
-		if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+		if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && instructionsAreEmpty && hasPendingChanges) {
+			e.preventDefault()
+			accessor.get('IZeroEgressCommandBarService').acceptOrRejectAllFiles({ behavior: 'accept' })
+		} else if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
 			onSubmit()
 		} else if (e.key === 'Escape' && isRunning) {
 			onAbort()
 		}
-	}, [onSubmit, onAbort, isRunning])
+	}, [onSubmit, onAbort, isRunning, instructionsAreEmpty, hasPendingChanges, accessor])
 
 	const inputChatArea = <ZeroEgressChatArea
 		featureName='Chat'

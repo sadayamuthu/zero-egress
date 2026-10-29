@@ -65,6 +65,7 @@ import './fileService.js'
 import './zeroEgressSCMService.js'
 import './pendingFileOpsService.js'
 import './pendingDeleteDecorations.js'
+import './pendingChangeContextKeys.js'
 import './egressTargetsContribution.js'
 import './localStatusContribution.js'
 
