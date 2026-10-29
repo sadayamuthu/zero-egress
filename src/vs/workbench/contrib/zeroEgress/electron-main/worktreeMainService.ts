@@ -29,7 +29,7 @@ function gitEnv(): NodeJS.ProcessEnv {
 /** Runs a local git subcommand without a shell and with hooks disabled. */
 function git(cwd: string, args: string[], input?: Buffer): Promise<Buffer> {
 	return new Promise((resolve, reject) => {
-		const child = execFile('git', ['-c', 'core.hooksPath=/dev/null', ...args], { cwd, maxBuffer: MAX_BUFFER, encoding: 'buffer', env: gitEnv() }, (error, stdout, stderr) => {
+		const child = execFile('git', ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', ...args], { cwd, maxBuffer: MAX_BUFFER, encoding: 'buffer', env: gitEnv() }, (error, stdout, stderr) => {
 			if (error) {
 				reject(new Error(`git ${args[0]} failed: ${stderr.toString().trim() || error.message}`));
 			} else {
@@ -54,6 +54,29 @@ function splitZ(output: Buffer | string): string[] {
 }
 
 const literal = (p: string) => `:(top,literal)${p}`;
+
+const COMMIT_ID = /^[0-9a-f]{40}([0-9a-f]{24})?$/;
+
+/** A full commit id; anything else (refs, `--options`) is refused so git can't parse it as an option. */
+function checkCommit(baseCommit: string): void {
+	if (typeof baseCommit !== 'string' || !COMMIT_ID.test(baseCommit)) {
+		throw new Error(`Invalid base commit: ${baseCommit}`);
+	}
+}
+
+/** A repo-relative `/` path that stays inside the worktree: not absolute, no `..` segment, no backslash. */
+function checkRelative(file: string, allowEmpty = false): void {
+	const ok = typeof file === 'string'
+		&& (allowEmpty || file.length > 0)
+		&& !file.includes('\\')
+		&& !file.includes('\0')
+		&& !path.posix.isAbsolute(file)
+		&& !path.win32.isAbsolute(file)
+		&& !file.split('/').includes('..');
+	if (!ok) {
+		throw new Error(`Path is outside this agent's worktree: ${file}`);
+	}
+}
 
 /** Same id git would give the blob; used only to tell whether a binary file changed since it was accepted. */
 async function blobHash(file: string): Promise<string | null> {
@@ -94,6 +117,28 @@ export class WorktreeMainService implements IZeroEgressWorktreeService {
 			throw new Error(`Invalid agent id: ${agentId}`);
 		}
 		return path.join(this.root, agentId);
+	}
+
+	/** `worktreePath` must be one of ours: `<root>/<agentId>`, and that agent's when `agentId` is given. */
+	private checkWorktree(worktreePath: string, agentId?: string): void {
+		const resolved = typeof worktreePath === 'string' ? path.resolve(worktreePath) : '';
+		const ok = path.dirname(resolved) === path.resolve(this.root)
+			&& AGENT_ID.test(path.basename(resolved))
+			&& (agentId === undefined || resolved === path.resolve(this.worktreeOf(agentId)));
+		if (!ok) {
+			throw new Error(`Not an agent worktree: ${worktreePath}`);
+		}
+	}
+
+	/** Absolute path of `file` inside the worktree, after checking it cannot escape. */
+	private inWorktree(worktreePath: string, file: string): string {
+		checkRelative(file);
+		const root = path.resolve(worktreePath);
+		const abs = path.resolve(root, file);
+		if (!abs.startsWith(root + path.sep)) {
+			throw new Error(`Path is outside this agent's worktree: ${file}`);
+		}
+		return abs;
 	}
 
 	private baseFile(agentId: string): string {
@@ -185,6 +230,9 @@ export class WorktreeMainService implements IZeroEgressWorktreeService {
 	}
 
 	async changedFiles(worktreePath: string, baseCommit: string, subdir: string): Promise<ChangedFile[]> {
+		this.checkWorktree(worktreePath);
+		checkCommit(baseCommit);
+		checkRelative(subdir, true);
 		await git(worktreePath, ['add', '-A']);
 		const flags = ['diff', '--cached', '--no-renames', '--no-ext-diff', '--no-textconv', '--no-relative', '--ignore-submodules=all', '-z'];
 		const spec = subdir ? ['--', literal(subdir)] : [];
@@ -214,6 +262,9 @@ export class WorktreeMainService implements IZeroEgressWorktreeService {
 	}
 
 	async readBase(agentId: string, worktreePath: string, baseCommit: string, file: string): Promise<string | null> {
+		this.checkWorktree(worktreePath, agentId);
+		checkCommit(baseCommit);
+		checkRelative(file);
 		const { overrides } = await this.readState(agentId);
 		if (Object.prototype.hasOwnProperty.call(overrides, file)) {
 			return overrides[file];
@@ -224,19 +275,23 @@ export class WorktreeMainService implements IZeroEgressWorktreeService {
 		return gitText(worktreePath, ['show', `${baseCommit}:${file}`]);
 	}
 
-	writeBase(agentId: string, file: string, content: string | null): Promise<void> {
+	async writeBase(agentId: string, file: string, content: string | null): Promise<void> {
+		checkRelative(file);
 		return this.updateState(agentId, state => { state.overrides[file] = content; });
 	}
 
 	async resolveBinary(agentId: string, worktreePath: string, baseCommit: string, file: string, behavior: 'accept' | 'reject'): Promise<void> {
+		this.checkWorktree(worktreePath, agentId);
+		checkCommit(baseCommit);
+		const abs = this.inWorktree(worktreePath, file);
 		if (behavior === 'accept') {
-			const hash = await blobHash(path.join(worktreePath, file));
+			const hash = await blobHash(abs);
 			return this.updateState(agentId, state => { state.binaryAccepted[file] = hash; });
 		}
 		if (await this.existsAtBase(worktreePath, baseCommit, file)) {
 			await git(worktreePath, ['checkout', baseCommit, '--', literal(file)]);
 		} else {
-			await fs.rm(path.join(worktreePath, file), { force: true });
+			await fs.rm(abs, { force: true });
 		}
 		return this.updateState(agentId, state => { delete state.binaryAccepted[file]; });
 	}

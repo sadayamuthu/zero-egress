@@ -172,6 +172,41 @@ suite('WorktreeMainService', function () {
 		assert.deepStrictEqual(await service.changedFiles(wt, baseCommit, ''), []);
 	});
 
+	test('rejects paths outside the worktree and non-owned worktrees', async () => {
+		const repo = makeRepo('repo');
+		const { worktreePath: wt, baseCommit } = await service.create(repo, 'abab0001');
+		const victim = path.join(tmp, 'victim.txt');
+		write(victim, 'keep\n');
+		const escape = path.relative(wt, victim);
+		assert.ok(escape.startsWith('..'));
+
+		await assert.rejects(service.resolveBinary('abab0001', wt, baseCommit, escape, 'reject'));
+		await assert.rejects(service.resolveBinary('abab0001', wt, baseCommit, '../x', 'reject'));
+		await assert.rejects(service.resolveBinary('abab0001', wt, baseCommit, victim, 'reject'));
+		await assert.rejects(service.resolveBinary('abab0001', wt, baseCommit, 'a\\b', 'reject'));
+		assert.ok(fs.existsSync(victim));
+		await assert.rejects(service.readBase('abab0001', wt, baseCommit, '../a.txt'));
+		await assert.rejects(service.writeBase('abab0001', 'pkg/../../a.txt', 'X'));
+		await assert.rejects(service.readBase('abab0002', wt, baseCommit, 'a.txt'));
+
+		write(path.join(repo, 'untracked.txt'), 'u\n');
+		await assert.rejects(service.changedFiles(repo, baseCommit, ''));
+		assert.strictEqual(git(repo, 'diff', '--cached', '--name-only'), '');
+		await assert.rejects(service.changedFiles(wt, baseCommit, '../pkg'));
+	});
+
+	test('rejects a baseCommit that is not a commit id', async () => {
+		const repo = makeRepo('repo');
+		const { worktreePath: wt } = await service.create(repo, 'acac0001');
+		const out = path.join(tmp, 'x');
+		const bad = `--output=${out}`;
+		await assert.rejects(service.changedFiles(wt, bad, ''));
+		await assert.rejects(service.readBase('acac0001', wt, bad, 'a.txt'));
+		await assert.rejects(service.resolveBinary('acac0001', wt, bad, 'a.txt', 'reject'));
+		await assert.rejects(service.changedFiles(wt, 'HEAD', ''));
+		assert.strictEqual(fs.existsSync(out), false);
+	});
+
 	test('remove deletes worktree, branch and base overrides', async () => {
 		const repo = makeRepo('repo');
 		const { worktreePath: wt } = await service.create(repo, 'ffff0001');
