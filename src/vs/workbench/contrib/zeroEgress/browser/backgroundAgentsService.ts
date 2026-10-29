@@ -16,50 +16,24 @@ import { IModelService } from '../../../../editor/common/services/model.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { IFileService } from '../../../../platform/files/common/files.js';
 import { InstantiationType, registerSingleton } from '../../../../platform/instantiation/common/extensions.js';
-import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
 import { IMainProcessService } from '../../../../platform/ipc/common/mainProcessService.js';
 import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
 import { IWorkbenchContribution, registerWorkbenchContribution2, WorkbenchPhase } from '../../../common/contributions.js';
 import { ITextFileService } from '../../../services/textfile/common/textfiles.js';
 import { acceptHunk as acceptHunkText, FileReview, HunkState, rejectHunk as rejectHunkText, reviewFile } from '../common/agentReview.js';
-import { AgentStatus, agentStatus } from '../common/agentStatus.js';
+import { agentStatus } from '../common/agentStatus.js';
 import { agentRootOf, BackgroundAgentInfo } from '../common/backgroundAgentTypes.js';
 import { ChatMessage } from '../common/chatThreadServiceTypes.js';
 import { ChangedFile, IZeroEgressWorktreeService, WORKTREE_CHANNEL } from '../common/worktreeTypes.js';
 import { AGENTS_SETUP_COMMAND_SETTING } from '../common/zeroEgressConfiguration.js';
 import { IChatThreadService } from './chatThreadService.js';
+import { AgentSummary, BACKGROUND_AGENTS_UNAVAILABLE, IBackgroundAgentsService } from './backgroundAgentsServiceInterface.js';
 
-export const BACKGROUND_AGENTS_UNAVAILABLE = 'Background agents need a single folder inside a git repository.';
-export const FILE_CONFLICT_ACCEPT_TOOLTIP = 'You changed this file too. Resolve it in the editor, then refresh.';
+export type { AgentSummary } from './backgroundAgentsServiceInterface.js';
+export { BACKGROUND_AGENTS_UNAVAILABLE, FILE_CONFLICT_ACCEPT_TOOLTIP, IBackgroundAgentsService } from './backgroundAgentsServiceInterface.js';
+
 const SETUP_TIMEOUT_MS = 10 * 60 * 1000;
 const TITLE_MAX = 60;
-
-export interface AgentSummary { threadId: string; title: string; status: AgentStatus; changedFiles: number }
-
-export interface IBackgroundAgentsService {
-	readonly _serviceBrand: undefined;
-	/** background agents of the current workspace folder, newest first */
-	readonly agents: readonly AgentSummary[];
-	readonly onDidChange: Event<void>;
-	availability(): Promise<{ ok: true } | { ok: false; reason: string }>;
-	/** returns the new thread's id */
-	startAgent(prompt: string, fromThreadId?: string): Promise<string>;
-	deleteAgent(threadId: string): Promise<void>;
-	/** pending files only (a file whose changes were all accepted or rejected is left out) */
-	getReview(threadId: string): Promise<FileReview[]>;
-	/** `rendered` is the hunk the UI showed; if the fresh review has no identical hunk (already handled, or the user's text changed), nothing happens */
-	acceptHunk(threadId: string, path: string, rendered: HunkState): Promise<void>;
-	/** `rendered` is the hunk the UI showed; if the fresh review has no identical hunk, nothing happens */
-	rejectHunk(threadId: string, path: string, rendered: HunkState): Promise<void>;
-	acceptFile(threadId: string, path: string): Promise<void>;
-	rejectFile(threadId: string, path: string): Promise<void>;
-	/** clean hunks and whole-file changes only; conflicts stay pending */
-	acceptAll(threadId: string): Promise<void>;
-	/** clean hunks and whole-file changes only; conflicts stay pending */
-	rejectAll(threadId: string): Promise<void>;
-}
-
-export const IBackgroundAgentsService = createDecorator<IBackgroundAgentsService>('zeroEgressBackgroundAgentsService');
 
 /** One changed file, read fresh: base (after overrides), the agent's text and the user's current text. */
 interface FileState {

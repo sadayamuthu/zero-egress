@@ -45,6 +45,7 @@ import { IZeroEgressModelService } from '../../../../common/zeroEgressModelServi
 import { IWorkspaceContextService } from '../../../../../../../platform/workspace/common/workspace.js'
 import { IZeroEgressCommandBarService } from '../../../zeroEgressCommandBarService.js'
 import { IPendingFileOpsService } from '../../../pendingFileOpsService.js'
+import { AgentSummary, IBackgroundAgentsService } from '../../../backgroundAgentsServiceInterface.js'
 import { PendingFileOp } from '../../../../common/pendingFileOps.js'
 import { INativeHostService } from '../../../../../../../platform/native/common/native.js';
 import { IEditCodeService } from '../../../editCodeServiceInterface.js'
@@ -236,6 +237,7 @@ const getReactAccessor = (accessor: ServicesAccessor) => {
 		IExtensionTransferService: accessor.get(IExtensionTransferService),
 		IMCPService: accessor.get(IMCPService),
 		IPendingFileOpsService: accessor.get(IPendingFileOpsService),
+		IBackgroundAgentsService: accessor.get(IBackgroundAgentsService),
 
 		IStorageService: accessor.get(IStorageService),
 
@@ -422,5 +424,18 @@ export const usePendingFileOps = (): readonly PendingFileOp[] => {
 		pendingFileOpsListeners.add(listener);
 		return () => { pendingFileOpsListeners.delete(listener) };
 	}, []);
+	return s
+}
+
+// background agents of this folder (Agents view), newest first
+export const useBackgroundAgents = (): readonly AgentSummary[] => {
+	const accessor = useAccessor()
+	const backgroundAgentsService = accessor.get('IBackgroundAgentsService')
+	const [s, ss] = useState(backgroundAgentsService.agents)
+	useEffect(() => {
+		ss(backgroundAgentsService.agents)
+		const d = backgroundAgentsService.onDidChange(() => { ss(backgroundAgentsService.agents) })
+		return () => { d.dispose() }
+	}, [backgroundAgentsService])
 	return s
 }

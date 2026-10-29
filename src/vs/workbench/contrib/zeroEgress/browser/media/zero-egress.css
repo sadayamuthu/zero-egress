@@ -235,3 +235,66 @@
 	text-decoration: line-through;
 	opacity: 0.8;
 }
+
+/* Title bar: Editor | Agents switch (localStatusContribution.ts) */
+.monaco-workbench .part.titlebar .ze-view-switch {
+	display: flex;
+	align-items: center;
+	align-self: center;
+	margin-left: 4px;
+	padding: 1px;
+	border: 1px solid var(--vscode-commandCenter-border);
+	border-radius: 6px;
+	-webkit-app-region: no-drag;
+	/* sit above .titlebar-drag-region, like the other clickable title bar items */
+	position: relative;
+	z-index: 2500;
+}
+
+.monaco-workbench .part.titlebar .ze-view-switch > .ze-view-switch-segment {
+	padding: 1px 10px;
+	border-radius: 5px;
+	font-size: 11px;
+	line-height: 16px;
+	cursor: pointer;
+	color: var(--vscode-descriptionForeground);
+}
+
+.monaco-workbench .part.titlebar .ze-view-switch > .ze-view-switch-segment:hover {
+	color: var(--vscode-titleBar-activeForeground);
+}
+
+/* active segment: ze-bg-2 / ze-fg-1 (the same variables the React views map those tokens to) */
+.monaco-workbench .part.titlebar .ze-view-switch > .ze-view-switch-segment.active {
+	background-color: var(--vscode-sideBar-background);
+	color: var(--vscode-editor-foreground);
+}
+
+.monaco-workbench .part.titlebar .ze-view-switch > .ze-view-switch-segment:focus-visible {
+	outline: 1px solid var(--vscode-focusBorder);
+	outline-offset: -1px;
+}
+
+/* Agents view: full-window overlay between the title bar and the status bar (agentsViewContribution.ts).
+   It covers the workbench grid without changing it, so editors keep their tabs, cursors and scroll positions. */
+.monaco-workbench > .ze-agents-view {
+	position: absolute;
+	left: 0;
+	right: 0;
+	/* top and bottom are set from the title bar and status bar heights */
+	z-index: 200; /* above sashes (35, 100 while dragging); below context menus, hovers, notifications and quick input */
+	display: none;
+	background-color: var(--vscode-editor-background);
+	color: var(--vscode-foreground);
+	outline: none;
+	user-select: text;
+}
+
+.monaco-workbench > .ze-agents-view.visible {
+	display: block;
+}
+
+/* the root only holds focus until the prompt takes it; no focus ring around the whole window */
+.monaco-workbench > .ze-agents-view.visible:focus {
+	outline: none;
+}

@@ -4,12 +4,13 @@
  *--------------------------------------------------------------------------------------*/
 
 // Shows where the app may connect (Local / LAN / Internet) in the status bar and the title bar, and adds the
-// ZeroEgress mark to the title bar. Every destination the egress guard allows counts (see common/localStatus.ts).
+// ZeroEgress mark and the Editor | Agents switch to the title bar. Every destination the egress guard allows counts (see common/localStatus.ts).
 
 import { $, append } from '../../../../base/browser/dom.js';
 import { mainWindow } from '../../../../base/browser/window.js';
 import { Disposable, toDisposable } from '../../../../base/common/lifecycle.js';
 import { CommandsRegistry, ICommandService } from '../../../../platform/commands/common/commands.js';
+import { IContextKeyService } from '../../../../platform/contextkey/common/contextkey.js';
 import { IWorkbenchContribution, registerWorkbenchContribution2, WorkbenchPhase } from '../../../common/contributions.js';
 import { IWorkbenchLayoutService, Parts } from '../../../services/layout/browser/layoutService.js';
 import { IOutputService } from '../../../services/output/common/output.js';
@@ -17,6 +18,7 @@ import { IStatusbarEntryAccessor, IStatusbarService, StatusbarAlignment } from '
 import { IEgressGuardService } from '../common/egressGuardService.js';
 import { formatLocalStatus, LocalStatus, localStatusOf } from '../common/localStatus.js';
 import { IZeroEgressSettingsService } from '../common/zeroEgressSettingsService.js';
+import { ZERO_EGRESS_AGENTS_VIEW_VISIBLE_KEY, ZERO_EGRESS_SHOW_AGENTS_ACTION_ID, ZERO_EGRESS_SHOW_EDITOR_ACTION_ID } from './actionIDs.js';
 import { NETWORK_OUTPUT_CHANNEL_ID } from './egressTargetsContribution.js';
 
 const SHOW_NETWORK_LOG_COMMAND_ID = 'zeroEgress.showNetworkLog';
@@ -58,6 +60,7 @@ class LocalStatusContribution extends Disposable implements IWorkbenchContributi
 		@IStatusbarService private readonly statusbarService: IStatusbarService,
 		@IWorkbenchLayoutService private readonly layoutService: IWorkbenchLayoutService,
 		@ICommandService private readonly commandService: ICommandService,
+		@IContextKeyService private readonly contextKeyService: IContextKeyService,
 	) {
 		super();
 		this.addTitlebarElements();
@@ -121,6 +124,8 @@ class LocalStatusContribution extends Disposable implements IWorkbenchContributi
 		// On macOS the window buttons live in a container at the start of .titlebar-left; sit after it.
 		const controls = left.querySelector(':scope > .window-controls-container');
 		left.insertBefore(brand, controls ? controls.nextSibling : left.firstChild);
+		const viewSwitch = this.createViewSwitch();
+		left.insertBefore(viewSwitch, brand.nextSibling);
 
 		const pill = $('.ze-titlebar-status');
 		pill.setAttribute('role', 'button');
@@ -131,7 +136,36 @@ class LocalStatusContribution extends Disposable implements IWorkbenchContributi
 		right.insertBefore(pill, right.firstChild);
 		this.pill = pill;
 
-		this._register(toDisposable(() => { brand.remove(); pill.remove(); }));
+		this._register(toDisposable(() => { brand.remove(); viewSwitch.remove(); pill.remove(); }));
+	}
+
+	/** Editor | Agents: the active segment follows the zeroEgress.agentsViewVisible context key; clicks run the commands */
+	private createViewSwitch(): HTMLElement {
+		const container = $('.ze-view-switch');
+		container.setAttribute('role', 'radiogroup');
+		container.setAttribute('aria-label', 'View');
+		const segment = (label: string, commandId: string) => {
+			const el = append(container, $('.ze-view-switch-segment', undefined, label));
+			el.setAttribute('role', 'radio');
+			el.tabIndex = 0;
+			const run = () => this.commandService.executeCommand(commandId);
+			el.addEventListener('click', run);
+			el.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); run(); } });
+			return el;
+		};
+		const editor = segment('Editor', ZERO_EGRESS_SHOW_EDITOR_ACTION_ID);
+		const agents = segment('Agents', ZERO_EGRESS_SHOW_AGENTS_ACTION_ID);
+		const update = () => {
+			const agentsVisible = !!this.contextKeyService.getContextKeyValue<boolean>(ZERO_EGRESS_AGENTS_VIEW_VISIBLE_KEY);
+			editor.classList.toggle('active', !agentsVisible);
+			agents.classList.toggle('active', agentsVisible);
+			editor.setAttribute('aria-checked', String(!agentsVisible));
+			agents.setAttribute('aria-checked', String(agentsVisible));
+		};
+		const keys = new Set([ZERO_EGRESS_AGENTS_VIEW_VISIBLE_KEY]);
+		this._register(this.contextKeyService.onDidChangeContext(e => { if (e.affectsSome(keys)) { update(); } }));
+		update();
+		return container;
 	}
 }
 

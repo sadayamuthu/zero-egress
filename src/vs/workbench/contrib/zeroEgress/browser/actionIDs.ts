@@ -24,3 +24,14 @@ export const ZERO_EGRESS_REJECT_FILE_ACTION_ID = 'zeroEgress.rejectFile'
 export const ZERO_EGRESS_ACCEPT_ALL_DIFFS_ACTION_ID = 'zeroEgress.acceptAllDiffs'
 
 export const ZERO_EGRESS_REJECT_ALL_DIFFS_ACTION_ID = 'zeroEgress.rejectAllDiffs'
+
+// Agents view (agentsViewContribution.ts)
+
+export const ZERO_EGRESS_SHOW_AGENTS_ACTION_ID = 'zeroEgress.showAgents'
+
+export const ZERO_EGRESS_SHOW_EDITOR_ACTION_ID = 'zeroEgress.showEditor'
+
+export const ZERO_EGRESS_AGENTS_ACCEPT_ALL_ACTION_ID = 'zeroEgress.agentsView.acceptAll'
+
+/** context key `zeroEgress.agentsViewVisible` (the RawContextKey lives in agentsViewContribution.ts) */
+export const ZERO_EGRESS_AGENTS_VIEW_VISIBLE_KEY = 'zeroEgress.agentsViewVisible'

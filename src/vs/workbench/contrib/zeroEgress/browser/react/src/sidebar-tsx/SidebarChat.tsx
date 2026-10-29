@@ -2905,13 +2905,14 @@ export const SidebarChat = () => {
 	return <ChatThreadView threadId={chatThreadsState.currentThreadId} variant='docked' />
 }
 
-export const ChatThreadView = ({ threadId, variant }: { threadId: string, variant: 'docked' | 'agents' }) => {
+/** `inputDisabledReason`: shown instead of the input box (e.g. a background agent whose worktree was removed takes no follow-ups) */
+export const ChatThreadView = ({ threadId, variant, inputDisabledReason }: { threadId: string, variant: 'docked' | 'agents', inputDisabledReason?: string }) => {
 	return <ThreadIdContext.Provider value={threadId}>
-		<ChatThreadViewInner threadId={threadId} variant={variant} />
+		<ChatThreadViewInner threadId={threadId} variant={variant} inputDisabledReason={inputDisabledReason} />
 	</ThreadIdContext.Provider>
 }
 
-const ChatThreadViewInner = ({ threadId, variant }: { threadId: string, variant: 'docked' | 'agents' }) => {
+const ChatThreadViewInner = ({ threadId, variant, inputDisabledReason }: { threadId: string, variant: 'docked' | 'agents', inputDisabledReason?: string }) => {
 	const textAreaRef = useRef<HTMLTextAreaElement | null>(null)
 	const textAreaFnsRef = useRef<TextAreaFns | null>(null)
 
@@ -3156,7 +3157,7 @@ const ChatThreadViewInner = ({ threadId, variant }: { threadId: string, variant:
 			<CommandBarInChat />
 		</div>}
 		<div className='px-2 pb-2'>
-			{inputChatArea}
+			{inputDisabledReason ? <div className='px-2 py-2 text-sm text-ze-fg-3 select-none'>{inputDisabledReason}</div> : inputChatArea}
 		</div>
 	</div>
 

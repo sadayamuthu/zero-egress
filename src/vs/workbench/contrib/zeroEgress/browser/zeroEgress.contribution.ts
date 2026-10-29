@@ -69,6 +69,7 @@ import './pendingDeleteDecorations.js'
 import './pendingChangeContextKeys.js'
 import './egressTargetsContribution.js'
 import './localStatusContribution.js'
+import './agentsViewContribution.js'
 
 // ---------- common (unclear if these actually need to be imported, because they're already imported wherever they're used) ----------
 
