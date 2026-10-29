@@ -2342,25 +2342,26 @@ class AcceptRejectInlineWidget extends Widget implements IOverlayWidget {
 
 			const showLabel = thisDiffIdx === selectedDiffIdx
 
-			const acceptText = `Accept${showLabel ? ` ` + acceptKeybindLabel : ''}`;
-			const rejectText = `Reject${showLabel ? ` ` + rejectKeybindLabel : ''}`;
-
-			return { acceptText, rejectText }
+			return { acceptKey: showLabel ? acceptKeybindLabel : '', rejectKey: showLabel ? rejectKeybindLabel : '' }
 		}
 
-		const { acceptText, rejectText } = getAcceptRejectText()
+		// "Accept" / "Reject" plus the shortcut in muted text
+		const setButtonLabel = (button: HTMLElement, word: string, key: string) => {
+			dom.reset(button, word, ...(key ? [dom.$('span', { style: 'opacity: 0.7; margin-left: 5px; font-weight: normal;' }, key)] : []));
+		}
 
-		// Create container div with buttons
+		// Create container div with buttons (Reject first, Accept last)
 		const { acceptButton, rejectButton, buttons } = dom.h('div@buttons', [
-			dom.h('button@acceptButton', []),
-			dom.h('button@rejectButton', [])
+			dom.h('button@rejectButton', []),
+			dom.h('button@acceptButton', [])
 		]);
 
 		// Style the container
 		buttons.style.display = 'flex';
 		buttons.style.position = 'absolute';
-		buttons.style.gap = '4px';
-		buttons.style.paddingRight = '4px';
+		buttons.style.gap = '6px';
+		buttons.style.paddingRight = '8px';
+		buttons.style.alignItems = 'center';
 		buttons.style.zIndex = '1';
 		buttons.style.transform = `translateY(${offsetLines * lineHeight}px)`;
 		buttons.style.justifyContent = 'flex-end';
@@ -2368,41 +2369,36 @@ class AcceptRejectInlineWidget extends Widget implements IOverlayWidget {
 		buttons.style.pointerEvents = 'none';
 
 
+		const { acceptKey, rejectKey } = getAcceptRejectText()
+		setButtonLabel(acceptButton, 'Accept', acceptKey);
+		setButtonLabel(rejectButton, 'Reject', rejectKey);
+
 		// Style accept button
 		acceptButton.onclick = onAccept;
-		acceptButton.textContent = acceptText;
 		acceptButton.style.backgroundColor = acceptBg;
 		acceptButton.style.border = acceptBorder;
 		acceptButton.style.color = buttonTextColor;
 		acceptButton.style.fontSize = buttonFontSize;
-		acceptButton.style.borderTop = 'none';
-		acceptButton.style.padding = '1px 4px';
-		acceptButton.style.borderBottomLeftRadius = '6px';
-		acceptButton.style.borderBottomRightRadius = '6px';
-		acceptButton.style.borderTopLeftRadius = '0';
-		acceptButton.style.borderTopRightRadius = '0';
+		acceptButton.style.padding = '0 9px';
+		acceptButton.style.borderRadius = '6px';
 		acceptButton.style.cursor = 'pointer';
-		acceptButton.style.height = '100%';
-		acceptButton.style.boxShadow = '0 2px 3px rgba(0,0,0,0.2)';
+		acceptButton.style.height = `${Math.max(lineHeight - 2, 16)}px`;
+		acceptButton.style.lineHeight = '1';
+		acceptButton.style.fontWeight = '600';
 		acceptButton.style.pointerEvents = 'auto';
 
 
 		// Style reject button
 		rejectButton.onclick = onReject;
-		rejectButton.textContent = rejectText;
 		rejectButton.style.backgroundColor = rejectBg;
 		rejectButton.style.border = rejectBorder;
 		rejectButton.style.color = rejectTextColor;
 		rejectButton.style.fontSize = buttonFontSize;
-		rejectButton.style.borderTop = 'none';
-		rejectButton.style.padding = '1px 4px';
-		rejectButton.style.borderBottomLeftRadius = '6px';
-		rejectButton.style.borderBottomRightRadius = '6px';
-		rejectButton.style.borderTopLeftRadius = '0';
-		rejectButton.style.borderTopRightRadius = '0';
+		rejectButton.style.padding = '0 9px';
+		rejectButton.style.borderRadius = '6px';
 		rejectButton.style.cursor = 'pointer';
-		rejectButton.style.height = '100%';
-		rejectButton.style.boxShadow = '0 2px 3px rgba(0,0,0,0.2)';
+		rejectButton.style.height = `${Math.max(lineHeight - 2, 16)}px`;
+		rejectButton.style.lineHeight = '1';
 		rejectButton.style.pointerEvents = 'auto';
 
 
@@ -2438,10 +2434,10 @@ class AcceptRejectInlineWidget extends Widget implements IOverlayWidget {
 		this._register(this._zeroEgressCommandBarService.onDidChangeState(e => {
 			if (uri && e.uri.fsPath === uri.fsPath) {
 
-				const { acceptText, rejectText } = getAcceptRejectText()
+				const { acceptKey, rejectKey } = getAcceptRejectText()
 
-				acceptButton.textContent = acceptText;
-				rejectButton.textContent = rejectText;
+				setButtonLabel(acceptButton, 'Accept', acceptKey);
+				setButtonLabel(rejectButton, 'Reject', rejectKey);
 
 			}
 		}));

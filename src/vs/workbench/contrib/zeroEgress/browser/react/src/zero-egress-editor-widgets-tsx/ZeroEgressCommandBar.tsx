@@ -196,7 +196,7 @@ export const ZeroEgressCommandBar = ({ uri, editor }: ZeroEgressCommandBarProps)
 	if (currFileIdx === null) {
 		return (
 			<div className="pointer-events-auto">
-				<div className="flex bg-ze-bg-2 shadow-md border border-ze-border-2 [&>*:first-child]:pl-3 [&>*:last-child]:pr-3 [&>*]:border-r [&>*]:border-ze-border-2 [&>*:last-child]:border-r-0">
+				<div className="flex bg-ze-bg-2 rounded-[10px] overflow-hidden shadow-md border border-ze-border-2 [&>*:first-child]:pl-3 [&>*:last-child]:pr-3 [&>*]:border-r [&>*]:border-ze-border-2 [&>*:last-child]:border-r-0">
 					<div className="flex items-center px-3">
 						<span className="text-xs whitespace-nowrap">
 							{`${sortedCommandBarURIs.length} file${sortedCommandBarURIs.length === 1 ? '' : 's'} changed`}
@@ -226,7 +226,7 @@ export const ZeroEgressCommandBar = ({ uri, editor }: ZeroEgressCommandBarProps)
 			{/* Accept All / Reject All buttons that appear when the vertical ellipsis is clicked */}
 			{showAcceptRejectAllButtons && showAcceptRejectAll && (
 				<div className="flex justify-end mb-1">
-					<div className="inline-flex bg-ze-bg-2 rounded shadow-md border border-ze-border-2 overflow-hidden">
+					<div className="inline-flex bg-ze-bg-2 rounded-[10px] shadow-md border border-ze-border-2 overflow-hidden">
 						<div className="flex items-center [&>*]:border-r [&>*]:border-ze-border-2 [&>*:last-child]:border-r-0">
 							<AcceptAllButtonWrapper
 								// text={`Accept All${acceptAllKeybindLabel ? ` ${acceptAllKeybindLabel}` : ''}`}
@@ -249,7 +249,7 @@ export const ZeroEgressCommandBar = ({ uri, editor }: ZeroEgressCommandBarProps)
 				</div>
 			)}
 
-			<div className="flex items-center bg-ze-bg-2 rounded shadow-md border border-ze-border-2 [&>*:first-child]:pl-3 [&>*:last-child]:pr-3 [&>*]:px-3 [&>*]:border-r [&>*]:border-ze-border-2 [&>*:last-child]:border-r-0">
+			<div className="flex items-center bg-ze-bg-2 rounded-[10px] overflow-hidden shadow-md border border-ze-border-2 [&>*:first-child]:pl-3 [&>*:last-child]:pr-3 [&>*]:px-3 [&>*]:border-r [&>*]:border-ze-border-2 [&>*:last-child]:border-r-0">
 
 				{/* Diff Navigation Group */}
 				<div className="flex items-center py-0.5">
