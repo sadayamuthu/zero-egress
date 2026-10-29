@@ -27,8 +27,8 @@
 /* Renamed from ze-watermark-button to ze-openfolder-button */
 .ze-openfolder-button {
     padding: 8px 20px;
-    background-color: #34d399;
-    color: #111827;
+    background-color: var(--vscode-button-background);
+    color: var(--vscode-button-foreground);
     border: none;
     border-radius: 4px;
     outline: none !important;
@@ -37,10 +37,10 @@
 	transition: background-color 0.2s ease;
 }
 .ze-openfolder-button:hover {
-    background-color: #10b981;
+    background-color: var(--vscode-button-hoverBackground);
 }
 .ze-openfolder-button:active {
-    background-color: #059669;
+    background-color: var(--vscode-button-hoverBackground);
 }
 
 .ze-settings-watermark-button {
@@ -65,7 +65,7 @@
 }
 
 .ze-link {
-	color: #3b82f6;
+	color: var(--vscode-textLink-foreground);
 	cursor: pointer;
 	transition: all 0.2s ease;
 }

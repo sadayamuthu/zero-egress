@@ -43,7 +43,7 @@ import { IZeroEgressSettingsService } from '../common/zeroEgressSettingsService.
 import { FeatureName } from '../common/zeroEgressSettingsTypes.js';
 import { IZeroEgressModelService } from '../common/zeroEgressModelService.js';
 import { deepClone } from '../../../../base/common/objects.js';
-import { acceptBg, acceptBorder, buttonFontSize, buttonTextColor, rejectBg, rejectBorder } from '../common/helpers/colors.js';
+import { acceptBg, acceptBorder, buttonFontSize, buttonTextColor, rejectBg, rejectBorder, rejectTextColor } from '../common/helpers/colors.js';
 import { DiffArea, Diff, CtrlKZone, ZeroEgressFileSnapshot, DiffAreaSnapshotEntry, diffAreaSnapshotKeys, DiffZone, TrackingZone, ComputedDiff } from '../common/editCodeServiceTypes.js';
 import { IConvertToLLMMessageService } from './convertToLLMMessageService.js';
 // import { isMacintosh } from '../../../../base/common/platform.js';
@@ -2392,7 +2392,7 @@ class AcceptRejectInlineWidget extends Widget implements IOverlayWidget {
 		rejectButton.textContent = rejectText;
 		rejectButton.style.backgroundColor = rejectBg;
 		rejectButton.style.border = rejectBorder;
-		rejectButton.style.color = buttonTextColor;
+		rejectButton.style.color = rejectTextColor;
 		rejectButton.style.fontSize = buttonFontSize;
 		rejectButton.style.borderTop = 'none';
 		rejectButton.style.padding = '1px 4px';

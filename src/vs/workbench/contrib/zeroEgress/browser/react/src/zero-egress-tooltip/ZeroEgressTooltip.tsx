@@ -60,13 +60,13 @@ export const ZeroEgressTooltip = () => {
 				}
 
 				#ze-tooltip-orange {
-					background-color: #F6762A;
-					color: white;
+					background-color: var(--vscode-charts-orange);
+					color: var(--vscode-editor-background);
 				}
 
 				#ze-tooltip-green {
-					background-color: #228B22;
-					color: white;
+					background-color: var(--vscode-charts-green);
+					color: var(--vscode-editor-background);
 				}
 
 				#ze-tooltip-ollama-settings, #ze-tooltip-provider-info {
@@ -84,25 +84,25 @@ export const ZeroEgressTooltip = () => {
 			<Tooltip
 				id="ze-tooltip"
 				// border='1px solid var(--vscode-editorGroup-border)'
-				border='1px solid rgba(100,100,100,.2)'
+				border='1px solid var(--vscode-widget-border, var(--vscode-editorGroup-border))'
 				opacity={1}
 				delayShow={50}
 			/>
 			<Tooltip
 				id="ze-tooltip-orange"
-				border='1px solid rgba(200,200,200,.3)'
+				border='1px solid var(--vscode-widget-border, var(--vscode-editorGroup-border))'
 				opacity={1}
 				delayShow={50}
 			/>
 			<Tooltip
 				id="ze-tooltip-green"
-				border='1px solid rgba(200,200,200,.3)'
+				border='1px solid var(--vscode-widget-border, var(--vscode-editorGroup-border))'
 				opacity={1}
 				delayShow={50}
 			/>
 			<Tooltip
 				id="ze-tooltip-ollama-settings"
-				border='1px solid rgba(100,100,100,.2)'
+				border='1px solid var(--vscode-widget-border, var(--vscode-editorGroup-border))'
 				opacity={1}
 				openEvents={{ mouseover: true, click: true, focus: true }}
 				place='right'
@@ -128,7 +128,7 @@ export const ZeroEgressTooltip = () => {
 
 			<Tooltip
 				id="ze-tooltip-provider-info"
-				border='1px solid rgba(100,100,100,.2)'
+				border='1px solid var(--vscode-widget-border, var(--vscode-editorGroup-border))'
 				opacity={1}
 				delayShow={50}
 				style={{ pointerEvents: 'all', userSelect: 'text', fontSize: 11, maxWidth: '280px', paddingTop:'8px', paddingBottom:'8px' }}

@@ -14,17 +14,18 @@ const sweepIdxBG = new Color(new RGBA(100, 100, 100, .5));
 const acceptBG = new Color(new RGBA(155, 185, 85, .1)); // default is RGBA(155, 185, 85, .2)
 const rejectBG = new Color(new RGBA(255, 0, 0, .1)); // default is RGBA(255, 0, 0, .2)
 
-// Widget colors
-export const acceptAllBg = 'rgb(30, 133, 56)'
-export const acceptBg = 'rgb(26, 116, 48)'
-export const acceptBorder = '1px solid rgb(20, 86, 38)'
+// Widget colors: theme variables, so every theme keeps them readable
+export const acceptAllBg = 'var(--vscode-button-background)'
+export const acceptBg = 'var(--vscode-button-background)'
+export const acceptBorder = '1px solid var(--vscode-button-background)'
 
-export const rejectAllBg = 'rgb(207, 40, 56)'
-export const rejectBg = 'rgb(180, 35, 49)'
-export const rejectBorder = '1px solid rgb(142, 28, 39)'
+export const rejectAllBg = 'var(--vscode-button-secondaryBackground)'
+export const rejectBg = 'var(--vscode-button-secondaryBackground)'
+export const rejectBorder = '1px solid var(--vscode-widget-border, var(--vscode-editorGroup-border))'
 
 export const buttonFontSize = '11px'
-export const buttonTextColor = 'white'
+export const buttonTextColor = 'var(--vscode-button-foreground)'
+export const rejectTextColor = 'var(--vscode-button-secondaryForeground)'
 
 
 

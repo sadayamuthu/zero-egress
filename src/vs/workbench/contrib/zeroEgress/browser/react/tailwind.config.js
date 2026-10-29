@@ -71,6 +71,11 @@ module.exports = {
 				'ze-border-3': 'var(--ze-border-3)',
 				'ze-border-4': 'var(--ze-border-4)',
 
+				'ze-accent': 'var(--ze-accent)',
+				'ze-accent-hover': 'var(--ze-accent-hover)',
+				'ze-on-accent': 'var(--ze-on-accent)',
+				'ze-ok': 'var(--ze-ok)',
+
 				'ze-ring-color': 'var(--ze-ring-color)',
 				'ze-link-color': 'var(--ze-link-color)',
 

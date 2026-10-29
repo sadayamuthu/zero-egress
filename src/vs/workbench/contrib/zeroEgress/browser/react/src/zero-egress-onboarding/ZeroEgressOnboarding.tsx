@@ -156,7 +156,7 @@ const AddProvidersPage = ({ pageIndex, setPageIndex }: { pageIndex: number, setP
 					<button
 						key={tab}
 						className={`py-2 px-4 rounded-md text-left ${currentTab === tab
-							? 'bg-[#34d399] text-[#111827] font-medium shadow-sm'
+							? 'bg-ze-accent text-ze-on-accent font-medium shadow-sm'
 							: 'bg-ze-bg-2 hover:bg-ze-bg-2/80 text-ze-fg-1'
 							} transition-all duration-200`}
 						onClick={() => {

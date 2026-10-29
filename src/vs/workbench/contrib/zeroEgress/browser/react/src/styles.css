@@ -29,8 +29,15 @@
 	--ze-border-3: var(--vscode-commandCenter-inactiveBorder);
 	--ze-border-4: var(--vscode-editorGroup-border);
 
-	--ze-ring-color: #007FD4;
-	--ze-link-color: #007FD4;
+	--ze-ring-color: var(--vscode-focusBorder);
+	--ze-link-color: var(--vscode-focusBorder);
+
+	--ze-accent: var(--vscode-button-background);
+	--ze-accent-hover: var(--vscode-button-hoverBackground);
+	--ze-on-accent: var(--vscode-button-foreground);
+	--ze-ok: var(--vscode-charts-green);
+	--ze-radius-card: 10px;
+	--ze-radius-control: 6px;
 }
 
 .select-child-restyle select {

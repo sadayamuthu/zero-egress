@@ -177,10 +177,10 @@ export const StatusIndicator = ({ indicatorColor, title, className, ...props }: 
 			{title && <span className='opacity-80'>{title}</span>}
 			<div
 				className={` size-1.5 rounded-full border
-					${indicatorColor === 'dark' ? 'bg-[rgba(0,0,0,0)] border-ze-border-1' :
-						indicatorColor === 'orange' ? 'bg-orange-500 border-orange-500 shadow-[0_0_4px_0px_rgba(234,88,12,0.6)]' :
-							indicatorColor === 'green' ? 'bg-green-500 border-green-500 shadow-[0_0_4px_0px_rgba(22,163,74,0.6)]' :
-								indicatorColor === 'yellow' ? 'bg-yellow-500 border-yellow-500 shadow-[0_0_4px_0px_rgba(22,163,74,0.6)]' :
+					${indicatorColor === 'dark' ? 'bg-transparent border-ze-border-1' :
+						indicatorColor === 'orange' ? 'bg-[var(--vscode-charts-orange)] border-[var(--vscode-charts-orange)]' :
+							indicatorColor === 'green' ? 'bg-[var(--vscode-charts-green)] border-[var(--vscode-charts-green)]' :
+								indicatorColor === 'yellow' ? 'bg-[var(--vscode-charts-yellow)] border-[var(--vscode-charts-yellow)]' :
 									'bg-ze-border-1 border-ze-border-1'
 					}
 				`}
