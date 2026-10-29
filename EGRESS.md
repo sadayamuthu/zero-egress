@@ -148,6 +148,7 @@ control, or controls only partly.
   launch in the terminal are out of scope. ZeroEgress controls its own
   traffic, not your shell.
 - **Background agents' setup command.** The command in zeroEgress.agents.setupCommand runs as a child process in the agent's worktree, outside the guard, like the terminal.
+- **Background agents' worktrees.** Creating, diffing and removing an agent's worktree runs the local `git` binary from the main process, outside the guard. It runs only local subcommands, with network transports refused (`protocol.allow=never`), Git LFS smudge off (`GIT_LFS_SKIP_SMUDGE=1`), partial-clone lazy fetches off (`GIT_NO_LAZY_FETCH=1`) and hooks disabled.
 - **Third-party extensions' child processes.** Processes that
   user-installed extensions start are out of scope.
 - **Stdio MCP servers** are allowed, and treated like terminal processes:

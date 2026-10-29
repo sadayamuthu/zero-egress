@@ -231,15 +231,19 @@ is a conflict and is never applied silently: choose **Keep mine** or
 
 To prepare a fresh worktree (for example to install dependencies), set
 `zeroEgress.agents.setupCommand`; it runs in the agent's folder after the
-worktree is created. Several agents can share one model server: raise
+worktree is created. You are asked before a new or changed command runs,
+and the setting is ignored in untrusted workspaces. Several agents can share one model server: raise
 **Parallel requests** for the provider, and `zeroEgress.agents.maxConcurrent`
 for the number of agents that run at once. The server must also run requests
 in parallel (Ollama: `OLLAMA_NUM_PARALLEL`).
 
 Background agents are confined by path checks on their file tools and
-terminal working directory. This is **not** an OS sandbox: a terminal
-command can still `cd` outside the worktree, which is why terminal commands
-ask first.
+terminal working directory: paths outside the agent's folder, and paths
+inside a `.git` folder, are refused, and before a file is written, created
+or deleted its real path (after symlinks) must still be inside the
+worktree. This is **not** an OS sandbox: a terminal command can still `cd`
+outside the worktree, which is why terminal commands ask first, unless you
+turned on auto-approve for terminal commands.
 
 ## Egress and security
 
