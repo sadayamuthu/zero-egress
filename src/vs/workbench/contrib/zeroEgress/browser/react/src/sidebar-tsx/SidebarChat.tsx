@@ -22,7 +22,7 @@ import { ChatMode, displayInfoOfProviderName, FeatureName, isFeatureNameDisabled
 import { ICommandService } from '../../../../../../../platform/commands/common/commands.js';
 import { WarningBox } from '../zero-egress-settings-tsx/WarningBox.js';
 import { getModelCapabilities, getIsReasoningEnabledState } from '../../../../common/modelCapabilities.js';
-import { AlertTriangle, File, Ban, Check, ChevronRight, Dot, FileIcon, Pencil, Undo, Undo2, X, Flag, Copy as CopyIcon, Info, CirclePlus, Ellipsis, CircleEllipsis, Folder, ALargeSmall, TypeOutline, Text } from 'lucide-react';
+import { AlertTriangle, File, Ban, Check, ChevronRight, Dot, FileIcon, Pencil, Undo, Undo2, X, Flag, Copy as CopyIcon, Info, CirclePlus, Ellipsis, CircleEllipsis, CloudUpload, Folder, ALargeSmall, TypeOutline, Text } from 'lucide-react';
 import { ChatMessage, CheckpointEntry, StagingSelectionItem, ToolMessage } from '../../../../common/chatThreadServiceTypes.js';
 import { approvalTypeOfBuiltinToolName, BuiltinToolCallParams, BuiltinToolName, ToolName, LintErrorItem, ToolApprovalType, toolApprovalTypes } from '../../../../common/toolsServiceTypes.js';
 import { CopyButton, EditToolAcceptRejectButtonsHTML, IconShell1, JumpToFileButton, JumpToTerminalButton, StatusIndicator, StatusIndicatorForApplyButton, useApplyStreamState, useEditToolStreamState } from '../markdown/ApplyBlockHoverButtons.js';
@@ -2954,6 +2954,52 @@ const ChatThreadViewInner = ({ threadId, variant, inputDisabledReason }: { threa
 	const pendingFileOps = usePendingFileOps()
 	const hasPendingChanges = variant === 'docked' && (pendingURIs.length > 0 || pendingFileOps.length > 0) // the Agents view has its own review column
 
+	// ----- Move to background (docked panel only) -----
+	const [bgAvailability, setBgAvailability] = useState<{ ok: true } | { ok: false; reason: string } | null>(null)
+	const [isMoving, setIsMoving] = useState(false)
+	useEffect(() => {
+		if (variant !== 'docked') return
+		let cancelled = false
+		accessor.get('IBackgroundAgentsService').availability().then(a => { if (!cancelled) setBgAvailability(a) }).catch(() => { })
+		return () => { cancelled = true }
+	}, [variant, accessor])
+	const hasUserMessage = previousMessages.some(m => m.role === 'user')
+	const moveDisabledReason: string | null = (
+		isRunning ? 'Stop the agent first.'
+			: !hasUserMessage ? 'Nothing to move yet.'
+				: (pendingURIs.length > 0 || pendingFileOps.length > 0) ? `Accept or reject this agent's pending changes first.`
+					: bgAvailability && !bgAvailability.ok ? bgAvailability.reason
+						: !bgAvailability ? 'Checking whether background agents are available.'
+							: null
+	)
+	const moveToBackground = async () => {
+		if (moveDisabledReason || isMoving) return
+		setIsMoving(true)
+		try {
+			await accessor.get('IBackgroundAgentsService').startAgent('', threadId)
+			chatThreadsService.openNewThread()
+			await commandService.executeCommand('zeroEgress.showAgents')
+		} catch (e) {
+			accessor.get('INotificationService').error(e instanceof Error ? e.message : String(e))
+		} finally {
+			setIsMoving(false)
+		}
+	}
+	const moveToBackgroundRow = variant === 'docked' && previousMessages.length > 0 ? <div className='flex justify-end px-4 pt-1'>
+		<span
+			data-tooltip-id='ze-tooltip'
+			data-tooltip-place='bottom'
+			data-tooltip-content={moveDisabledReason ?? 'Move to background'}
+		>
+			<IconShell1
+				Icon={CloudUpload}
+				disabled={!!moveDisabledReason || isMoving}
+				onClick={moveToBackground}
+				aria-label='Move to background'
+			/>
+		</span>
+	</div> : null
+
 	const sidebarRef = useRef<HTMLDivElement>(null)
 	const scrollContainerRef = useRef<HTMLDivElement | null>(null)
 	const onSubmit = useCallback(async (_forceSubmit?: string) => {
@@ -3206,7 +3252,7 @@ const ChatThreadViewInner = ({ threadId, variant, inputDisabledReason }: { threa
 		ref={sidebarRef}
 		className='w-full h-full flex flex-col overflow-hidden'
 	>
-
+		{moveToBackgroundRow}
 		<ErrorBoundary>
 			{messagesHTML}
 		</ErrorBoundary>

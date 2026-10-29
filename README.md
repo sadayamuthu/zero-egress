@@ -214,6 +214,33 @@ checks the network calls they make through Node and Electron in the
 extension host, but not the programs they start. See
 [EGRESS.md](EGRESS.md#known-limits).
 
+## Background agents
+
+A background agent works on a task in its own git worktree, so it can run
+while you keep editing. The worktree lives under the app's data folder
+(`agent-worktrees/`), never inside your project, on a branch named
+`ze/agent-<id>`. It starts from your current HEAD plus a copy of your
+uncommitted changes. Start one from the Agents view (Shift+Cmd+A), or use
+the **Move to background** button in the chat panel to hand over the
+current conversation. They need a single folder inside a git repository.
+
+When an agent finishes, review its changes in the Agents view and accept
+or reject them. If you changed lines that a change touches, that change
+is a conflict and is never applied silently: choose **Keep mine** or
+**Use agent's**.
+
+To prepare a fresh worktree (for example to install dependencies), set
+`zeroEgress.agents.setupCommand`; it runs in the agent's folder after the
+worktree is created. Several agents can share one model server: raise
+**Parallel requests** for the provider, and `zeroEgress.agents.maxConcurrent`
+for the number of agents that run at once. The server must also run requests
+in parallel (Ollama: `OLLAMA_NUM_PARALLEL`).
+
+Background agents are confined by path checks on their file tools and
+terminal working directory. This is **not** an OS sandbox: a terminal
+command can still `cd` outside the worktree, which is why terminal commands
+ask first.
+
 ## Egress and security
 
 - [EGRESS.md](EGRESS.md): what was removed, how the runtime guard works,

@@ -147,6 +147,7 @@ control, or controls only partly.
 - **Terminal processes.** Programs you (or the agent, on your approval)
   launch in the terminal are out of scope. ZeroEgress controls its own
   traffic, not your shell.
+- **Background agents' setup command.** The command in zeroEgress.agents.setupCommand runs as a child process in the agent's worktree, outside the guard, like the terminal.
 - **Third-party extensions' child processes.** Processes that
   user-installed extensions start are out of scope.
 - **Stdio MCP servers** are allowed, and treated like terminal processes:
