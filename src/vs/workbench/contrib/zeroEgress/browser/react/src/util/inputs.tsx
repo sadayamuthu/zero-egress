@@ -199,7 +199,7 @@ const getOptionsAtPath = async (accessor: ReturnType<typeof useAccessor>, path: 
 				query: t,
 				includePattern: null,
 				pageNumber: 1,
-			})).result).uris
+			}, { kind: 'docked' })).result).uris
 
 			if (searchFor === 'files') {
 				const res: Option[] = searchResults.map(uri => {

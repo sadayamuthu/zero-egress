@@ -39,6 +39,8 @@ import { IDirectoryStrService } from '../common/directoryStrService.js';
 import { IFileService } from '../../../../platform/files/common/files.js';
 import { IMCPService } from '../common/mcpService.js';
 import { RawMCPToolCall } from '../common/mcpServiceTypes.js';
+import { AGENT_WORKTREE_REMOVED_MESSAGE, agentRootOf, BackgroundAgentInfo, ToolRunContext } from '../common/backgroundAgentTypes.js';
+import { resolveAgentPath } from '../common/agentPaths.js';
 
 
 // related to retrying when LLM message has error
@@ -118,6 +120,9 @@ export type ThreadType = {
 
 	messages: ChatMessage[];
 	filesWithUserChanges: Set<string>;
+
+	/** set when this thread runs as a background agent in its own git worktree */
+	agent?: BackgroundAgentInfo;
 
 	// this doesn't need to go in a state object, but feels right
 	state: {
@@ -601,6 +606,31 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 	// private readonly _currentlyRunningToolInterruptor: { [threadId: string]: (() => void) | undefined } = {}
 
 
+	/** whose files this thread's tools work on */
+	private _toolContextOf(threadId: string): ToolRunContext {
+		const agent = this.state.allThreads[threadId]?.agent
+		return agent ? { kind: 'background', agent } : { kind: 'docked' }
+	}
+
+	/** maps every path param into the agent's root, or throws (`Path is outside this agent's worktree: ...`) */
+	private _confineToolParams(toolName: ToolName, params: ToolCallParams<ToolName>, agent: BackgroundAgentInfo): ToolCallParams<ToolName> {
+		if (!agent.worktreePath) throw new Error(AGENT_WORKTREE_REMOVED_MESSAGE)
+		const agentRoot = agentRootOf(agent)
+		const roots = { agentRoot, userRoot: agent.userRoot }
+		const confined: Record<string, unknown> = { ...params }
+		for (const [key, value] of Object.entries(params)) {
+			if (!URI.isUri(value)) continue
+			if (value.scheme !== 'file') throw new Error(`Path is outside this agent's worktree: ${value.toString()}`)
+			confined[key] = URI.file(resolveAgentPath(value.fsPath, roots))
+		}
+		if (toolName === 'run_command' || toolName === 'open_persistent_terminal') {
+			const cwd = (params as BuiltinToolCallParams['run_command']).cwd
+			confined.cwd = cwd === null ? agentRoot : resolveAgentPath(cwd, roots)
+		}
+		return confined as ToolCallParams<ToolName>
+	}
+
+
 	// returns true when the tool call is waiting for user approval
 	private _runToolCall = async (
 		threadId: string,
@@ -617,6 +647,7 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 
 		// Check if it's a built-in tool
 		const isBuiltInTool = isABuiltinToolName(toolName)
+		const toolCtx = this._toolContextOf(threadId)
 
 
 		if (!opts.preapproved) { // skip this if pre-approved
@@ -628,6 +659,11 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 				}
 				else {
 					toolParams = opts.unvalidatedToolParams
+				}
+				// background agents: confine every path to the agent's worktree (MCP tools have no paths we know of)
+				if (toolCtx.kind === 'background') {
+					if (!toolCtx.agent.worktreePath) { throw new Error(AGENT_WORKTREE_REMOVED_MESSAGE) }
+					if (isBuiltInTool) { toolParams = this._confineToolParams(toolName, toolParams, toolCtx.agent) }
 				}
 			}
 			catch (error) {
@@ -643,7 +679,8 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 
 			const approvalType = isBuiltInTool ? approvalTypeOfBuiltinToolName[toolName] : 'MCP tools'
 			if (approvalType) {
-				const autoApprove = this._settingsService.state.globalSettings.autoApprove[approvalType]
+				// background agents never ask for edits, creates and deletes: they land in the worktree and are reviewed later
+				const autoApprove = (toolCtx.kind === 'background' && approvalType === 'edits') || this._settingsService.state.globalSettings.autoApprove[approvalType]
 				// add a tool_request because we use it for UI if a tool is loading (this should be improved in the future)
 				this._addMessageToThread(threadId, { role: 'tool', type: 'tool_request', content: '(Awaiting user permission...)', result: null, name: toolName, params: toolParams, id: toolId, rawParams: opts.unvalidatedToolParams, mcpServerName })
 				if (!autoApprove) {
@@ -674,8 +711,11 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 			// set stream state
 			this._setStreamState(threadId, { isRunning: 'tool', interrupt: interruptorPromise, toolInfo: { toolName, toolParams, id: toolId, content: 'interrupted...', rawParams: opts.unvalidatedToolParams, mcpServerName } })
 
+			// the worktree can be removed while a tool waits for approval
+			if (toolCtx.kind === 'background' && !toolCtx.agent.worktreePath) { throw new Error(AGENT_WORKTREE_REMOVED_MESSAGE) }
+
 			if (isBuiltInTool) {
-				const { result, interruptTool } = await this._toolsService.callTool[toolName](toolParams as any)
+				const { result, interruptTool } = await this._toolsService.callTool[toolName](toolParams as any, toolCtx)
 				const interruptor = () => { interrupted = true; interruptTool?.() }
 				resolveInterruptor(interruptor)
 
@@ -709,7 +749,7 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 		// 4. stringify the result to give to the LLM
 		try {
 			if (isBuiltInTool) {
-				toolResultStr = this._toolsService.stringOfResult[toolName](toolParams as any, toolResult as any)
+				toolResultStr = this._toolsService.stringOfResult[toolName](toolParams as any, toolResult as any, toolCtx)
 			}
 			// For MCP tools, handle the result based on its type
 			else {
@@ -748,7 +788,10 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 		// _runToolCall does not need setStreamState({idle}) before it, but it needs it after it. (handles its own setStreamState)
 
 		// above just defines helpers, below starts the actual function
-		const { chatMode } = this._settingsService.state.globalSettings // should not change as we loop even if user changes it, so it goes here
+		// should not change as we loop even if user changes it, so it goes here. Background agents always run in agent mode.
+		const backgroundAgent = this.state.allThreads[threadId]?.agent
+		const chatMode = backgroundAgent ? 'agent' : this._settingsService.state.globalSettings.chatMode
+		const agentRoot = backgroundAgent ? { folder: agentRootOf(backgroundAgent), depsMayBeMissing: !backgroundAgent.setup?.command } : undefined
 		const { overridesOfModel } = this._settingsService.state
 
 		let nMessagesSent = 0
@@ -780,7 +823,8 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 			const { messages, separateSystemMessage } = await this._convertToLLMMessagesService.prepareLLMChatMessages({
 				chatMessages,
 				modelSelection,
-				chatMode
+				chatMode,
+				agentRoot,
 			})
 
 			if (interruptedWhenIdle) {
@@ -992,6 +1036,7 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 
 
 	private _addUserCheckpoint({ threadId }: { threadId: string }) {
+		if (this.state.allThreads[threadId]?.agent) return // background agents are reviewed per hunk, not with checkpoints
 		const { zeroEgressFileSnapshotOfURI } = this._computeNewCheckpointInfo({ threadId }) ?? {}
 		this._addCheckpoint(threadId, {
 			role: 'checkpoint',
@@ -1004,6 +1049,7 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 	private _addToolEditCheckpoint({ threadId, uri, }: { threadId: string, uri: URI }) {
 		const thread = this.state.allThreads[threadId]
 		if (!thread) return
+		if (thread.agent) return // background agents are reviewed per hunk, not with checkpoints
 		const { model } = this._zeroEgressModelService.getModel(uri)
 		if (!model) return // should never happen
 		const diffAreasSnapshot = this._editCodeService.getZeroEgressFileSnapshot(uri)
@@ -1430,7 +1476,7 @@ We only need to do it for files that were edited since `from`, ie files between 
 			// else search codebase for `target`
 			let uris: URI[] = []
 			try {
-				const { result } = await this._toolsService.callTool['search_pathnames_only']({ query: target, includePattern: null, pageNumber: 0 })
+				const { result } = await this._toolsService.callTool['search_pathnames_only']({ query: target, includePattern: null, pageNumber: 0 }, { kind: 'docked' })
 				const { uris: uris_ } = await result
 				uris = uris_
 			} catch (e) {

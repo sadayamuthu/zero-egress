@@ -9,7 +9,7 @@ import { ISearchService } from '../../../services/search/common/search.js'
 import { IPendingFileOpsService } from './pendingFileOpsService.js';
 import { IEditCodeService } from './editCodeServiceInterface.js'
 import { ITerminalToolService } from './terminalToolService.js'
-import { LintErrorItem, BuiltinToolCallParams, BuiltinToolResultType, BuiltinToolName } from '../common/toolsServiceTypes.js'
+import { LintErrorItem, BuiltinToolCallParams, BuiltinToolResultType, BuiltinToolName, CallBuiltinTool } from '../common/toolsServiceTypes.js'
 import { IZeroEgressModelService } from '../common/zeroEgressModelService.js'
 import { EndOfLinePreference } from '../../../../editor/common/model.js'
 import { IZeroEgressCommandBarService } from './zeroEgressCommandBarService.js'
@@ -20,12 +20,14 @@ import { RawToolParamsObj } from '../common/sendLLMMessageTypes.js'
 import { MAX_CHILDREN_URIs_PAGE, MAX_FILE_CHARS_PAGE, MAX_TERMINAL_BG_COMMAND_TIME, MAX_TERMINAL_INACTIVE_TIME } from '../common/prompt/prompts.js'
 import { IZeroEgressSettingsService } from '../common/zeroEgressSettingsService.js'
 import { generateUuid } from '../../../../base/common/uuid.js'
+import { VSBuffer } from '../../../../base/common/buffer.js'
+import { AGENT_WORKTREE_REMOVED_MESSAGE, agentRootOf, ToolRunContext } from '../common/backgroundAgentTypes.js'
+import { applySearchReplaceBlocks } from '../common/helpers/searchReplace.js'
 
 
 // tool use for AI
 type ValidateBuiltinParams = { [T in BuiltinToolName]: (p: RawToolParamsObj) => BuiltinToolCallParams[T] }
-type CallBuiltinTool = { [T in BuiltinToolName]: (p: BuiltinToolCallParams[T]) => Promise<{ result: BuiltinToolResultType[T] | Promise<BuiltinToolResultType[T]>, interruptTool?: () => void }> }
-type BuiltinToolResultToString = { [T in BuiltinToolName]: (p: BuiltinToolCallParams[T], result: Awaited<BuiltinToolResultType[T]>) => string }
+type BuiltinToolResultToString = { [T in BuiltinToolName]: (p: BuiltinToolCallParams[T], result: Awaited<BuiltinToolResultType[T]>, ctx?: ToolRunContext) => string }
 
 
 const isFalsy = (u: unknown) => {
@@ -125,6 +127,13 @@ const checkIfIsFolder = (uriStr: string) => {
 	return false
 }
 
+/** The background agent's root folder, or throws if its worktree is gone. Undefined for the docked agent. */
+const backgroundRootOf = (ctx: ToolRunContext): string | undefined => {
+	if (ctx.kind !== 'background') return undefined
+	if (!ctx.agent.worktreePath) throw new Error(AGENT_WORKTREE_REMOVED_MESSAGE)
+	return agentRootOf(ctx.agent)
+}
+
 export interface IToolsService {
 	readonly _serviceBrand: undefined;
 	validateParams: ValidateBuiltinParams;
@@ -157,6 +166,21 @@ export class ToolsService implements IToolsService {
 		@IPendingFileOpsService pendingFileOpsService: IPendingFileOpsService,
 	) {
 		const queryBuilder = instantiationService.createInstance(QueryBuilder);
+
+		// background agents read and write their worktree on disk directly (no text models, no diff zones)
+		const readDiskText = async (uri: URI): Promise<{ text: string, crlf: boolean } | null> => {
+			if (!(await fileService.exists(uri))) return null
+			const raw = (await fileService.readFile(uri)).value.toString()
+			const crlf = raw.includes('\r\n')
+			return { text: crlf ? raw.replace(/\r\n/g, '\n') : raw, crlf }
+		}
+		const writeDiskText = async (uri: URI, text: string, crlf: boolean) => {
+			await fileService.writeFile(uri, VSBuffer.fromString(crlf ? text.replace(/\r?\n/g, '\r\n') : text))
+		}
+		const searchFoldersOf = (ctx: ToolRunContext) => {
+			const root = backgroundRootOf(ctx)
+			return root !== undefined ? [URI.file(root)] : workspaceContextService.getWorkspace().folders.map(f => f.uri)
+		}
 
 		this.validateParams = {
 			read_file: (params: RawToolParamsObj) => {
@@ -296,22 +320,33 @@ export class ToolsService implements IToolsService {
 
 
 		this.callTool = {
-			read_file: async ({ uri, startLine, endLine, pageNumber }) => {
-				await zeroEgressModelService.initializeModel(uri)
-				const { model } = await zeroEgressModelService.getModelSafe(uri)
-				if (model === null) { throw new Error(`No contents; File does not exist.`) }
-
+			read_file: async ({ uri, startLine, endLine, pageNumber }, ctx) => {
 				let contents: string
-				if (startLine === null && endLine === null) {
-					contents = model.getValue(EndOfLinePreference.LF)
+				let totalNumLines: number
+				if (backgroundRootOf(ctx) !== undefined) {
+					const disk = await readDiskText(uri)
+					if (disk === null) { throw new Error(`No contents; File does not exist.`) }
+					const allLines = disk.text.split('\n')
+					totalNumLines = allLines.length
+					contents = startLine === null && endLine === null ? disk.text
+						: allLines.slice((startLine ?? 1) - 1, endLine ?? totalNumLines).join('\n')
 				}
 				else {
-					const startLineNumber = startLine === null ? 1 : startLine
-					const endLineNumber = endLine === null ? model.getLineCount() : endLine
-					contents = model.getValueInRange({ startLineNumber, startColumn: 1, endLineNumber, endColumn: Number.MAX_SAFE_INTEGER }, EndOfLinePreference.LF)
-				}
+					await zeroEgressModelService.initializeModel(uri)
+					const { model } = await zeroEgressModelService.getModelSafe(uri)
+					if (model === null) { throw new Error(`No contents; File does not exist.`) }
 
-				const totalNumLines = model.getLineCount()
+					if (startLine === null && endLine === null) {
+						contents = model.getValue(EndOfLinePreference.LF)
+					}
+					else {
+						const startLineNumber = startLine === null ? 1 : startLine
+						const endLineNumber = endLine === null ? model.getLineCount() : endLine
+						contents = model.getValueInRange({ startLineNumber, startColumn: 1, endLineNumber, endColumn: Number.MAX_SAFE_INTEGER }, EndOfLinePreference.LF)
+					}
+
+					totalNumLines = model.getLineCount()
+				}
 
 				const fromIdx = MAX_FILE_CHARS_PAGE * (pageNumber - 1)
 				const toIdx = MAX_FILE_CHARS_PAGE * pageNumber - 1
@@ -321,19 +356,21 @@ export class ToolsService implements IToolsService {
 				return { result: { fileContents, totalFileLen, hasNextPage, totalNumLines } }
 			},
 
-			ls_dir: async ({ uri, pageNumber }) => {
+			ls_dir: async ({ uri, pageNumber }, ctx) => {
+				backgroundRootOf(ctx)
 				const dirResult = await computeDirectoryTree1Deep(fileService, uri, pageNumber)
 				return { result: dirResult }
 			},
 
-			get_dir_tree: async ({ uri }) => {
+			get_dir_tree: async ({ uri }, ctx) => {
+				backgroundRootOf(ctx)
 				const str = await this.directoryStrService.getDirectoryStrTool(uri)
 				return { result: { str } }
 			},
 
-			search_pathnames_only: async ({ query: queryStr, includePattern, pageNumber }) => {
+			search_pathnames_only: async ({ query: queryStr, includePattern, pageNumber }, ctx) => {
 
-				const query = queryBuilder.file(workspaceContextService.getWorkspace().folders.map(f => f.uri), {
+				const query = queryBuilder.file(searchFoldersOf(ctx), {
 					filePattern: queryStr,
 					includePattern: includePattern ?? undefined,
 					sortByScore: true, // makes results 10x better
@@ -350,10 +387,9 @@ export class ToolsService implements IToolsService {
 				return { result: { uris, hasNextPage } }
 			},
 
-			search_for_files: async ({ query: queryStr, isRegex, searchInFolder, pageNumber }) => {
-				const searchFolders = searchInFolder === null ?
-					workspaceContextService.getWorkspace().folders.map(f => f.uri)
-					: [searchInFolder]
+			search_for_files: async ({ query: queryStr, isRegex, searchInFolder, pageNumber }, ctx) => {
+				const defaultFolders = searchFoldersOf(ctx) // also throws if a background agent's worktree is gone
+				const searchFolders = searchInFolder === null ? defaultFolders : [searchInFolder]
 
 				const query = queryBuilder.text({
 					pattern: queryStr,
@@ -371,11 +407,20 @@ export class ToolsService implements IToolsService {
 				const hasNextPage = (data.results.length - 1) - toIdx >= 1
 				return { result: { queryStr, uris, hasNextPage } }
 			},
-			search_in_file: async ({ uri, query, isRegex }) => {
-				await zeroEgressModelService.initializeModel(uri);
-				const { model } = await zeroEgressModelService.getModelSafe(uri);
-				if (model === null) { throw new Error(`No contents; File does not exist.`); }
-				const contents = model.getValue(EndOfLinePreference.LF);
+			search_in_file: async ({ uri, query, isRegex }, ctx) => {
+				const isBackground = backgroundRootOf(ctx) !== undefined
+				let contents: string
+				if (isBackground) {
+					const disk = await readDiskText(uri)
+					if (disk === null) { throw new Error(`No contents; File does not exist.`); }
+					contents = disk.text
+				}
+				else {
+					await zeroEgressModelService.initializeModel(uri);
+					const { model } = await zeroEgressModelService.getModelSafe(uri);
+					if (model === null) { throw new Error(`No contents; File does not exist.`); }
+					contents = model.getValue(EndOfLinePreference.LF);
+				}
 				const contentOfLine = contents.split('\n');
 				const totalLines = contentOfLine.length;
 				const regex = isRegex ? new RegExp(query) : null;
@@ -387,10 +432,12 @@ export class ToolsService implements IToolsService {
 						lines.push(matchLine);
 					}
 				}
+				if (isBackground) return { result: { lines, lineTexts: lines.map(n => contentOfLine[n - 1]) } };
 				return { result: { lines } };
 			},
 
-			read_lint_errors: async ({ uri }) => {
+			read_lint_errors: async ({ uri }, ctx) => {
+				backgroundRootOf(ctx)
 				await timeout(1000)
 				const { lintErrors } = this._getLintErrors(uri)
 				return { result: { lintErrors } }
@@ -398,18 +445,43 @@ export class ToolsService implements IToolsService {
 
 			// ---
 
-			// creates and deletes wait for the user's review (pendingFileOpsService)
-			create_file_or_folder: async ({ uri, isFolder }) => {
+			// docked: creates and deletes wait for the user's review (pendingFileOpsService)
+			// background: they go straight to disk in the agent's worktree, reviewed later as a whole
+			create_file_or_folder: async ({ uri, isFolder }, ctx) => {
+				if (backgroundRootOf(ctx) !== undefined) {
+					if (await fileService.exists(uri)) {
+						throw new Error(`${uri.fsPath} already exists. Edit it instead of creating it.`)
+					}
+					if (isFolder) await fileService.createFolder(uri)
+					else await fileService.createFile(uri)
+					return { result: {} }
+				}
 				await pendingFileOpsService.create(uri, isFolder)
 				return { result: {} }
 			},
 
-			delete_file_or_folder: async ({ uri, isRecursive }) => {
+			delete_file_or_folder: async ({ uri, isRecursive }, ctx) => {
+				if (backgroundRootOf(ctx) !== undefined) {
+					const stat = await fileService.stat(uri).catch(() => undefined)
+					if (!stat) {
+						throw new Error(`${uri.fsPath} does not exist.`)
+					}
+					if (stat.isDirectory && !isRecursive && (await fileService.resolve(uri)).children?.length) {
+						throw new Error(`${uri.fsPath} is a folder that is not empty. Set is_recursive to delete it with its contents.`)
+					}
+					await fileService.del(uri, { recursive: !!isRecursive, useTrash: false })
+					return { result: {} }
+				}
 				await pendingFileOpsService.markDeleted(uri, !!isRecursive)
 				return { result: {} }
 			},
 
-			rewrite_file: async ({ uri, newContent }) => {
+			rewrite_file: async ({ uri, newContent }, ctx) => {
+				if (backgroundRootOf(ctx) !== undefined) {
+					const disk = await readDiskText(uri)
+					await writeDiskText(uri, newContent, disk?.crlf ?? false)
+					return { result: Promise.resolve({ lintErrors: null }) }
+				}
 				await zeroEgressModelService.initializeModel(uri)
 				if (this.commandBarService.getStreamState(uri) === 'streaming') {
 					throw new Error(`Another LLM is currently making changes to this file. Please stop streaming for now and ask the user to resume later.`)
@@ -425,7 +497,20 @@ export class ToolsService implements IToolsService {
 				return { result: lintErrorsPromise }
 			},
 
-			edit_file: async ({ uri, searchReplaceBlocks }) => {
+			edit_file: async ({ uri, searchReplaceBlocks }, ctx) => {
+				if (backgroundRootOf(ctx) !== undefined) {
+					const disk = await readDiskText(uri)
+					let newText: string
+					try {
+						newText = applySearchReplaceBlocks(searchReplaceBlocks, disk?.text ?? null)
+					}
+					catch (e) {
+						// same wording the docked path gives the LLM (editCodeService rethrows `e + ''`)
+						throw new Error(e + '')
+					}
+					await writeDiskText(uri, newText, disk?.crlf ?? false)
+					return { result: Promise.resolve({ lintErrors: null }) }
+				}
 				await zeroEgressModelService.initializeModel(uri)
 				if (this.commandBarService.getStreamState(uri) === 'streaming') {
 					throw new Error(`Another LLM is currently making changes to this file. Please stop streaming for now and ask the user to resume later.`)
@@ -443,15 +528,20 @@ export class ToolsService implements IToolsService {
 				return { result: lintErrorsPromise }
 			},
 			// ---
-			run_command: async ({ command, cwd, terminalId }) => {
+			run_command: async ({ command, cwd, terminalId }, ctx) => {
+				const root = backgroundRootOf(ctx)
+				if (root !== undefined && cwd === null) cwd = root
 				const { resPromise, interrupt } = await this.terminalToolService.runCommand(command, { type: 'temporary', cwd, terminalId })
 				return { result: resPromise, interruptTool: interrupt }
 			},
-			run_persistent_command: async ({ command, persistentTerminalId }) => {
+			run_persistent_command: async ({ command, persistentTerminalId }, ctx) => {
+				backgroundRootOf(ctx)
 				const { resPromise, interrupt } = await this.terminalToolService.runCommand(command, { type: 'persistent', persistentTerminalId })
 				return { result: resPromise, interruptTool: interrupt }
 			},
-			open_persistent_terminal: async ({ cwd }) => {
+			open_persistent_terminal: async ({ cwd }, ctx) => {
+				const root = backgroundRootOf(ctx)
+				if (root !== undefined && cwd === null) cwd = root
 				const persistentTerminalId = await this.terminalToolService.createPersistentTerminal({ cwd })
 				return { result: { persistentTerminalId } }
 			},
@@ -472,6 +562,8 @@ export class ToolsService implements IToolsService {
 				.substring(0, MAX_FILE_CHARS_PAGE)
 		}
 
+		const backgroundEditStr = (uri: URI) => `Change saved to ${uri.fsPath} in this agent's worktree. The user will review it later.`
+
 		// given to the LLM after the call for successful tool calls
 		this.stringOfResult = {
 			read_file: (params, result) => {
@@ -491,6 +583,9 @@ export class ToolsService implements IToolsService {
 				return result.uris.map(uri => uri.fsPath).join('\n') + nextPageStr(result.hasNextPage)
 			},
 			search_in_file: (params, result) => {
+				if (result.lineTexts) {
+					return result.lines.map((n, i) => `Line ${n}:\n\`\`\`\n${result.lineTexts![i]}\n\`\`\``).join('\n\n')
+				}
 				const { model } = zeroEgressModelService.getModel(params.uri)
 				if (!model) return '<Error getting string of result>'
 				const lines = result.lines.map(n => {
@@ -505,13 +600,16 @@ export class ToolsService implements IToolsService {
 					: 'No lint errors found.'
 			},
 			// ---
-			create_file_or_folder: (params, result) => {
+			create_file_or_folder: (params, result, ctx) => {
+				if (ctx?.kind === 'background') return `URI ${params.uri.fsPath} created in this agent's worktree. The user will review it later.`
 				return `URI ${params.uri.fsPath} created. The user will review the new file.`
 			},
-			delete_file_or_folder: (params, result) => {
+			delete_file_or_folder: (params, result, ctx) => {
+				if (ctx?.kind === 'background') return `${params.uri.fsPath} was deleted in this agent's worktree. The user will review the deletion later.`
 				return `Deletion of ${params.uri.fsPath} is pending the user's review. The file stays on disk until they accept; do not recreate or edit it.`
 			},
-			edit_file: (params, result) => {
+			edit_file: (params, result, ctx) => {
+				if (ctx?.kind === 'background') return backgroundEditStr(params.uri)
 				const lintErrsString = (
 					this.zeroEgressSettingsService.state.globalSettings.includeToolLintErrors ?
 						(result.lintErrors ? ` Lint errors found after change:\n${stringifyLintErrors(result.lintErrors)}.\nIf this is related to a change made while calling this tool, you might want to fix the error.`
@@ -520,7 +618,8 @@ export class ToolsService implements IToolsService {
 
 				return `Change successfully made to ${params.uri.fsPath}.${lintErrsString}`
 			},
-			rewrite_file: (params, result) => {
+			rewrite_file: (params, result, ctx) => {
+				if (ctx?.kind === 'background') return backgroundEditStr(params.uri)
 				const lintErrsString = (
 					this.zeroEgressSettingsService.state.globalSettings.includeToolLintErrors ?
 						(result.lintErrors ? ` Lint errors found after change:\n${stringifyLintErrors(result.lintErrors)}.\nIf this is related to a change made while calling this tool, you might want to fix the error.`
