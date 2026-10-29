@@ -132,7 +132,8 @@ class AgentsViewContribution extends Disposable implements IWorkbenchContributio
 		const target = this._restoreFocus;
 		this._restoreFocus = undefined;
 		if (!restoreFocus) {
-			this._editorService.activeEditorPane?.focus();
+			const pane = this._editorService.activeEditorPane;
+			if (pane) { pane.focus(); } else { this._layoutService.focus(); } // e.g. the change was the last editor closing
 			return;
 		}
 		if (target?.isConnected) {

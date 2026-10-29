@@ -56,26 +56,39 @@ const AgentsViewInner = ({ bridge }: { bridge: AgentsViewBridge }) => {
 
 	// ----- review of the selected agent -----
 	// tagged with its thread: after a switch, the previous agent's files must never render (or be acted on) under the new agent
-	const [reviewState, setReviewState] = useState<{ threadId: string, reviews: FileReview[] } | undefined>(undefined)
-	const reviews = reviewState && reviewState.threadId === selectedThreadId ? reviewState.reviews : undefined
+	type ReviewState = { threadId: string, reviews: FileReview[] } | { threadId: string, error: true }
+	const [reviewState, setReviewState] = useState<ReviewState | undefined>(undefined)
+	const current = reviewState && reviewState.threadId === selectedThreadId ? reviewState : undefined
+	const reviews = current && 'reviews' in current ? current.reviews : undefined
+	const reviewError = !!current && 'error' in current
 	const [activePath, setActivePath] = useState<string | undefined>(undefined)
-	const reviewSeq = useRef(0)
-	const refreshReview = useCallback(async () => {
-		const seq = ++reviewSeq.current
-		const threadId = selectedThreadId
-		if (!threadId) { setReviewState(undefined); return }
+
+	// read at call time (by the ⌘⏎ bridge and by fetches that finish after a switch)
+	const selectedRef = useRef(selectedThreadId)
+	selectedRef.current = selectedThreadId
+	const reviewStateRef = useRef(reviewState)
+	reviewStateRef.current = reviewState
+
+	// one counter per thread: a refresh of one agent never invalidates another agent's fetch
+	const reviewSeqs = useRef(new Map<string, number>())
+	const refreshReview = useCallback(async (threadId: string) => {
+		const seq = (reviewSeqs.current.get(threadId) ?? 0) + 1
+		reviewSeqs.current.set(threadId, seq)
+		let next: ReviewState
 		try {
-			const r = await agentsService.getReview(threadId)
-			if (seq === reviewSeq.current) { setReviewState({ threadId, reviews: r }) }
+			next = { threadId, reviews: await agentsService.getReview(threadId) }
 		} catch (e) {
 			console.error('Agents view: could not read the review', e)
+			next = { threadId, error: true }
 		}
-	}, [agentsService, selectedThreadId])
+		// stored only if it is the latest read of that thread and the thread is still the selected one
+		if (reviewSeqs.current.get(threadId) === seq && selectedRef.current === threadId) { setReviewState(next) }
+	}, [agentsService])
 
-	// review writes (buttons, keys and ⌘⏎) go one at a time; each re-reads the review afterwards, also when it failed
+	// review writes (buttons, keys and ⌘⏎) go one at a time; each re-reads its thread's review afterwards, also when it failed
 	const [busy, setBusy] = useState(false)
 	const busyRef = useRef(false)
-	const run = useCallback(async (write: () => Promise<void>) => {
+	const run = useCallback(async (threadId: string, write: () => Promise<void>) => {
 		if (busyRef.current) { return }
 		busyRef.current = true
 		setBusy(true)
@@ -84,7 +97,7 @@ const AgentsViewInner = ({ bridge }: { bridge: AgentsViewBridge }) => {
 		} catch (e) {
 			console.error('Agents view: review write failed', e)
 		} finally {
-			try { await refreshReview() } finally {
+			try { await refreshReview(threadId) } finally {
 				busyRef.current = false
 				setBusy(false)
 			}
@@ -92,14 +105,17 @@ const AgentsViewInner = ({ bridge }: { bridge: AgentsViewBridge }) => {
 	}, [refreshReview])
 
 	// re-read when the selection, its status or its pending count changes
-	useEffect(() => { refreshReview() }, [refreshReview, selected?.status.label, selected?.changedFiles])
+	useEffect(() => { if (selectedThreadId) { refreshReview(selectedThreadId) } }, [refreshReview, selectedThreadId, selected?.status.label, selected?.changedFiles])
 	useEffect(() => { setActivePath(undefined) }, [selectedThreadId])
 
 	// ----- bridge -----
+	/** ⌘⏎ and the Accept all button: only once the selected agent's review has loaded (never changes the user hasn't seen) */
 	const acceptAll = useCallback(() => {
-		if (!selectedThreadId) { return }
-		run(() => agentsService.acceptAll(selectedThreadId))
-	}, [agentsService, selectedThreadId, run])
+		const threadId = selectedRef.current
+		const state = reviewStateRef.current
+		if (!threadId || busyRef.current || !state || state.threadId !== threadId || !('reviews' in state) || state.reviews.length === 0) { return }
+		run(threadId, () => agentsService.acceptAll(threadId))
+	}, [agentsService, run])
 
 	const openPrompt = useCallback(() => {
 		setPromptOpen(true)
@@ -161,7 +177,11 @@ const AgentsViewInner = ({ bridge }: { bridge: AgentsViewBridge }) => {
 		</div>
 
 		<div className='flex-shrink-0 h-full border-l border-ze-border-4 bg-ze-bg-2' style={{ width: '45%' }}>
-			{selectedThreadId && agentInfo && !reviews ? <div className='p-6 text-sm text-ze-fg-3 select-none'>Loading changes…</div>
+			{selectedThreadId && agentInfo && reviewError ? <div className='p-6 text-sm text-ze-fg-3 select-none flex items-center gap-3'>
+				<span>Couldn't load changes.</span>
+				<button className='px-2 py-0.5 rounded text-xs font-medium bg-ze-accent text-ze-on-accent hover:bg-ze-accent-hover' onClick={() => { refreshReview(selectedThreadId) }}>Retry</button>
+			</div>
+				: selectedThreadId && agentInfo && !reviews ? <div className='p-6 text-sm text-ze-fg-3 select-none'>Loading changes…</div>
 				: selectedThreadId && agentInfo && reviews ? <ReviewColumn
 				key={selectedThreadId}
 				threadId={selectedThreadId}
@@ -170,8 +190,8 @@ const AgentsViewInner = ({ bridge }: { bridge: AgentsViewBridge }) => {
 				activePath={activePath}
 				onSelectPath={setActivePath}
 				busy={busy}
-				run={run}
-				onRefresh={refreshReview}
+				run={write => run(selectedThreadId, write)}
+				onRefresh={() => refreshReview(selectedThreadId)}
 				onAcceptAll={acceptAll}
 			/> : <div className='p-6 text-sm text-ze-fg-3 select-none'>Changes from the selected agent show here.</div>}
 		</div>
