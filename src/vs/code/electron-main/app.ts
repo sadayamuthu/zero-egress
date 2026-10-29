@@ -137,6 +137,8 @@ import { AUDIT_COLLECTOR_URL_SETTING, AUDIT_ENABLED_SETTING } from '../../workbe
 import { resolveAuditConfig } from '../../workbench/contrib/zeroEgress/electron-main/audit/auditConfig.js';
 import { ZeroEgressSCMService } from '../../workbench/contrib/zeroEgress/electron-main/zeroEgressSCMMainService.js';
 import { IZeroEgressSCMService } from '../../workbench/contrib/zeroEgress/common/zeroEgressSCMTypes.js';
+import { WorktreeMainService } from '../../workbench/contrib/zeroEgress/electron-main/worktreeMainService.js'; // ZeroEgress
+import { IZeroEgressWorktreeService, WORKTREE_CHANNEL } from '../../workbench/contrib/zeroEgress/common/worktreeTypes.js'; // ZeroEgress
 import { MCPChannel } from '../../workbench/contrib/zeroEgress/electron-main/mcpChannel.js';
 import { EgressGuard, EgressGuardChannel } from '../../workbench/contrib/zeroEgress/electron-main/egressGuard.js';
 import { EGRESS_GUARD_CHANNEL } from '../../workbench/contrib/zeroEgress/common/egressGuardService.js';
@@ -1122,6 +1124,7 @@ export class CodeApplication extends Disposable {
 		services.set(IMetricsService, new SyncDescriptor(MetricsMainService, undefined, false));
 		services.set(IZeroEgressUpdateService, new SyncDescriptor(ZeroEgressMainUpdateService, undefined, false));
 		services.set(IZeroEgressSCMService, new SyncDescriptor(ZeroEgressSCMService, undefined, false));
+		services.set(IZeroEgressWorktreeService, new SyncDescriptor(WorktreeMainService, undefined, false)); // ZeroEgress
 
 		// Default Extensions Profile Init
 		services.set(IExtensionsProfileScannerService, new SyncDescriptor(ExtensionsProfileScannerService, undefined, true));
@@ -1326,6 +1329,8 @@ export class CodeApplication extends Disposable {
 		// ZeroEgress added this
 		const zeroEgressSCMChannel = ProxyChannel.fromService(accessor.get(IZeroEgressSCMService), disposables);
 		mainProcessElectronServer.registerChannel('zero-egress-channel-scm', zeroEgressSCMChannel);
+		const zeroEgressWorktreeChannel = ProxyChannel.fromService(accessor.get(IZeroEgressWorktreeService), disposables); // ZeroEgress
+		mainProcessElectronServer.registerChannel(WORKTREE_CHANNEL, zeroEgressWorktreeChannel); // ZeroEgress
 
 		// ZeroEgress added this
 		const mcpChannel = new MCPChannel(this.egressGuard);
