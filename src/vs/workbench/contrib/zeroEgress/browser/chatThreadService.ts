@@ -270,15 +270,16 @@ export interface IChatThreadService {
 
 	// exposed getters/setters
 	// these all apply to current thread
-	getCurrentMessageState: (messageIdx: number) => UserMessageState
-	setCurrentMessageState: (messageIdx: number, newState: Partial<UserMessageState>) => void
+	// an optional trailing `threadId` targets that thread instead (the Agents view shows threads that are never current)
+	getCurrentMessageState: (messageIdx: number, threadId?: string) => UserMessageState
+	setCurrentMessageState: (messageIdx: number, newState: Partial<UserMessageState>, threadId?: string) => void
 	getCurrentThreadState: () => ThreadType['state']
-	setCurrentThreadState: (newState: Partial<ThreadType['state']>) => void
+	setCurrentThreadState: (newState: Partial<ThreadType['state']>, threadId?: string) => void
 
 	// you can edit multiple messages - the one you're currently editing is "focused", and we add items to that one when you press cmd+L.
-	getCurrentFocusedMessageIdx(): number | undefined;
-	isCurrentlyFocusingMessage(): boolean;
-	setCurrentlyFocusedMessageIdx(messageIdx: number | undefined): void;
+	getCurrentFocusedMessageIdx(threadId?: string): number | undefined;
+	isCurrentlyFocusingMessage(threadId?: string): boolean;
+	setCurrentlyFocusedMessageIdx(messageIdx: number | undefined, threadId?: string): void;
 
 	popStagingSelections(numPops?: number): void;
 	addNewStagingSelection(newSelection: StagingSelectionItem): void;
@@ -313,7 +314,7 @@ export interface IChatThreadService {
 	// jump to history
 	jumpToCheckpointBeforeMessageIdx(opts: { threadId: string, messageIdx: number, jumpToUserModified: boolean }): void;
 
-	focusCurrentChat: () => Promise<void>
+	focusCurrentChat: (threadId?: string) => Promise<void>
 	blurCurrentChat: () => Promise<void>
 }
 
@@ -387,12 +388,11 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 
 	}
 
-	async focusCurrentChat() {
-		const threadId = this.state.currentThreadId
+	async focusCurrentChat(threadId: string = this.state.currentThreadId) {
 		const thread = this.state.allThreads[threadId]
 		if (!thread) return
 		const s = await thread.state.mountedInfo?.whenMounted
-		if (!this.isCurrentlyFocusingMessage()) {
+		if (!this.isCurrentlyFocusingMessage(threadId)) {
 			s?.textAreaRef.current?.focus()
 		}
 	}
@@ -1747,8 +1747,9 @@ We only need to do it for files that were edited since `from`, ie files between 
 		return thread
 	}
 
-	getCurrentFocusedMessageIdx() {
-		const thread = this.getCurrentThread()
+	getCurrentFocusedMessageIdx(threadId?: string) {
+		const thread = threadId === undefined ? this.getCurrentThread() : this.state.allThreads[threadId]
+		if (!thread) return
 
 		// get the focusedMessageIdx
 		const focusedMessageIdx = thread.state.focusedMessageIdx
@@ -1762,8 +1763,8 @@ We only need to do it for files that were edited since `from`, ie files between 
 		return focusedMessageIdx
 	}
 
-	isCurrentlyFocusingMessage() {
-		return this.getCurrentFocusedMessageIdx() !== undefined
+	isCurrentlyFocusingMessage(threadId?: string) {
+		return this.getCurrentFocusedMessageIdx(threadId) !== undefined
 	}
 
 	switchToThread(threadId: string) {
@@ -1873,9 +1874,8 @@ We only need to do it for files that were edited since `from`, ie files between 
 	}
 
 	// sets the currently selected message (must be undefined if no message is selected)
-	setCurrentlyFocusedMessageIdx(messageIdx: number | undefined) {
+	setCurrentlyFocusedMessageIdx(messageIdx: number | undefined, threadId: string = this.state.currentThreadId) {
 
-		const threadId = this.state.currentThreadId
 		const thread = this.state.allThreads[threadId]
 		if (!thread) return
 
@@ -1956,9 +1956,8 @@ We only need to do it for files that were edited since `from`, ie files between 
 	}
 
 	// set message.state
-	private _setCurrentMessageState(state: Partial<UserMessageState>, messageIdx: number): void {
+	private _setCurrentMessageState(state: Partial<UserMessageState>, messageIdx: number, threadId: string = this.state.currentThreadId): void {
 
-		const threadId = this.state.currentThreadId
 		const thread = this.state.allThreads[threadId]
 		if (!thread) return
 
@@ -2035,21 +2034,21 @@ We only need to do it for files that were edited since `from`, ie files between 
 		const currentThread = this.getCurrentThread()
 		return currentThread.state
 	}
-	setCurrentThreadState = (newState: Partial<ThreadType['state']>) => {
-		this._setThreadState(this.state.currentThreadId, newState)
+	setCurrentThreadState = (newState: Partial<ThreadType['state']>, threadId: string = this.state.currentThreadId) => {
+		this._setThreadState(threadId, newState)
 	}
 
 	// gets `staging` and `setStaging` of the currently focused element, given the index of the currently selected message (or undefined if no message is selected)
 
-	getCurrentMessageState(messageIdx: number): UserMessageState {
-		const currMessage = this.getCurrentThread()?.messages?.[messageIdx]
+	getCurrentMessageState(messageIdx: number, threadId: string = this.state.currentThreadId): UserMessageState {
+		const currMessage = this.state.allThreads[threadId]?.messages?.[messageIdx]
 		if (!currMessage || currMessage.role !== 'user') return defaultMessageState
 		return currMessage.state
 	}
-	setCurrentMessageState(messageIdx: number, newState: Partial<UserMessageState>) {
-		const currMessage = this.getCurrentThread()?.messages?.[messageIdx]
+	setCurrentMessageState(messageIdx: number, newState: Partial<UserMessageState>, threadId: string = this.state.currentThreadId) {
+		const currMessage = this.state.allThreads[threadId]?.messages?.[messageIdx]
 		if (!currMessage || currMessage.role !== 'user') return
-		this._setCurrentMessageState(newState, messageIdx)
+		this._setCurrentMessageState(newState, messageIdx, threadId)
 	}
 
 

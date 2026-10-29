@@ -3,7 +3,7 @@
  *  Licensed under the Apache License, Version 2.0. See LICENSE.txt for more information.
  *--------------------------------------------------------------------------------------*/
 
-import React, { ButtonHTMLAttributes, FormEvent, FormHTMLAttributes, Fragment, KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { createContext, useContext, ButtonHTMLAttributes, FormEvent, FormHTMLAttributes, Fragment, KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 
 import { useAccessor, useChatThreadsState, useChatThreadsStreamState, useSettingsState, useActiveURI, useCommandBarState, useFullChatThreadsStreamState, usePendingFileOps } from '../util/services.js';
@@ -37,6 +37,14 @@ import { persistentTerminalNameOfId } from '../../../terminalToolService.js';
 import { removeMCPToolNamePrefix } from '../../../../common/mcpServiceTypes.js';
 
 
+
+// the thread this chat view renders; deep children (message list, approval row, input) read it from here
+const ThreadIdContext = createContext<string | null>(null)
+const useThreadId = (): string => {
+	const threadId = useContext(ThreadIdContext)
+	if (threadId === null) throw new Error('useThreadId must be used inside a ChatThreadView')
+	return threadId
+}
 
 export const IconX = ({ size, className = '', ...props }: { size: number, className?: string } & React.SVGProps<SVGSVGElement>) => {
 	return (
@@ -1021,6 +1029,7 @@ const UserMessageComponent = ({ chatMessage, messageIdx, isCheckpointGhost, curr
 
 	const accessor = useAccessor()
 	const chatThreadsService = accessor.get('IChatThreadService')
+	const threadId = useThreadId()
 
 	// global state
 	let isBeingEdited = false
@@ -1029,11 +1038,11 @@ const UserMessageComponent = ({ chatMessage, messageIdx, isCheckpointGhost, curr
 	let setStagingSelections = (_: StagingSelectionItem[]) => { }
 
 	if (messageIdx !== undefined) {
-		const _state = chatThreadsService.getCurrentMessageState(messageIdx)
+		const _state = chatThreadsService.getCurrentMessageState(messageIdx, threadId)
 		isBeingEdited = _state.isBeingEdited
 		stagingSelections = _state.stagingSelections
-		setIsBeingEdited = (v) => chatThreadsService.setCurrentMessageState(messageIdx, { isBeingEdited: v })
-		setStagingSelections = (s) => chatThreadsService.setCurrentMessageState(messageIdx, { stagingSelections: s })
+		setIsBeingEdited = (v) => chatThreadsService.setCurrentMessageState(messageIdx, { isBeingEdited: v }, threadId)
+		setStagingSelections = (s) => chatThreadsService.setCurrentMessageState(messageIdx, { stagingSelections: s }, threadId)
 	}
 
 
@@ -1101,13 +1110,11 @@ const UserMessageComponent = ({ chatMessage, messageIdx, isCheckpointGhost, curr
 			if (messageIdx === undefined) return;
 
 			// cancel any streams on this thread
-			const threadId = chatThreadsService.state.currentThreadId
-
 			await chatThreadsService.abortRunning(threadId)
 
 			// update state
 			setIsBeingEdited(false)
-			chatThreadsService.setCurrentlyFocusedMessageIdx(undefined)
+			chatThreadsService.setCurrentlyFocusedMessageIdx(undefined, threadId)
 
 			// stream the edit
 			const userMessage = textAreaRefState.value;
@@ -1116,12 +1123,11 @@ const UserMessageComponent = ({ chatMessage, messageIdx, isCheckpointGhost, curr
 			} catch (e) {
 				console.error('Error while editing message:', e)
 			}
-			await chatThreadsService.focusCurrentChat()
+			await chatThreadsService.focusCurrentChat(threadId)
 			requestAnimationFrame(() => _scrollToBottom?.())
 		}
 
 		const onAbort = async () => {
-			const threadId = chatThreadsService.state.currentThreadId
 			await chatThreadsService.abortRunning(threadId)
 		}
 
@@ -1329,11 +1335,11 @@ const AssistantMessageComponent = ({ chatMessage, isCheckpointGhost, isCommitted
 	const reasoningStr = chatMessage.reasoning?.trim() || null
 	const hasReasoning = !!reasoningStr
 	const isDoneReasoning = !!chatMessage.displayContent
-	const thread = chatThreadsService.getCurrentThread()
+	const threadId = useThreadId()
 
 
 	const chatMessageLocation: ChatMessageLocation = {
-		threadId: thread.id,
+		threadId,
 		messageIdx: messageIdx,
 	}
 
@@ -1576,22 +1582,21 @@ const ToolRequestAcceptRejectButtons = ({ toolName }: { toolName: ToolName }) =>
 	const metricsService = accessor.get('IMetricsService')
 	const zeroEgressSettingsService = accessor.get('IZeroEgressSettingsService')
 	const zeroEgressSettingsState = useSettingsState()
+	const threadId = useThreadId()
 
 	const onAccept = useCallback(() => {
 		try { // this doesn't need to be wrapped in try/catch anymore
-			const threadId = chatThreadsService.state.currentThreadId
 			chatThreadsService.approveLatestToolRequest(threadId)
 			metricsService.capture('Tool Request Accepted', {})
 		} catch (e) { console.error('Error while approving message in chat:', e) }
-	}, [chatThreadsService, metricsService])
+	}, [chatThreadsService, metricsService, threadId])
 
 	const onReject = useCallback(() => {
 		try {
-			const threadId = chatThreadsService.state.currentThreadId
 			chatThreadsService.rejectLatestToolRequest(threadId)
 		} catch (e) { console.error('Error while approving message in chat:', e) }
 		metricsService.capture('Tool Request Rejected', {})
-	}, [chatThreadsService, metricsService])
+	}, [chatThreadsService, metricsService, threadId])
 
 	const approveButton = (
 		<button
@@ -2587,9 +2592,9 @@ const CommandBarInChat = () => {
 	const accessor = useAccessor()
 	const editCodeService = accessor.get('IEditCodeService')
 	const commandService = accessor.get('ICommandService')
-	const chatThreadsState = useChatThreadsState()
+	const threadId = useThreadId()
 	const commandBarState = useCommandBarState()
-	const chatThreadsStreamState = useChatThreadsStreamState(chatThreadsState.currentThreadId)
+	const chatThreadsStreamState = useChatThreadsStreamState(threadId)
 
 	// (
 	// 	<IconShell1
@@ -2896,6 +2901,17 @@ const EditToolSoFar = ({ toolCallSoFar, }: { toolCallSoFar: RawToolCallObj }) =>
 
 
 export const SidebarChat = () => {
+	const chatThreadsState = useChatThreadsState()
+	return <ChatThreadView threadId={chatThreadsState.currentThreadId} variant='docked' />
+}
+
+export const ChatThreadView = ({ threadId, variant }: { threadId: string, variant: 'docked' | 'agents' }) => {
+	return <ThreadIdContext.Provider value={threadId}>
+		<ChatThreadViewInner threadId={threadId} variant={variant} />
+	</ThreadIdContext.Provider>
+}
+
+const ChatThreadViewInner = ({ threadId, variant }: { threadId: string, variant: 'docked' | 'agents' }) => {
 	const textAreaRef = useRef<HTMLTextAreaElement | null>(null)
 	const textAreaFnsRef = useRef<TextAreaFns | null>(null)
 
@@ -2909,14 +2925,14 @@ export const SidebarChat = () => {
 	// threads state
 	const chatThreadsState = useChatThreadsState()
 
-	const currentThread = chatThreadsService.getCurrentThread()
+	const currentThread = chatThreadsState.allThreads[threadId]
 	const previousMessages = currentThread?.messages ?? []
 
-	const selections = currentThread.state.stagingSelections
-	const setSelections = (s: StagingSelectionItem[]) => { chatThreadsService.setCurrentThreadState({ stagingSelections: s }) }
+	const selections = currentThread?.state.stagingSelections ?? []
+	const setSelections = (s: StagingSelectionItem[]) => { chatThreadsService.setCurrentThreadState({ stagingSelections: s }, threadId) }
 
 	// stream state
-	const currThreadStreamState = useChatThreadsStreamState(chatThreadsState.currentThreadId)
+	const currThreadStreamState = useChatThreadsStreamState(threadId)
 	const isRunning = currThreadStreamState?.isRunning
 	const latestError = currThreadStreamState?.error
 	const { displayContentSoFar, toolCallSoFar, reasoningSoFar } = currThreadStreamState?.llmInfo ?? {}
@@ -2935,7 +2951,7 @@ export const SidebarChat = () => {
 	// ⌘⏎ with an empty input accepts every pending change (edits, creates, deletes)
 	const { sortedURIs: pendingURIs } = useCommandBarState()
 	const pendingFileOps = usePendingFileOps()
-	const hasPendingChanges = pendingURIs.length > 0 || pendingFileOps.length > 0
+	const hasPendingChanges = variant === 'docked' && (pendingURIs.length > 0 || pendingFileOps.length > 0) // the Agents view has its own review column
 
 	const sidebarRef = useRef<HTMLDivElement>(null)
 	const scrollContainerRef = useRef<HTMLDivElement | null>(null)
@@ -2943,8 +2959,6 @@ export const SidebarChat = () => {
 
 		if (isDisabled && !_forceSubmit) return
 		if (isRunning) return
-
-		const threadId = chatThreadsService.state.currentThreadId
 
 		// send message to LLM
 		const userMessage = _forceSubmit || textAreaRef.current?.value || ''
@@ -2959,16 +2973,14 @@ export const SidebarChat = () => {
 		textAreaFnsRef.current?.setValue('')
 		textAreaRef.current?.focus() // focus input after submit
 
-	}, [chatThreadsService, isDisabled, isRunning, textAreaRef, textAreaFnsRef, setSelections, settingsState])
+	}, [chatThreadsService, threadId, isDisabled, isRunning, textAreaRef, textAreaFnsRef, setSelections, settingsState])
 
 	const onAbort = async () => {
-		const threadId = currentThread.id
 		await chatThreadsService.abortRunning(threadId)
 	}
 
 	const keybindingString = accessor.get('IKeybindingService').lookupKeybinding(ZERO_EGRESS_CTRL_L_ACTION_ID)?.getLabel()
 
-	const threadId = currentThread.id
 	const currCheckpointIdx = chatThreadsState.allThreads[threadId]?.state?.currCheckpointIdx ?? undefined  // if not exist, treat like checkpoint is last message (infinity)
 
 
@@ -3034,7 +3046,7 @@ export const SidebarChat = () => {
 		: null
 
 	const messagesHTML = <ScrollToBottomContainer
-		key={'messages' + chatThreadsState.currentThreadId} // force rerender on all children if id changes
+		key={'messages' + threadId} // force rerender on all children if id changes
 		scrollContainerRef={scrollContainerRef}
 		className={`
 			flex flex-col
@@ -3067,7 +3079,7 @@ export const SidebarChat = () => {
 				<ErrorDisplay
 					message={latestError.message}
 					fullError={latestError.fullError}
-					onDismiss={() => { chatThreadsService.dismissStreamError(currentThread.id) }}
+					onDismiss={() => { chatThreadsService.dismissStreamError(threadId) }}
 					showDismiss={true}
 				/>
 
@@ -3109,7 +3121,7 @@ export const SidebarChat = () => {
 			placeholder={`Ask, or @ a file…${keybindingString ? ` (${keybindingString} adds the selection)` : ''}`}
 			onChangeText={onChangeText}
 			onKeyDown={onKeyDown}
-			onFocus={() => { chatThreadsService.setCurrentlyFocusedMessageIdx(undefined) }}
+			onFocus={() => { chatThreadsService.setCurrentlyFocusedMessageIdx(undefined, threadId) }}
 			ref={textAreaRef}
 			fnsRef={textAreaFnsRef}
 			multiline={true}
@@ -3139,10 +3151,10 @@ export const SidebarChat = () => {
 
 
 
-	const threadPageInput = <div key={'input' + chatThreadsState.currentThreadId}>
-		<div className='px-4'>
+	const threadPageInput = <div key={'input' + threadId}>
+		{variant === 'agents' ? null : <div className='px-4'>
 			<CommandBarInChat />
-		</div>
+		</div>}
 		<div className='px-2 pb-2'>
 			{inputChatArea}
 		</div>
@@ -3162,7 +3174,7 @@ export const SidebarChat = () => {
 			{landingPageInput}
 		</ErrorBoundary>
 
-		{Object.values(chatThreadsState.allThreads).filter(t => t && !t.agent).length > 1 ? // show if there are threads (background agents live in the Agents view)
+		{variant === 'agents' ? null : Object.values(chatThreadsState.allThreads).filter(t => t && !t.agent).length > 1 ? // show if there are threads (background agents live in the Agents view)
 			<ErrorBoundary>
 				<div className='pt-8 mb-2 text-ze-fg-3 text-root select-none pointer-events-none'>Previous Threads</div>
 				<PastThreadsList />
