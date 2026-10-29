@@ -55,30 +55,51 @@ const AgentsViewInner = ({ bridge }: { bridge: AgentsViewBridge }) => {
 	const canStart = availability?.ok === true
 
 	// ----- review of the selected agent -----
-	const [reviews, setReviews] = useState<FileReview[]>([])
+	// tagged with its thread: after a switch, the previous agent's files must never render (or be acted on) under the new agent
+	const [reviewState, setReviewState] = useState<{ threadId: string, reviews: FileReview[] } | undefined>(undefined)
+	const reviews = reviewState && reviewState.threadId === selectedThreadId ? reviewState.reviews : undefined
 	const [activePath, setActivePath] = useState<string | undefined>(undefined)
 	const reviewSeq = useRef(0)
 	const refreshReview = useCallback(async () => {
 		const seq = ++reviewSeq.current
-		if (!selectedThreadId) { setReviews([]); return }
+		const threadId = selectedThreadId
+		if (!threadId) { setReviewState(undefined); return }
 		try {
-			const r = await agentsService.getReview(selectedThreadId)
-			if (seq === reviewSeq.current) { setReviews(r) }
+			const r = await agentsService.getReview(threadId)
+			if (seq === reviewSeq.current) { setReviewState({ threadId, reviews: r }) }
 		} catch (e) {
 			console.error('Agents view: could not read the review', e)
 		}
 	}, [agentsService, selectedThreadId])
+
+	// review writes (buttons, keys and ⌘⏎) go one at a time; each re-reads the review afterwards, also when it failed
+	const [busy, setBusy] = useState(false)
+	const busyRef = useRef(false)
+	const run = useCallback(async (write: () => Promise<void>) => {
+		if (busyRef.current) { return }
+		busyRef.current = true
+		setBusy(true)
+		try {
+			await write()
+		} catch (e) {
+			console.error('Agents view: review write failed', e)
+		} finally {
+			try { await refreshReview() } finally {
+				busyRef.current = false
+				setBusy(false)
+			}
+		}
+	}, [refreshReview])
 
 	// re-read when the selection, its status or its pending count changes
 	useEffect(() => { refreshReview() }, [refreshReview, selected?.status.label, selected?.changedFiles])
 	useEffect(() => { setActivePath(undefined) }, [selectedThreadId])
 
 	// ----- bridge -----
-	const acceptAll = useCallback(async () => {
+	const acceptAll = useCallback(() => {
 		if (!selectedThreadId) { return }
-		await agentsService.acceptAll(selectedThreadId)
-		await refreshReview()
-	}, [agentsService, selectedThreadId, refreshReview])
+		run(() => agentsService.acceptAll(selectedThreadId))
+	}, [agentsService, selectedThreadId, run])
 
 	const openPrompt = useCallback(() => {
 		setPromptOpen(true)
@@ -86,7 +107,8 @@ const AgentsViewInner = ({ bridge }: { bridge: AgentsViewBridge }) => {
 	}, [])
 
 	useEffect(() => {
-		bridge.acceptAllSelected = () => { acceptAll() }
+		bridge.acceptAllSelected = acceptAll
+		return () => { if (bridge.acceptAllSelected === acceptAll) { bridge.acceptAllSelected = undefined } }
 	}, [bridge, acceptAll])
 	useEffect(() => {
 		bridge.onShow = () => { checkAvailability(); openPrompt() }
@@ -126,7 +148,7 @@ const AgentsViewInner = ({ bridge }: { bridge: AgentsViewBridge }) => {
 			/> : null}
 			{selectedThreadId ? <>
 				<SetupRow threadId={selectedThreadId} />
-				<ChangedFilesList reviews={reviews} activePath={activePath} onSelect={setActivePath} />
+				<ChangedFilesList reviews={reviews ?? []} activePath={activePath} onSelect={setActivePath} />
 				<div className='flex-1 min-h-0'>
 					<ChatThreadView
 						key={selectedThreadId}
@@ -139,13 +161,17 @@ const AgentsViewInner = ({ bridge }: { bridge: AgentsViewBridge }) => {
 		</div>
 
 		<div className='flex-shrink-0 h-full border-l border-ze-border-4 bg-ze-bg-2' style={{ width: '45%' }}>
-			{selectedThreadId && agentInfo ? <ReviewColumn
+			{selectedThreadId && agentInfo && !reviews ? <div className='p-6 text-sm text-ze-fg-3 select-none'>Loading changes…</div>
+				: selectedThreadId && agentInfo && reviews ? <ReviewColumn
+				key={selectedThreadId}
 				threadId={selectedThreadId}
 				agent={agentInfo}
 				reviews={reviews}
 				activePath={activePath}
 				onSelectPath={setActivePath}
-				onChanged={refreshReview}
+				busy={busy}
+				run={run}
+				onRefresh={refreshReview}
 				onAcceptAll={acceptAll}
 			/> : <div className='p-6 text-sm text-ze-fg-3 select-none'>Changes from the selected agent show here.</div>}
 		</div>

@@ -19,6 +19,8 @@ import { InputFocusedContext } from '../../../../platform/contextkey/common/cont
 import { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
 import { KeybindingWeight } from '../../../../platform/keybinding/common/keybindingsRegistry.js';
 import { IWorkbenchContribution, registerWorkbenchContribution2, WorkbenchPhase } from '../../../common/contributions.js';
+import { NotificationsToastsVisibleContext } from '../../../common/contextkeys.js';
+import { IEditorService } from '../../../services/editor/common/editorService.js';
 import { IWorkbenchLayoutService, Parts } from '../../../services/layout/browser/layoutService.js';
 import { IStatusbarEntry, IStatusbarEntryAccessor, IStatusbarService, StatusbarAlignment } from '../../../services/statusbar/browser/statusbar.js';
 import { ZERO_EGRESS_AGENTS_ACCEPT_ALL_ACTION_ID, ZERO_EGRESS_AGENTS_VIEW_VISIBLE_KEY, ZERO_EGRESS_SHOW_AGENTS_ACTION_ID, ZERO_EGRESS_SHOW_EDITOR_ACTION_ID } from './actionIDs.js';
@@ -39,6 +41,9 @@ interface AgentsViewBridge {
 
 let instance: AgentsViewContribution | undefined;
 
+/** the workbench parts the overlay covers; made inert while it shows, so neither Tab nor a screen reader reaches them */
+const COVERED_PARTS = [Parts.BANNER_PART, Parts.ACTIVITYBAR_PART, Parts.SIDEBAR_PART, Parts.EDITOR_PART, Parts.PANEL_PART, Parts.AUXILIARYBAR_PART] as const;
+
 class AgentsViewContribution extends Disposable implements IWorkbenchContribution {
 	static readonly ID = 'workbench.contrib.zeroEgress.agentsView';
 
@@ -55,6 +60,7 @@ class AgentsViewContribution extends Disposable implements IWorkbenchContributio
 		@IInstantiationService private readonly _instantiationService: IInstantiationService,
 		@IBackgroundAgentsService private readonly _agentsService: IBackgroundAgentsService,
 		@IStatusbarService private readonly _statusbarService: IStatusbarService,
+		@IEditorService private readonly _editorService: IEditorService,
 	) {
 		super();
 		this._visible = AGENTS_VIEW_VISIBLE.bindTo(contextKeyService);
@@ -72,6 +78,9 @@ class AgentsViewContribution extends Disposable implements IWorkbenchContributio
 
 		this._register(this._agentsService.onDidChange(() => this._renderStatus()));
 		this._renderStatus();
+
+		// an editor that becomes active while the overlay shows (a file link in the agent chat, Quick Open, ⌘N) must be seen
+		this._register(this._editorService.onDidActiveEditorChange(() => { if (this.isVisible) { this.hide(false); } }));
 
 		instance = this;
 		this._register(toDisposable(() => { if (instance === this) { instance = undefined; } }));
@@ -96,6 +105,7 @@ class AgentsViewContribution extends Disposable implements IWorkbenchContributio
 			this._restoreFocus = isHTMLElement(active) && !this._root.contains(active) ? active : undefined;
 			this._position();
 			this._root.classList.add('visible');
+			this._setCoveredInert(true);
 			this._visible.set(true);
 		}
 		if (!this._mounted) {
@@ -113,16 +123,29 @@ class AgentsViewContribution extends Disposable implements IWorkbenchContributio
 		}
 	}
 
-	hide(): void {
+	/** `restoreFocus`: false when an editor was just opened: it gets focus instead (its own focus call failed while it was inert) */
+	hide(restoreFocus = true): void {
 		if (!this.isVisible) { return; }
 		this._root.classList.remove('visible');
+		this._setCoveredInert(false);
 		this._visible.set(false);
 		const target = this._restoreFocus;
 		this._restoreFocus = undefined;
+		if (!restoreFocus) {
+			this._editorService.activeEditorPane?.focus();
+			return;
+		}
 		if (target?.isConnected) {
 			target.focus();
 		} else {
 			this._layoutService.focus();
+		}
+	}
+
+	private _setCoveredInert(inert: boolean): void {
+		for (const part of COVERED_PARTS) {
+			const el = this._layoutService.getContainer(mainWindow, part);
+			if (el) { el.inert = inert; }
 		}
 	}
 
@@ -154,6 +177,7 @@ class AgentsViewContribution extends Disposable implements IWorkbenchContributio
 	}
 
 	override dispose(): void {
+		this._setCoveredInert(false);
 		this._statusEntry?.dispose();
 		this._statusEntry = undefined;
 		super.dispose();
@@ -170,9 +194,10 @@ registerAction2(class extends Action2 {
 			category: localize2('zeroEgress.category', 'ZeroEgress'),
 			f1: true,
 			keybinding: {
-				// shadows notification.acceptPrimaryAction (⇧⌘A while a notification toast shows) and, on Linux, editor.action.blockComment
+				// shadows, on Linux, editor.action.blockComment (Ctrl+Shift+A)
 				weight: KeybindingWeight.WorkbenchContrib + 1,
 				primary: KeyMod.CtrlCmd | KeyMod.Shift | KeyCode.KeyA,
+				when: NotificationsToastsVisibleContext.negate(), // R15: ⇧⌘A keeps accepting a toast's primary action
 			},
 		});
 	}

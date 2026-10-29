@@ -3,7 +3,7 @@
  *  Licensed under the Apache License, Version 2.0. See LICENSE.txt for more information.
  *--------------------------------------------------------------------------------------*/
 
-import React, { KeyboardEvent, useCallback, useEffect, useRef, useState } from 'react'
+import React, { KeyboardEvent, useEffect, useRef, useState } from 'react'
 import { useAccessor } from '../util/services.js'
 import { FileReview, HunkState } from '../../../../common/agentReview.js'
 import { BackgroundAgentInfo } from '../../../../common/backgroundAgentTypes.js'
@@ -42,21 +42,25 @@ const contextOf = (hunks: readonly HunkState[], agentLines: readonly string[] | 
 	})
 }
 
-export const ReviewColumn = ({ threadId, agent, reviews, activePath, onSelectPath, onChanged, onAcceptAll }: {
+export const ReviewColumn = ({ threadId, agent, reviews, activePath, onSelectPath, busy, run, onRefresh, onAcceptAll }: {
 	threadId: string,
 	agent: BackgroundAgentInfo,
+	/** the review of `threadId` (never another agent's) */
 	reviews: FileReview[],
 	activePath: string | undefined,
 	onSelectPath: (path: string) => void,
-	/** re-read the review after a write */
-	onChanged: () => Promise<void>,
-	onAcceptAll: () => Promise<void>,
+	/** a review write is in flight */
+	busy: boolean,
+	/** runs a review write unless one is in flight, then re-reads the review */
+	run: (write: () => Promise<void>) => Promise<void>,
+	onRefresh: () => Promise<void>,
+	/** the same path as ⌘⏎ */
+	onAcceptAll: () => void,
 }) => {
 	const accessor = useAccessor()
 	const agentsService = accessor.get('IBackgroundAgentsService')
 	const fileService = accessor.get('IFileService')
 
-	const [busy, setBusy] = useState(false)
 	const [focusedIdx, setFocusedIdx] = useState(0)
 	const [agentLines, setAgentLines] = useState<string[] | undefined>(undefined)
 	const columnRef = useRef<HTMLDivElement | null>(null)
@@ -79,19 +83,6 @@ export const ReviewColumn = ({ threadId, agent, reviews, activePath, onSelectPat
 
 	useEffect(() => { setFocusedIdx(i => Math.min(i, Math.max(hunks.length - 1, 0))) }, [hunks.length])
 	useEffect(() => { setFocusedIdx(0) }, [file?.path, threadId])
-
-	const run = useCallback(async (write: () => Promise<void>) => {
-		if (busy) { return }
-		setBusy(true)
-		try {
-			await write()
-		} catch (e) {
-			console.error('Agents view: review write failed', e)
-		} finally {
-			await onChanged()
-			setBusy(false)
-		}
-	}, [busy, onChanged])
 
 	const acceptHunk = (h: HunkState) => file && run(() => agentsService.acceptHunk(threadId, file.path, h))
 	const rejectHunk = (h: HunkState) => file && run(() => agentsService.rejectHunk(threadId, file.path, h))
@@ -120,10 +111,10 @@ export const ReviewColumn = ({ threadId, agent, reviews, activePath, onSelectPat
 	return <div className='w-full h-full flex flex-col overflow-hidden'>
 		<div className='flex-shrink-0 flex items-center gap-2 px-3 py-2'>
 			<span className='text-xs font-semibold uppercase tracking-wide text-ze-fg-3 select-none'>Review</span>
-			<button className='text-xs text-ze-fg-3 hover:text-ze-fg-1' title='Refresh' onClick={() => { onChanged() }}>↻</button>
+			<button className='text-xs text-ze-fg-3 hover:text-ze-fg-1' title='Refresh' onClick={() => { onRefresh() }}>↻</button>
 			<span className='flex-1' />
 			<ReviewButton disabled={busy || reviews.length === 0} onClick={() => run(() => agentsService.rejectAll(threadId))}>Reject all</ReviewButton>
-			<ReviewButton primary disabled={busy || reviews.length === 0} onClick={() => run(onAcceptAll)}>Accept all {ACCEPT_ALL_KEY}</ReviewButton>
+			<ReviewButton primary disabled={busy || reviews.length === 0} onClick={onAcceptAll}>Accept all {ACCEPT_ALL_KEY}</ReviewButton>
 		</div>
 
 		{reviews.length === 0 ? <div className='px-3 py-2 text-sm text-ze-fg-3 select-none'>No pending changes.</div> : <>
