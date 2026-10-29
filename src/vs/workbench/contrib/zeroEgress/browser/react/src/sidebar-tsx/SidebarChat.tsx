@@ -325,6 +325,8 @@ interface ZeroEgressChatAreaProps {
 	onClose?: () => void;
 
 	featureName: FeatureName;
+	/** shown instead of the mode dropdown: background agents always run in agent mode, and the dropdown sets the docked chat's */
+	fixedModeLabel?: string;
 }
 
 export const ZeroEgressChatArea: React.FC<ZeroEgressChatAreaProps> = ({
@@ -344,6 +346,7 @@ export const ZeroEgressChatArea: React.FC<ZeroEgressChatAreaProps> = ({
 	setSelections,
 	featureName,
 	loadingIcon,
+	fixedModeLabel,
 }) => {
 	return (
 		<div
@@ -395,7 +398,9 @@ export const ZeroEgressChatArea: React.FC<ZeroEgressChatAreaProps> = ({
 						<ReasoningOptionSlider featureName={featureName} />
 
 						<div className='flex items-center flex-wrap gap-x-2 gap-y-1 text-nowrap '>
-							{featureName === 'Chat' && <ChatModeDropdown className='text-xs text-ze-fg-3 bg-ze-bg-1 border border-ze-border-2 rounded py-0.5 px-1' />}
+							{featureName === 'Chat' && (fixedModeLabel !== undefined
+								? <span className='text-xs text-ze-fg-3 bg-ze-bg-1 border border-ze-border-2 rounded py-0.5 px-1 select-none' data-fixed-mode>{fixedModeLabel}</span>
+								: <ChatModeDropdown className='text-xs text-ze-fg-3 bg-ze-bg-1 border border-ze-border-2 rounded py-0.5 px-1' />)}
 							<ModelDropdown featureName={featureName} className='text-xs text-ze-fg-3 bg-ze-bg-1 rounded' />
 						</div>
 					</div>
@@ -1146,6 +1151,7 @@ const UserMessageComponent = ({ chatMessage, messageIdx, isCheckpointGhost, curr
 
 		chatbubbleContents = <ZeroEgressChatArea
 			featureName='Chat'
+			fixedModeLabel={chatThreadsService.state.allThreads[threadId]?.agent ? 'Agent' : undefined}
 			onSubmit={onSubmit}
 			onAbort={onAbort}
 			isStreaming={false}
@@ -3152,6 +3158,7 @@ const ChatThreadViewInner = ({ threadId, variant, inputDisabledReason }: { threa
 
 	const inputChatArea = <ZeroEgressChatArea
 		featureName='Chat'
+		fixedModeLabel={variant === 'agents' ? 'Agent' : undefined}
 		onSubmit={() => onSubmit()}
 		onAbort={onAbort}
 		isStreaming={!!isRunning}

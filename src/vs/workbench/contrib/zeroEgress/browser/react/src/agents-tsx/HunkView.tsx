@@ -46,7 +46,8 @@ export const HunkView = ({ state, before, after, focused, busy, mod, onFocus, on
 }) => {
 	const { hunk } = state
 	const isConflict = state.status === 'conflict'
-	const line = (hunk.baseLines.length ? hunk.baseStart : Math.max(hunk.baseStart - 1, 0)) + 1
+	// the user's line number (the base's drifts once other hunks or the user's edits shift lines); an insertion shows the line above it
+	const line = (hunk.baseLines.length ? state.currentStart : Math.max(state.currentStart - 1, 0)) + 1
 
 	return <div
 		className={`rounded border ${focused ? 'border-ze-ring-color' : 'border-ze-border-4'} overflow-hidden`}
