@@ -10,7 +10,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAccessor } from '../util/services.js';
 import { FoundModel, isLoopbackUrl, PROBE_TARGETS, recommendModel } from '../../../../common/localDetection.js';
-import { ProbeResult, withProvider } from '../../../localModelDetectionService.js';
+import { oneResultPerProvider, ProbeResult, withProvider } from '../../../localModelDetectionService.js';
 import { displayInfoOfProviderName, ProviderName } from '../../../../common/zeroEgressSettingsTypes.js';
 import { endpointWarning, targetFromUrl } from '../../../../common/egressPolicy.js';
 import { localStatusOf } from '../../../../common/localStatus.js';
@@ -155,13 +155,17 @@ export const useConnectModel = (active: boolean) => {
 		(selectedKey !== undefined ? pickableModels.find(m => modelKey(m) === selectedKey) : undefined)
 		?? recommended;
 
-	/** Continue: fill in settings from what was found. */
+	/** True while any row (a default port or an added URL) is still being probed. */
+	const isLooking = rows.some(r => !r.result);
+
+	/** Continue: fill in settings from what was found, with one server per provider so the endpoint and the
+	 *  chosen model agree. */
 	const apply = useCallback(() => {
-		detection.apply(resolvedResults.filter(r => r.providerName !== null), selectedModel);
+		detection.apply(oneResultPerProvider(resolvedResults, selectedModel), selectedModel);
 	}, [detection, resolvedResults, selectedModel]);
 
 	return {
-		rows, port8000Pick, setPort8000Pick, rescan, addUrl, removeRow,
+		rows, isLooking, port8000Pick, setPort8000Pick, rescan, addUrl, removeRow,
 		pickableModels, recommended, selectedModel, setSelectedKey, apply,
 	};
 };
@@ -287,8 +291,7 @@ export const ConnectModelStep = ({ state }: { state: ConnectModelState }) => {
 		return ok;
 	};
 
-	const { pickableModels, recommended, selectedModel } = state;
-	const isLooking = state.rows.some(r => !r.isCustom && !r.result);
+	const { pickableModels, recommended, selectedModel, isLooking } = state;
 
 	return (
 		<div className='flex flex-col gap-4 w-full'>

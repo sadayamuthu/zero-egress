@@ -12,7 +12,7 @@ import { ILLMMessageService } from '../../common/sendLLMMessageService.js';
 import { ServiceModelListParams } from '../../common/sendLLMMessageTypes.js';
 import { IZeroEgressSettingsService } from '../../common/zeroEgressSettingsService.js';
 import { defaultSettingsOfProvider, FeatureName, ModelSelection, ModelSelectionOfFeature, ProviderName, SettingsOfProvider } from '../../common/zeroEgressSettingsTypes.js';
-import { LocalModelDetectionService, ProbeResult } from '../localModelDetectionService.js';
+import { LocalModelDetectionService, oneResultPerProvider, ProbeResult } from '../localModelDetectionService.js';
 
 type Answer = { models: unknown[] } | { error: string } | 'never';
 
@@ -144,4 +144,36 @@ suite('LocalModelDetectionService', () => {
 		service.apply(await service.detect(), null);
 		assert.deepStrictEqual(calls, ['endpoint oMLX http://localhost:8000', 'models oMLX mlx-community/Qwen3-8B']);
 	}));
+
+	test('apply uses only the first found result of a provider', () => runWithFakedTimers({}, async () => {
+		answers['http://127.0.0.1:11434'] = { models: [ollamaModel('model-a:7b', '7B')] };
+		answers['http://192.168.1.50:11434'] = { models: [ollamaModel('model-b:7b', '7B')] };
+		const service = new LocalModelDetectionService(llm, settings);
+		const loopback = byId(await service.detect(), 'ollama');
+		const lan = await service.probeUrl('http://192.168.1.50:11434', 'ollama');
+		calls = [];
+		service.apply([loopback, lan], loopback.models[0]);
+		assert.strictEqual(settingsOfProvider.ollama.endpoint, 'http://127.0.0.1:11434', 'the second result does not move the endpoint');
+		assert.deepStrictEqual(calls.filter(c => !c.startsWith('select')), ['models ollama model-a:7b']);
+		assert.deepStrictEqual(selections['Chat'], { providerName: 'ollama', modelName: 'model-a:7b' });
+	}));
+
+	test('oneResultPerProvider keeps the chosen model\'s server, else an added URL, else the default', () => {
+		const found = (id: 'ollama' | 'lmStudio' | 'custom', url: string, providerName: ProviderName, models: string[]): ProbeResult => ({
+			target: { id, url, providers: [providerName] }, status: 'found', providerName,
+			models: models.map(modelName => ({ providerName, modelName, paramsB: null })),
+		});
+		const ollamaDefault = found('ollama', 'http://127.0.0.1:11434', 'ollama', ['a']);
+		const ollamaLan = found('custom', 'http://192.168.1.50:11434', 'ollama', ['b']);
+		const lmDefault = found('lmStudio', 'http://localhost:1234', 'lmStudio', ['c']);
+		const lmLan = found('custom', 'http://192.168.1.60:1234', 'lmStudio', ['d']);
+		const notRunning: ProbeResult = { target: { id: 'custom', url: 'http://192.168.1.70:11434', providers: ['ollama'] }, status: 'not_running', providerName: null, models: [] };
+		const unresolved: ProbeResult = { target: { id: 'port8000', url: 'http://localhost:8000', providers: ['vLLM', 'oMLX'] }, status: 'found', providerName: null, models: [] };
+		const all = [ollamaDefault, ollamaLan, lmDefault, lmLan, notRunning, unresolved];
+
+		assert.deepStrictEqual(oneResultPerProvider(all, ollamaLan.models[0]), [ollamaLan, lmLan], 'chosen B: its server; lmStudio: the added URL');
+		assert.deepStrictEqual(oneResultPerProvider(all, ollamaDefault.models[0]), [ollamaDefault, lmLan], 'chosen A: the default server');
+		assert.deepStrictEqual(oneResultPerProvider(all, null), [ollamaLan, lmLan], 'no choice: added URLs win');
+		assert.deepStrictEqual(oneResultPerProvider([ollamaDefault, lmDefault, notRunning], null), [ollamaDefault, lmDefault], 'one each: kept');
+	});
 });

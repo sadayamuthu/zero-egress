@@ -33,7 +33,8 @@ export interface ILocalModelDetectionService {
 	/** Probes exactly `url` as `providerName` (no port 8000 classification). Never throws. */
 	probeUrl(url: string, providerName: ProviderName): Promise<ProbeResult>;
 	/** Fills in default/empty endpoints and autodetected models of found providers, and gives `chosen` to the
-	 *  Chat, Ctrl+K, Apply and SCM features that have no selection. Never changes anything the user set. */
+	 *  Chat, Ctrl+K, Apply and SCM features that have no selection. Never changes anything the user set.
+	 *  Uses only the first found result of each provider; see oneResultPerProvider. */
 	apply(results: readonly ProbeResult[], chosen: FoundModel | null): void;
 }
 
@@ -45,6 +46,29 @@ const CHOSEN_FEATURES: readonly FeatureName[] = ['Chat', 'Ctrl+K', 'Apply', 'SCM
 /** Returns `result` with an unknown port 8000 server resolved to the provider the user picked. */
 export function withProvider(result: ProbeResult, providerName: ProviderName): ProbeResult {
 	return { ...result, providerName, models: result.models.map(m => ({ ...m, providerName })) };
+}
+
+/**
+ * At most one found result per provider, for `apply`, in the order providers first appear. When a provider has
+ * several: for the chosen model's provider, the result that lists the chosen model (so the endpoint and the model
+ * selection agree); for any other provider, a URL the user added, else the default target. Results that are not
+ * found or have no provider are dropped (`apply` would skip them anyway).
+ */
+export function oneResultPerProvider(results: readonly ProbeResult[], chosen: FoundModel | null): ProbeResult[] {
+	const byProvider = new Map<ProviderName, ProbeResult[]>();
+	for (const r of results) {
+		if (r.status !== 'found' || r.providerName === null) { continue; }
+		const group = byProvider.get(r.providerName) ?? [];
+		group.push(r);
+		byProvider.set(r.providerName, group);
+	}
+	return [...byProvider].map(([providerName, group]) => {
+		if (group.length === 1) { return group[0]; }
+		const withChosen = chosen && chosen.providerName === providerName
+			? group.find(r => r.models.some(m => m.modelName === chosen.modelName))
+			: undefined;
+		return withChosen ?? group.find(r => r.target.id === 'custom') ?? group[0];
+	});
 }
 
 /** Trimmed, without trailing slashes (the list request appends `/v1` or `/api/tags`), or null unless http(s). */
@@ -149,9 +173,13 @@ export class LocalModelDetectionService implements ILocalModelDetectionService {
 		// empty selection with the first model, and the chosen model should win over that.
 		const unsetFeatures = CHOSEN_FEATURES.filter(f => this.settingsService.state.modelSelectionOfFeature[f] === null);
 
+		const applied = new Set<ProviderName>();
 		for (const result of results) {
 			const providerName = result.providerName;
 			if (result.status !== 'found' || !providerName) { continue; }
+			// One server per provider: the first found result wins (callers pick it with oneResultPerProvider).
+			if (applied.has(providerName)) { continue; }
+			applied.add(providerName);
 			const url = result.target.url;
 			const current = this.settingsService.state.settingsOfProvider[providerName].endpoint;
 			const isDefault = !current || current === defaultProviderSettings[providerName].endpoint;

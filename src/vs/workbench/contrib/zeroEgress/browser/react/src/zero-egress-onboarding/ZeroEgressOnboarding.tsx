@@ -114,10 +114,11 @@ const BackButton = ({ onClick }: { onClick: () => void }) => (
 	</button>
 )
 
-const ContinueButton = ({ onClick, children = 'Continue' }: { onClick: () => void, children?: React.ReactNode }) => (
+const ContinueButton = ({ onClick, disabled = false, children = 'Continue' }: { onClick: () => void, disabled?: boolean, children?: React.ReactNode }) => (
 	<button
 		type='button'
-		className='px-4 py-1.5 rounded text-sm font-medium bg-ze-accent text-ze-on-accent hover:bg-ze-accent-hover transition-colors'
+		className={`px-4 py-1.5 rounded text-sm font-medium bg-ze-accent text-ze-on-accent transition-colors ${disabled ? 'opacity-50 cursor-not-allowed' : 'hover:bg-ze-accent-hover'}`}
+		disabled={disabled}
 		onClick={onClick}
 	>
 		{children}
@@ -163,7 +164,6 @@ const ZeroEgressOnboardingContent = () => {
 			<div className='text-sm text-ze-fg-3'>Transfer your settings from an existing editor?</div>
 			<div className='flex flex-col items-start gap-3'>
 				<OneClickSwitchButton className='w-full px-4 py-2' fromEditor="VS Code" />
-				<OneClickSwitchButton className='w-full px-4 py-2' fromEditor="Cursor" />
 				<OneClickSwitchButton className='w-full px-4 py-2' fromEditor="Windsurf" />
 			</div>
 		</div>,
@@ -171,6 +171,7 @@ const ZeroEgressOnboardingContent = () => {
 
 	const onContinue = () => {
 		if (stepIndex === 1) {
+			if (connectModel.isLooking) { return }
 			connectModel.apply()
 		}
 		if (stepIndex === STEP_COUNT - 1) {
@@ -193,7 +194,8 @@ const ZeroEgressOnboardingContent = () => {
 		</div>
 		<div className='pt-6 pb-8 flex items-center justify-end gap-2'>
 			{stepIndex > 0 && <BackButton onClick={() => setStepIndex(stepIndex - 1)} />}
-			<ContinueButton onClick={onContinue}>{stepIndex === STEP_COUNT - 1 ? 'Done' : 'Continue'}</ContinueButton>
+			{/* Step 2 waits for every probe, so apply never runs on partial results. */}
+			<ContinueButton onClick={onContinue} disabled={stepIndex === 1 && connectModel.isLooking}>{stepIndex === STEP_COUNT - 1 ? 'Done' : 'Continue'}</ContinueButton>
 		</div>
 	</div>
 
