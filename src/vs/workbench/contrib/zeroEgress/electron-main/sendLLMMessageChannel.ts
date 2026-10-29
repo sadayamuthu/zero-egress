@@ -83,6 +83,20 @@ export class LLMMessageChannel implements IServerChannel {
 		return this.endpointLeases.leaseSettingsTarget(ctx, endpoint);
 	}
 
+	/**
+	 * A list request may carry `endpointOverride` (first-run probes and user-typed URLs). It replaces the provider's
+	 * endpoint in that request's own copy of the settings, before the lease is taken, so the one URL that is dialed
+	 * is the one URL that is leased, through the same lease path as any other request. Stored settings are untouched.
+	 */
+	private _withEndpointOverride<P extends { settingsOfProvider?: SettingsOfProvider; endpointOverride?: unknown }>(params: P, providerName: string): P {
+		const override = params?.endpointOverride;
+		const settings = params?.settingsOfProvider as Record<string, object | undefined> | undefined;
+		if (typeof override !== 'string' || !override || !settings || !settings[providerName]) {
+			return params;
+		}
+		return { ...params, settingsOfProvider: { ...settings, [providerName]: { ...settings[providerName], endpoint: override } } as SettingsOfProvider };
+	}
+
 	setAudit(service: IAuditMainService, identity: { machineId: string; userId: string; appVersion: string; zeroEgressVersion: string }) {
 		this.auditService = service;
 		this.auditIdentity = identity;
@@ -113,10 +127,12 @@ export class LLMMessageChannel implements IServerChannel {
 				await this._callAbort(params)
 			}
 			else if (command === 'ollamaList') {
-				this._callOllamaList(params, this._leaseEndpoint(ctx, params?.settingsOfProvider, 'ollama'))
+				const p = this._withEndpointOverride(params, 'ollama')
+				this._callOllamaList(p, this._leaseEndpoint(ctx, p?.settingsOfProvider, 'ollama'))
 			}
 			else if (command === 'openAICompatibleList') {
-				this._callOpenAICompatibleList(params, this._leaseEndpoint(ctx, params?.settingsOfProvider, params?.providerName))
+				const p = this._withEndpointOverride(params, String(params?.providerName))
+				this._callOpenAICompatibleList(p, this._leaseEndpoint(ctx, p?.settingsOfProvider, p?.providerName))
 			}
 			else {
 				throw new Error(`ZeroEgress sendLLM: command "${command}" not recognized.`)

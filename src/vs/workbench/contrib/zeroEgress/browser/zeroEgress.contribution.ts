@@ -71,6 +71,9 @@ import './egressTargetsContribution.js'
 import './localStatusContribution.js'
 import './agentsViewContribution.js'
 
+// first-run detection of local model servers
+import './localModelDetectionService.js'
+
 // ---------- common (unclear if these actually need to be imported, because they're already imported wherever they're used) ----------
 
 // llmMessage
