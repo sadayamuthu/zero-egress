@@ -41,6 +41,8 @@ import { IMCPService } from '../common/mcpService.js';
 import { RawMCPToolCall } from '../common/mcpServiceTypes.js';
 import { AGENT_WORKTREE_REMOVED_MESSAGE, agentRootOf, BackgroundAgentInfo, ToolRunContext } from '../common/backgroundAgentTypes.js';
 import { resolveAgentPath } from '../common/agentPaths.js';
+import { checkTerminalOwner } from '../common/terminalOwnership.js';
+import { ITerminalToolService } from './terminalToolService.js';
 
 
 // related to retrying when LLM message has error
@@ -332,6 +334,7 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 		@IDirectoryStrService private readonly _directoryStringService: IDirectoryStrService,
 		@IFileService private readonly _fileService: IFileService,
 		@IMCPService private readonly _mcpService: IMCPService,
+		@ITerminalToolService private readonly _terminalToolService: ITerminalToolService,
 	) {
 		super()
 		this.state = { allThreads: {}, currentThreadId: null as unknown as string } // default state
@@ -665,6 +668,11 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 					if (!toolCtx.agent.worktreePath) { throw new Error(AGENT_WORKTREE_REMOVED_MESSAGE) }
 					if (isBuiltInTool) { toolParams = this._confineToolParams(toolName, toolParams, toolCtx.agent) }
 				}
+				// persistent terminals are owned per thread: background agents use only their own, docked only the unowned ones
+				if (toolName === 'run_persistent_command' || toolName === 'kill_persistent_terminal') {
+					const { persistentTerminalId } = toolParams as BuiltinToolCallParams['kill_persistent_terminal']
+					checkTerminalOwner(persistentTerminalId, id => this._terminalToolService.ownerOfPersistentTerminal(id), toolCtx.kind === 'background' ? toolCtx.agent.agentId : undefined)
+				}
 			}
 			catch (error) {
 				const errorMessage = getErrorMessage(error)
@@ -791,7 +799,7 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 		// should not change as we loop even if user changes it, so it goes here. Background agents always run in agent mode.
 		const backgroundAgent = this.state.allThreads[threadId]?.agent
 		const chatMode = backgroundAgent ? 'agent' : this._settingsService.state.globalSettings.chatMode
-		const agentRoot = backgroundAgent ? { folder: agentRootOf(backgroundAgent), depsMayBeMissing: !backgroundAgent.setup?.command } : undefined
+		const agentRoot = backgroundAgent ? { folder: agentRootOf(backgroundAgent), depsMayBeMissing: !backgroundAgent.setup?.command, agentId: backgroundAgent.agentId } : undefined
 		const { overridesOfModel } = this._settingsService.state
 
 		let nMessagesSent = 0

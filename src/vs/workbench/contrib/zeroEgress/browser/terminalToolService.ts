@@ -33,7 +33,10 @@ export interface ITerminalToolService {
 
 	readTerminal(terminalId: string): Promise<string>
 
-	createPersistentTerminal(opts: { cwd: string | null }): Promise<string>
+	/** `ownerAgentId`: set when a background agent opens it; only that agent may then use it. */
+	createPersistentTerminal(opts: { cwd: string | null, ownerAgentId?: string }): Promise<string>
+	/** the background agent that owns this persistent terminal, or undefined (the docked agent's) */
+	ownerOfPersistentTerminal(terminalId: string): string | undefined
 	killPersistentTerminal(terminalId: string): Promise<void>
 
 	getPersistentTerminal(terminalId: string): ITerminalInstance | undefined
@@ -162,8 +165,17 @@ export class TerminalToolService extends Disposable implements ITerminalToolServ
 
 	}
 
-	createPersistentTerminal: ITerminalToolService['createPersistentTerminal'] = async ({ cwd }) => {
+	// persistent terminal id -> agentId of the background agent that opened it (in memory; ids are reused, so set on every create)
+	private readonly _ownerAgentIdOfTerminal: Record<string, string> = {}
+
+	ownerOfPersistentTerminal(terminalId: string): string | undefined {
+		return this._ownerAgentIdOfTerminal[terminalId]
+	}
+
+	createPersistentTerminal: ITerminalToolService['createPersistentTerminal'] = async ({ cwd, ownerAgentId }) => {
 		const terminalId = this.getValidNewTerminalId();
+		if (ownerAgentId) this._ownerAgentIdOfTerminal[terminalId] = ownerAgentId
+		else delete this._ownerAgentIdOfTerminal[terminalId]
 		const config = { name: persistentTerminalNameOfId(terminalId), title: persistentTerminalNameOfId(terminalId) }
 		const terminal = await this._createTerminal({ cwd, config, })
 		this.persistentTerminalInstanceOfId[terminalId] = terminal

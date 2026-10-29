@@ -23,6 +23,7 @@ import { generateUuid } from '../../../../base/common/uuid.js'
 import { VSBuffer } from '../../../../base/common/buffer.js'
 import { AGENT_WORKTREE_REMOVED_MESSAGE, agentRootOf, ToolRunContext } from '../common/backgroundAgentTypes.js'
 import { applySearchReplaceBlocks } from '../common/helpers/searchReplace.js'
+import { checkTerminalOwner } from '../common/terminalOwnership.js'
 
 
 // tool use for AI
@@ -536,16 +537,19 @@ export class ToolsService implements IToolsService {
 			},
 			run_persistent_command: async ({ command, persistentTerminalId }, ctx) => {
 				backgroundRootOf(ctx)
+				checkTerminalOwner(persistentTerminalId, id => this.terminalToolService.ownerOfPersistentTerminal(id), ctx.kind === 'background' ? ctx.agent.agentId : undefined)
 				const { resPromise, interrupt } = await this.terminalToolService.runCommand(command, { type: 'persistent', persistentTerminalId })
 				return { result: resPromise, interruptTool: interrupt }
 			},
 			open_persistent_terminal: async ({ cwd }, ctx) => {
 				const root = backgroundRootOf(ctx)
 				if (root !== undefined && cwd === null) cwd = root
-				const persistentTerminalId = await this.terminalToolService.createPersistentTerminal({ cwd })
+				const persistentTerminalId = await this.terminalToolService.createPersistentTerminal({ cwd, ownerAgentId: ctx.kind === 'background' ? ctx.agent.agentId : undefined })
 				return { result: { persistentTerminalId } }
 			},
-			kill_persistent_terminal: async ({ persistentTerminalId }) => {
+			kill_persistent_terminal: async ({ persistentTerminalId }, ctx) => {
+				backgroundRootOf(ctx)
+				checkTerminalOwner(persistentTerminalId, id => this.terminalToolService.ownerOfPersistentTerminal(id), ctx.kind === 'background' ? ctx.agent.agentId : undefined)
 				// Close the background terminal by sending exit
 				await this.terminalToolService.killPersistentTerminal(persistentTerminalId)
 				return { result: {} }
