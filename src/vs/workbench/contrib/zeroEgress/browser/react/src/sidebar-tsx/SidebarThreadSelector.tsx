@@ -37,6 +37,7 @@ export const PastThreadsList = ({ className = '' }: { className?: string }) => {
 	const sortedThreadIds = Object.keys(allThreads ?? {})
 		.sort((threadId1, threadId2) => (allThreads[threadId1]?.lastModified ?? 0) > (allThreads[threadId2]?.lastModified ?? 0) ? -1 : 1)
 		.filter(threadId => (allThreads![threadId]?.messages.length ?? 0) !== 0)
+		.filter(threadId => !allThreads![threadId]?.agent) // background agents live in the Agents view
 
 	// Get only first 5 threads if not showing all
 	const hasMoreThreads = sortedThreadIds.length > numInitialThreads;

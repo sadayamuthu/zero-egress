@@ -3162,7 +3162,7 @@ export const SidebarChat = () => {
 			{landingPageInput}
 		</ErrorBoundary>
 
-		{Object.keys(chatThreadsState.allThreads).length > 1 ? // show if there are threads
+		{Object.values(chatThreadsState.allThreads).filter(t => t && !t.agent).length > 1 ? // show if there are threads (background agents live in the Agents view)
 			<ErrorBoundary>
 				<div className='pt-8 mb-2 text-ze-fg-3 text-root select-none pointer-events-none'>Previous Threads</div>
 				<PastThreadsList />

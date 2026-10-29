@@ -64,6 +64,7 @@ import './fileService.js'
 // register source control management
 import './zeroEgressSCMService.js'
 import './pendingFileOpsService.js'
+import './backgroundAgentsService.js'
 import './pendingDeleteDecorations.js'
 import './pendingChangeContextKeys.js'
 import './egressTargetsContribution.js'

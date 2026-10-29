@@ -262,6 +262,12 @@ export interface IChatThreadService {
 	deleteThread(threadId: string): void;
 	duplicateThread(threadId: string): void;
 
+	// background agents (never the current thread)
+	/** creates a background-agent thread with `messages` and sends `prompt` in it; returns its id */
+	startBackgroundThread(agent: BackgroundAgentInfo, messages: ChatMessage[], prompt: string): string;
+	/** replaces a background thread's agent info (persisted) */
+	setBackgroundAgentInfo(threadId: string, agent: BackgroundAgentInfo): void;
+
 	// exposed getters/setters
 	// these all apply to current thread
 	getCurrentMessageState: (messageIdx: number) => UserMessageState
@@ -544,6 +550,7 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 
 		const lastMsg = thread.messages[thread.messages.length - 1]
 		if (!(lastMsg.role === 'tool' && lastMsg.type === 'tool_request')) return // should never happen
+		if (this._refuseIfWorktreeRemoved(threadId)) return
 
 		const callThisToolFirst: ToolMessage<ToolName> = lastMsg
 
@@ -658,6 +665,9 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 		mcpServerName: string | undefined,
 		opts: { preapproved: true, unvalidatedToolParams: RawToolParamsObj, validatedParams: ToolCallParams<ToolName> } | { preapproved: false, unvalidatedToolParams: RawToolParamsObj },
 	): Promise<{ awaitingUserApproval?: boolean, interrupted?: boolean }> => {
+
+		// a deleted thread (e.g. a background agent deleted mid-run) runs nothing, and never falls back to the docked context
+		if (!this.state.allThreads[threadId]) return { interrupted: true }
 
 		// compute these below
 		let toolParams: ToolCallParams<ToolName>
@@ -833,6 +843,8 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 	}) {
 
 
+		if (!this.state.allThreads[threadId]) return // deleted
+
 		let interruptedWhenIdle = false
 		const idleInterruptor = Promise.resolve(() => { interruptedWhenIdle = true })
 		// _runToolCall does not need setStreamState({idle}) before it, but it needs it after it. (handles its own setStreamState)
@@ -871,6 +883,9 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 
 			// tool use loop
 			while (shouldSendAnotherMessage) {
+				// a thread deleted mid-run (e.g. a background agent) stops here
+				if (!this.state.allThreads[threadId]) { this._setStreamState(threadId, undefined); return }
+
 				// false by default each iteration
 				shouldSendAnotherMessage = false
 				isRunningWhenEnd = undefined
@@ -1317,6 +1332,7 @@ We only need to do it for files that were edited since `from`, ie files between 
 		const notify = ({ error }: { error: string | null }) => {
 			const thread = this.state.allThreads[threadId]
 			if (!thread) return
+			if (thread.agent) return // background agents report their status in the Agents view
 			const userMsg = findLast(thread.messages, m => m.role === 'user')
 			if (!userMsg) return
 			if (userMsg.role !== 'user') return
@@ -1399,6 +1415,7 @@ We only need to do it for files that were edited since `from`, ie files between 
 	async addUserMessageAndStreamResponse({ userMessage, _chatSelections, threadId }: { userMessage: string, _chatSelections?: StagingSelectionItem[], threadId: string }) {
 		const thread = this.state.allThreads[threadId];
 		if (!thread) return
+		if (this._refuseIfWorktreeRemoved(threadId)) return
 
 		// if there's a current checkpoint, delete all messages after it
 		if (thread.state.currCheckpointIdx !== null) {
@@ -1427,6 +1444,7 @@ We only need to do it for files that were edited since `from`, ie files between 
 
 		const thread = this.state.allThreads[threadId]
 		if (!thread) return // should never happen
+		if (this._refuseIfWorktreeRemoved(threadId)) return
 
 		if (thread.messages?.[messageIdx]?.role !== 'user') {
 			throw new Error(`Error: editing a message with role !=='user'`)
@@ -1749,6 +1767,7 @@ We only need to do it for files that were edited since `from`, ie files between 
 	}
 
 	switchToThread(threadId: string) {
+		if (this.state.allThreads[threadId]?.agent) return // background agents are never the docked thread
 		this._setState({ currentThreadId: threadId })
 	}
 
@@ -1757,7 +1776,7 @@ We only need to do it for files that were edited since `from`, ie files between 
 		// if a thread with 0 messages already exists, switch to it
 		const { allThreads: currentThreads } = this.state
 		for (const threadId in currentThreads) {
-			if (currentThreads[threadId]!.messages.length === 0) {
+			if (currentThreads[threadId]!.messages.length === 0 && !currentThreads[threadId]!.agent) {
 				// switch to the existing empty thread and exit
 				this.switchToThread(threadId)
 				return
@@ -1788,10 +1807,38 @@ We only need to do it for files that were edited since `from`, ie files between 
 		this._setState({ ...this.state, allThreads: newThreads })
 	}
 
+	startBackgroundThread(agent: BackgroundAgentInfo, messages: ChatMessage[], prompt: string): string {
+		// the prompt goes in synchronously (no selections, so its content is the prompt itself), and the run starts in the same tick,
+		// so the thread never shows as idle without a message, and a delete right away finds the run to abort
+		const userMessage: ChatMessage = { role: 'user', content: prompt, displayContent: prompt, selections: [], state: defaultMessageState }
+		const newThread: ThreadType = { ...newThreadObject(), agent, messages: [...messages, userMessage] }
+		const newThreads: ChatThreads = { ...this.state.allThreads, [newThread.id]: newThread }
+		this._storeAllThreads(newThreads)
+		this._setState({ allThreads: newThreads }) // the current (docked) thread stays as it is
+		this._wrapRunAgentToNotify(this._runChatAgent({ threadId: newThread.id, ...this._currentModelSelectionProps() }), newThread.id)
+		return newThread.id
+	}
+
+	setBackgroundAgentInfo(threadId: string, agent: BackgroundAgentInfo): void {
+		const thread = this.state.allThreads[threadId]
+		if (!thread?.agent) return
+		const newThreads: ChatThreads = { ...this.state.allThreads, [threadId]: { ...thread, agent } }
+		this._storeAllThreads(newThreads)
+		this._setState({ allThreads: newThreads })
+	}
+
+	/** a follow-up to a background agent whose worktree was removed is refused */
+	private _refuseIfWorktreeRemoved(threadId: string): boolean {
+		const agent = this.state.allThreads[threadId]?.agent
+		if (!agent || agent.worktreePath) return false
+		this._setStreamState(threadId, { isRunning: undefined, error: { message: AGENT_WORKTREE_REMOVED_MESSAGE, fullError: null } })
+		return true
+	}
+
 	duplicateThread(threadId: string) {
 		const { allThreads: currentThreads } = this.state
 		const threadToDuplicate = currentThreads[threadId]
-		if (!threadToDuplicate) return
+		if (!threadToDuplicate || threadToDuplicate.agent) return
 		const newThread = {
 			...deepClone(threadToDuplicate),
 			id: generateUuid(),
