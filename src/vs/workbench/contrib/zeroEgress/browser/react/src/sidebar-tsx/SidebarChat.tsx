@@ -2582,7 +2582,7 @@ const _ChatBubble = ({ threadId, chatMessage, currCheckpointIdx, isCommitted, me
 const CommandBarInChat = () => {
 	const { stateOfURI: commandBarStateOfURI, sortedURIs: sortedCommandBarURIs } = useCommandBarState()
 	const pendingFileOps = usePendingFileOps()
-	const numFilesChanged = new Set([...sortedCommandBarURIs.map(uri => uri.fsPath), ...pendingFileOps.map(op => op.path)]).size
+	const numFilesChanged = new Set([...sortedCommandBarURIs.map(uri => uri.toString()), ...pendingFileOps.map(op => op.path)]).size
 
 	const accessor = useAccessor()
 	const editCodeService = accessor.get('IEditCodeService')
@@ -2686,8 +2686,8 @@ const CommandBarInChat = () => {
 		<div key={`op-${op.id}`} className="flex justify-between items-center">
 			<div className="flex items-center gap-2">
 				<span
-					className={`text-ze-fg-3 ${op.isFolder && op.kind === 'delete' ? '' : 'hover:brightness-125 cursor-pointer'}`}
-					onClick={() => { if (!(op.isFolder && op.kind === 'delete')) { zeroEgressOpenFileFn(URI.file(op.path), accessor) } }}
+					className={`text-ze-fg-3 ${op.isFolder ? '' : 'hover:brightness-125 cursor-pointer'}`}
+					onClick={() => { if (!op.isFolder) { zeroEgressOpenFileFn(URI.parse(op.path), accessor) } }}
 				>{getBasename(op.path)}</span>
 				{op.kind === 'create'
 					? <span className="text-ze-ok">new file</span>

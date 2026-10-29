@@ -6,7 +6,7 @@
 // Context keys that scope the review shortcuts (⌘Y/⌘N per change, ⌥⌘Y/⌥⌘N per file), so VS Code's own
 // bindings for those keys keep working everywhere else.
 
-import { Disposable, MutableDisposable } from '../../../../base/common/lifecycle.js';
+import { Disposable, DisposableMap, MutableDisposable } from '../../../../base/common/lifecycle.js';
 import { URI } from '../../../../base/common/uri.js';
 import { ICodeEditor } from '../../../../editor/browser/editorBrowser.js';
 import { ICodeEditorService } from '../../../../editor/browser/services/codeEditorService.js';
@@ -36,6 +36,7 @@ class PendingChangeContextKeys extends Disposable implements IWorkbenchContribut
 	private readonly _cursorOnChange: IContextKey<boolean>;
 	private readonly _fileHasChanges: IContextKey<boolean>;
 	private readonly _editorListener = this._register(new MutableDisposable());
+	private readonly _focusListeners = this._register(new DisposableMap<ICodeEditor>());
 
 	constructor(
 		@IContextKeyService contextKeyService: IContextKeyService,
@@ -49,14 +50,25 @@ class PendingChangeContextKeys extends Disposable implements IWorkbenchContribut
 		this._fileHasChanges = FILE_HAS_PENDING_CHANGES.bindTo(contextKeyService);
 
 		this._register(editorService.onDidActiveEditorChange(() => this._watchActiveEditor()));
+		// embedded editors (commit box, notebook cells, debug console) take focus without becoming the active editor
+		for (const editor of this._codeEditorService.listCodeEditors()) {
+			this._watchFocus(editor);
+		}
+		this._register(this._codeEditorService.onCodeEditorAdd(editor => this._watchFocus(editor)));
+		this._register(this._codeEditorService.onCodeEditorRemove(editor => this._focusListeners.deleteAndDispose(editor)));
 		this._register(this._editCodeService.onDidAddOrDeleteDiffZones(() => this._update()));
 		this._register(this._editCodeService.onDidChangeDiffsInDiffZoneNotStreaming(() => this._update()));
 		this._register(this._pendingFileOpsService.onDidChange(() => this._update()));
 		this._watchActiveEditor();
 	}
 
+	/** The editor that receives keys: the focused one (which may be embedded), else the active one. */
 	private _activeEditor(): ICodeEditor | null {
-		return this._codeEditorService.getActiveCodeEditor();
+		return this._codeEditorService.getFocusedCodeEditor() ?? this._codeEditorService.getActiveCodeEditor();
+	}
+
+	private _watchFocus(editor: ICodeEditor): void {
+		this._focusListeners.set(editor, editor.onDidFocusEditorText(() => this._watchActiveEditor()));
 	}
 
 	private _watchActiveEditor(): void {
@@ -75,8 +87,9 @@ class PendingChangeContextKeys extends Disposable implements IWorkbenchContribut
 		}
 		const diffs = pendingDiffsOf(this._editCodeService, model.uri);
 		const line = editor.getPosition()?.lineNumber;
-		const hasFileOp = this._pendingFileOpsService.ops.some(op => model.uri.fsPath === op.path || model.uri.fsPath.startsWith(op.path + '/'));
-		this._cursorOnChange.set(line !== undefined && !!diffAtLine(diffs, line));
+		const uri = model.uri.toString();
+		const hasFileOp = this._pendingFileOpsService.ops.some(op => uri === op.path || uri.startsWith(op.path + '/'));
+		this._cursorOnChange.set(line !== undefined && !!diffAtLine(diffs, line, model.getLineCount()));
 		this._fileHasChanges.set(diffs.length > 0 || hasFileOp);
 	}
 }

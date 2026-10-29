@@ -44,8 +44,8 @@ class PendingDeleteDecorations extends Disposable implements IWorkbenchContribut
 		this._update(editor);
 	}
 
-	private _isPendingDelete(path: string): boolean {
-		return this._pendingFileOpsService.ops.some(op => op.kind === 'delete' && (path === op.path || path.startsWith(op.path + '/')));
+	private _isPendingDelete(uri: string): boolean {
+		return this._pendingFileOpsService.ops.some(op => op.kind === 'delete' && (uri === op.path || uri.startsWith(op.path + '/')));
 	}
 
 	private _update(editor: ICodeEditor): void {
@@ -54,7 +54,7 @@ class PendingDeleteDecorations extends Disposable implements IWorkbenchContribut
 		if (!collection) {
 			return;
 		}
-		if (!model || model.uri.scheme !== 'file' || !this._isPendingDelete(model.uri.fsPath)) {
+		if (!model || !this._isPendingDelete(model.uri.toString())) {
 			collection.clear();
 			return;
 		}

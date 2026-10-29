@@ -21,23 +21,27 @@ suite('diffAtLine', () => {
 	];
 
 	test('finds the change covering the line', () => {
-		assert.strictEqual(diffAtLine(diffs, 3)?.diffid, 1);
-		assert.strictEqual(diffAtLine(diffs, 6)?.diffid, 2);
-		assert.strictEqual(diffAtLine(diffs, 8)?.diffid, 2);
-		assert.strictEqual(diffAtLine(diffs, 10)?.diffid, 3);
+		assert.strictEqual(diffAtLine(diffs, 3, 20)?.diffid, 1);
+		assert.strictEqual(diffAtLine(diffs, 6, 20)?.diffid, 2);
+		assert.strictEqual(diffAtLine(diffs, 8, 20)?.diffid, 2);
+		assert.strictEqual(diffAtLine(diffs, 10, 20)?.diffid, 3);
 	});
 
-	test('a deletion also covers the line its red block is drawn after', () => {
-		// the editor draws removed lines between startLine - 1 and startLine; startLine can be one past the last line
-		assert.strictEqual(diffAtLine(diffs, 9)?.diffid, 3);
-		assert.strictEqual(diffAtLine([d(4, { type: 'deletion', startLine: 3, endLine: 2 })], 2)?.diffid, 4);
-		assert.strictEqual(diffAtLine([d(5, { type: 'deletion', startLine: 1, endLine: 0 })], 1)?.diffid, 5);
+	test('a deletion past the last line belongs to the last line', () => {
+		// the editor draws removed lines between startLine - 1 and startLine; at the end of a file startLine is
+		// one past the last line, so only there does the line above count
+		assert.strictEqual(diffAtLine([d(4, { type: 'deletion', startLine: 3, endLine: 2 })], 2, 2)?.diffid, 4);
+		assert.strictEqual(diffAtLine([d(5, { type: 'deletion', startLine: 1, endLine: 0 })], 1, 5)?.diffid, 5);
+	});
+
+	test('the unchanged line above a deletion in the middle is not a change', () => {
+		assert.strictEqual(diffAtLine(diffs, 9, 20), undefined);
 	});
 
 	test('lines outside every change return undefined', () => {
-		for (const line of [1, 4, 5, 11]) {
-			assert.strictEqual(diffAtLine(diffs, line), undefined, String(line));
+		for (const line of [1, 4, 5, 9, 11]) {
+			assert.strictEqual(diffAtLine(diffs, line, 20), undefined, String(line));
 		}
-		assert.strictEqual(diffAtLine([], 1), undefined);
+		assert.strictEqual(diffAtLine([], 1, 1), undefined);
 	});
 });

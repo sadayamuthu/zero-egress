@@ -16,6 +16,7 @@ import { deepClone } from '../../../../base/common/objects.js';
 import { InstantiationType, registerSingleton } from '../../../../platform/instantiation/common/extensions.js';
 import { IEditCodeService } from './editCodeServiceInterface.js';
 import { ContextKeyExpr } from '../../../../platform/contextkey/common/contextkey.js';
+import { InputFocusedContext } from '../../../../platform/contextkey/common/contextkeys.js';
 import { EditorContextKeys } from '../../../../editor/common/editorContextKeys.js';
 import { diffAtLine } from '../common/diffAtLine.js';
 import { CURSOR_ON_PENDING_CHANGE, FILE_HAS_PENDING_CHANGES, pendingDiffsOf } from './pendingChangeContextKeys.js';
@@ -587,8 +588,10 @@ registerAction2(class extends Action2 {
 				mac: { primary: KeyMod.WinCtrl | KeyMod.Alt | KeyCode.Enter },
 				weight: KeybindingWeight.ZeroEgressExtension,
 			}, {
-				// only on a pending change, so ⌘N/⌘Y keep their usual meaning elsewhere
-				primary: KeyMod.CtrlCmd | KeyCode.KeyY,
+				// macOS only, and only on a pending change, so ⌘N/⌘Y keep their usual meaning elsewhere
+				// (on Windows/Linux Ctrl+Y is Redo; the bindings above stay)
+				primary: 0,
+				mac: { primary: KeyMod.CtrlCmd | KeyCode.KeyY },
 				when: ContextKeyExpr.and(EditorContextKeys.editorTextFocus, CURSOR_ON_PENDING_CHANGE),
 				weight: KeybindingWeight.ZeroEgressExtension,
 			}]
@@ -609,9 +612,10 @@ registerAction2(class extends Action2 {
 		const diffIdx = commandBarState.diffIdx ?? 0;
 
 		// the change under the cursor, else the selected one
-		const editor = accessor.get(ICodeEditorService).getActiveCodeEditor();
+		const codeEditorService = accessor.get(ICodeEditorService);
+		const editor = codeEditorService.getFocusedCodeEditor() ?? codeEditorService.getActiveCodeEditor();
 		const cursorLine = editor?.getModel()?.uri.fsPath === activeURI.fsPath ? editor.getPosition()?.lineNumber : undefined;
-		const diffUnderCursor = cursorLine === undefined ? undefined : diffAtLine(pendingDiffsOf(editCodeService, activeURI), cursorLine);
+		const diffUnderCursor = cursorLine === undefined ? undefined : diffAtLine(pendingDiffsOf(editCodeService, activeURI), cursorLine, editor!.getModel()!.getLineCount());
 		const diffid = diffUnderCursor ? String(diffUnderCursor.diffid) : commandBarState.sortedDiffIds[diffIdx];
 		if (!diffid) return;
 
@@ -639,8 +643,10 @@ registerAction2(class extends Action2 {
 				mac: { primary: KeyMod.WinCtrl | KeyMod.Alt | KeyCode.Backspace },
 				weight: KeybindingWeight.ZeroEgressExtension,
 			}, {
-				// only on a pending change, so ⌘N/⌘Y keep their usual meaning elsewhere
-				primary: KeyMod.CtrlCmd | KeyCode.KeyN,
+				// macOS only, and only on a pending change, so ⌘N/⌘Y keep their usual meaning elsewhere
+				// (on Windows/Linux Ctrl+Y is Redo; the bindings above stay)
+				primary: 0,
+				mac: { primary: KeyMod.CtrlCmd | KeyCode.KeyN },
 				when: ContextKeyExpr.and(EditorContextKeys.editorTextFocus, CURSOR_ON_PENDING_CHANGE),
 				weight: KeybindingWeight.ZeroEgressExtension,
 			}]
@@ -660,9 +666,10 @@ registerAction2(class extends Action2 {
 		const diffIdx = commandBarState.diffIdx ?? 0;
 
 		// the change under the cursor, else the selected one
-		const editor = accessor.get(ICodeEditorService).getActiveCodeEditor();
+		const codeEditorService = accessor.get(ICodeEditorService);
+		const editor = codeEditorService.getFocusedCodeEditor() ?? codeEditorService.getActiveCodeEditor();
 		const cursorLine = editor?.getModel()?.uri.fsPath === activeURI.fsPath ? editor.getPosition()?.lineNumber : undefined;
-		const diffUnderCursor = cursorLine === undefined ? undefined : diffAtLine(pendingDiffsOf(editCodeService, activeURI), cursorLine);
+		const diffUnderCursor = cursorLine === undefined ? undefined : diffAtLine(pendingDiffsOf(editCodeService, activeURI), cursorLine, editor!.getModel()!.getLineCount());
 		const diffid = diffUnderCursor ? String(diffUnderCursor.diffid) : commandBarState.sortedDiffIds[diffIdx];
 		if (!diffid) return;
 
@@ -796,7 +803,9 @@ registerAction2(class extends Action2 {
 				primary: KeyMod.Alt | KeyMod.Shift | KeyCode.Enter,
 				weight: KeybindingWeight.ZeroEgressExtension,
 			}, {
-				primary: KeyMod.CtrlCmd | KeyMod.Alt | KeyCode.KeyY,
+				// macOS only: Ctrl+Alt+letter is AltGr on Windows and types characters on many layouts
+				primary: 0,
+				mac: { primary: KeyMod.CtrlCmd | KeyMod.Alt | KeyCode.KeyY },
 				when: ContextKeyExpr.and(EditorContextKeys.editorTextFocus, FILE_HAS_PENDING_CHANGES),
 				weight: KeybindingWeight.ZeroEgressExtension,
 			}]
@@ -833,7 +842,9 @@ registerAction2(class extends Action2 {
 				primary: KeyMod.Alt | KeyMod.Shift | KeyCode.Backspace,
 				weight: KeybindingWeight.ZeroEgressExtension,
 			}, {
-				primary: KeyMod.CtrlCmd | KeyMod.Alt | KeyCode.KeyN,
+				// macOS only: Ctrl+Alt+letter is AltGr on Windows and types characters on many layouts
+				primary: 0,
+				mac: { primary: KeyMod.CtrlCmd | KeyMod.Alt | KeyCode.KeyN },
 				when: ContextKeyExpr.and(EditorContextKeys.editorTextFocus, FILE_HAS_PENDING_CHANGES),
 				weight: KeybindingWeight.ZeroEgressExtension,
 			}]
@@ -870,9 +881,10 @@ registerAction2(class extends Action2 {
 				primary: KeyMod.CtrlCmd | KeyMod.Shift | KeyCode.Enter,
 				weight: KeybindingWeight.ZeroEgressExtension,
 			}, {
-				// ⌘⏎ from the agent panel (the input box handles it itself, see SidebarChat)
+				// ⌘⏎ from the agent panel, outside text inputs (the agent's input box handles ⌘⏎ itself, see SidebarChat,
+				// so typed text is sent and never also accepts everything)
 				primary: KeyMod.CtrlCmd | KeyCode.Enter,
-				when: ContextKeyExpr.equals('focusedView', 'workbench.view.zeroEgress'), // ZERO_EGRESS_VIEW_ID (sidebarPane.ts); not imported to avoid an import cycle
+				when: ContextKeyExpr.and(ContextKeyExpr.equals('focusedView', 'workbench.view.zeroEgress'), InputFocusedContext.negate()), // ZERO_EGRESS_VIEW_ID (sidebarPane.ts); not imported to avoid an import cycle
 				weight: KeybindingWeight.ZeroEgressExtension,
 			}]
 		});

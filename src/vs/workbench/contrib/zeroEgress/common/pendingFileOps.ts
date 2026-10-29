@@ -3,8 +3,9 @@
  *  Licensed under the Apache License, Version 2.0. See LICENSE.txt for more information.
  *--------------------------------------------------------------------------------------*/
 
-// Agent file creates and deletes that wait for the user's review. Pure state over fsPath strings; the
-// browser service (browser/pendingFileOpsService.ts) does the disk work these methods return.
+// Agent file creates and deletes that wait for the user's review. Pure state over path strings (the browser
+// service uses URI strings, so remote and Windows paths compare with '/'); the browser service
+// (browser/pendingFileOpsService.ts) does the disk work these methods return.
 // A create has already happened on disk when it is recorded (so the agent can write into the file);
 // rejecting it removes the file. A delete has not happened yet; accepting it removes the file.
 
@@ -25,7 +26,7 @@ const normalize = (path: string) => path.length > 1 && path.endsWith('/') ? path
 const isUnder = (path: string, base: string) => path === base || path.startsWith(base + '/');
 
 export class PendingFileOps {
-	private _ops: PendingFileOp[] = [];
+	private _ops: readonly PendingFileOp[] = [];
 	private _nextId = 1;
 
 	get ops(): readonly PendingFileOp[] {
@@ -47,24 +48,34 @@ export class PendingFileOps {
 			return [];
 		}
 		if (!existing) {
-			this._ops.push({ id: this._nextId++, kind: 'create', path: p, isFolder, recursive: isFolder });
+			this._ops = [...this._ops, { id: this._nextId++, kind: 'create', path: p, isFolder, recursive: isFolder }];
 		}
 		return [];
 	}
 
 	/** Records a delete; nothing is removed until it is accepted. */
-	recordDelete(path: string, recursive: boolean): DiskAction[] {
+	recordDelete(path: string, recursive: boolean, isFolder: boolean = recursive): DiskAction[] {
 		const p = normalize(path);
 		const existing = this.opFor(p);
 		if (existing?.kind === 'create') {
-			// deleting something the agent created and the user never reviewed: undo the create
-			this._remove(existing.id);
+			// deleting something the agent created and the user never reviewed: undo the create, and anything
+			// pending inside it goes with it
+			this._ops = this._ops.filter(o => !isUnder(o.path, p));
 			return [{ type: 'delete', path: p, recursive: existing.recursive || recursive }];
 		}
 		if (!existing) {
-			this._ops.push({ id: this._nextId++, kind: 'delete', path: p, isFolder: recursive, recursive });
+			this._ops = [...this._ops, { id: this._nextId++, kind: 'delete', path: p, isFolder, recursive }];
 		}
 		return [];
+	}
+
+	/** For undoing a resolve whose disk work failed. */
+	snapshot(): readonly PendingFileOp[] {
+		return this._ops;
+	}
+
+	restore(ops: readonly PendingFileOp[]): void {
+		this._ops = [...ops];
 	}
 
 	resolve(id: number, behavior: 'accept' | 'reject'): DiskAction[] {

@@ -74,6 +74,39 @@ suite('PendingFileOps', () => {
 		assert.deepStrictEqual(m.ops.map(o => o.path), ['/w/b.ts']);
 	});
 
+	test('cancelling a folder create drops pending ops inside it', () => {
+		const m = new PendingFileOps();
+		m.recordCreate('file:///w/d', true);
+		m.recordCreate('file:///w/d/a.ts', false);
+		assert.deepStrictEqual(m.recordDelete('file:///w/d', true), [{ type: 'delete', path: 'file:///w/d', recursive: true }]);
+		assert.strictEqual(m.ops.length, 0);
+	});
+
+	test('ops is a new array after every change', () => {
+		const m = new PendingFileOps();
+		const before = m.ops;
+		m.recordDelete('file:///w/a.ts', false);
+		assert.notStrictEqual(m.ops, before);
+		const mid = m.ops;
+		m.resolveAll('reject');
+		assert.notStrictEqual(m.ops, mid);
+	});
+
+	test('a delete keeps whether the path is a folder', () => {
+		const m = new PendingFileOps();
+		m.recordDelete('file:///w/empty-dir', false, true);
+		assert.deepStrictEqual([m.ops[0].isFolder, m.ops[0].recursive], [true, false]);
+	});
+
+	test('snapshot and restore undo a resolve', () => {
+		const m = new PendingFileOps();
+		m.recordDelete('file:///w/a.ts', false);
+		const snap = m.snapshot();
+		m.resolveAll('accept');
+		m.restore(snap);
+		assert.deepStrictEqual(m.ops.map(o => o.path), ['file:///w/a.ts']);
+	});
+
 	test('unknown id is a no-op', () => {
 		assert.deepStrictEqual(new PendingFileOps().resolve(42, 'accept'), []);
 	});
