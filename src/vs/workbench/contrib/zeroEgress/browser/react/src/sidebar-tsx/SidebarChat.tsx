@@ -1080,14 +1080,14 @@ const UserMessageComponent = ({ chatMessage, messageIdx, isCheckpointGhost, curr
 
 	const onOpenEdit = () => {
 		setIsBeingEdited(true)
-		chatThreadsService.setCurrentlyFocusedMessageIdx(messageIdx)
+		chatThreadsService.setCurrentlyFocusedMessageIdx(messageIdx, threadId)
 		_justEnabledEdit.current = true
 	}
 	const onCloseEdit = () => {
 		setIsFocused(false)
 		setIsHovered(false)
 		setIsBeingEdited(false)
-		chatThreadsService.setCurrentlyFocusedMessageIdx(undefined)
+		chatThreadsService.setCurrentlyFocusedMessageIdx(undefined, threadId)
 
 	}
 
@@ -1163,7 +1163,7 @@ const UserMessageComponent = ({ chatMessage, messageIdx, isCheckpointGhost, curr
 				onChangeText={(text) => setIsDisabled(!text)}
 				onFocus={() => {
 					setIsFocused(true)
-					chatThreadsService.setCurrentlyFocusedMessageIdx(messageIdx);
+					chatThreadsService.setCurrentlyFocusedMessageIdx(messageIdx, threadId);
 				}}
 				onBlur={() => {
 					setIsFocused(false)
