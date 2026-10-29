@@ -21,7 +21,7 @@ import { IMainProcessService } from '../../../../platform/ipc/common/mainProcess
 import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
 import { IWorkbenchContribution, registerWorkbenchContribution2, WorkbenchPhase } from '../../../common/contributions.js';
 import { ITextFileService } from '../../../services/textfile/common/textfiles.js';
-import { acceptHunk as acceptHunkText, FileReview, rejectHunk as rejectHunkText, reviewFile } from '../common/agentReview.js';
+import { acceptHunk as acceptHunkText, FileReview, HunkState, rejectHunk as rejectHunkText, reviewFile } from '../common/agentReview.js';
 import { AgentStatus, agentStatus } from '../common/agentStatus.js';
 import { agentRootOf, BackgroundAgentInfo } from '../common/backgroundAgentTypes.js';
 import { ChatMessage } from '../common/chatThreadServiceTypes.js';
@@ -47,8 +47,10 @@ export interface IBackgroundAgentsService {
 	deleteAgent(threadId: string): Promise<void>;
 	/** pending files only (a file whose changes were all accepted or rejected is left out) */
 	getReview(threadId: string): Promise<FileReview[]>;
-	acceptHunk(threadId: string, path: string, hunkIdx: number): Promise<void>;
-	rejectHunk(threadId: string, path: string, hunkIdx: number): Promise<void>;
+	/** `rendered` is the hunk the UI showed; if the fresh review has no identical hunk (already handled, or the user's text changed), nothing happens */
+	acceptHunk(threadId: string, path: string, rendered: HunkState): Promise<void>;
+	/** `rendered` is the hunk the UI showed; if the fresh review has no identical hunk, nothing happens */
+	rejectHunk(threadId: string, path: string, rendered: HunkState): Promise<void>;
 	acceptFile(threadId: string, path: string): Promise<void>;
 	rejectFile(threadId: string, path: string): Promise<void>;
 	/** clean hunks and whole-file changes only; conflicts stay pending */
@@ -376,10 +378,11 @@ export class BackgroundAgentsService extends Disposable implements IBackgroundAg
 				this._cleanupWhenIdle.add(threadId);
 			} else {
 				this._cleanupWhenIdle.delete(threadId);
-				await this._worktree.remove(agent.repoRoot, agent.agentId);
+				// marked removed first, so a follow-up sent while git removes the worktree is refused
 				const latest = this._chatThreadService.state.allThreads[threadId]?.agent;
 				if (latest) { this._chatThreadService.setBackgroundAgentInfo(threadId, { ...latest, worktreePath: '' }); }
 				this._pending.delete(threadId);
+				await this._worktree.remove(agent.repoRoot, agent.agentId);
 			}
 		} else if (count > 0) {
 			this._cleanupWhenIdle.delete(threadId);
@@ -387,24 +390,51 @@ export class BackgroundAgentsService extends Disposable implements IBackgroundAg
 		this._recompute();
 	}
 
-	/** Writes the user's file: through the open text model (one undoable edit, saved only if it was clean), else to disk. `null` deletes it. */
-	private async _writeUser(uri: URI, text: string | null): Promise<void> {
-		if (text === null) {
-			if (await this._fileService.exists(uri)) {
-				await this._fileService.del(uri, { useTrash: true });
-			}
-			return;
-		}
+	private _openModel(uri: URI) {
 		const model = this._modelService.getModel(uri);
-		if (model && !model.isDisposed()) {
+		return model && !model.isDisposed() ? model : undefined;
+	}
+
+	/** whether the user's text is still `expected` (the text a merge was computed from): the open model's value, else the disk file */
+	private async _currentIs(uri: URI, expected: string | null): Promise<boolean> {
+		const model = this._openModel(uri);
+		if (model) { return model.getValue() === expected; }
+		const disk = await this._readDisk(uri);
+		// a model may have been opened (and typed in) while the disk was read
+		const opened = this._openModel(uri);
+		return (opened ? opened.getValue() : disk) === expected;
+	}
+
+	/**
+	 * Writes the user's file: through the open text model (one undoable edit, saved only if it was clean), else to disk. `null` deletes it.
+	 * `expected` is the user's text the change was computed from; if the user's text is no longer that (typed during the awaits),
+	 * nothing is written and this returns false, so the caller leaves the base alone and the file stays pending.
+	 */
+	private async _writeUser(uri: URI, expected: string | null, text: string | null): Promise<boolean> {
+		const model = this._openModel(uri);
+		if (model) {
+			// check and edit in the same tick: no keystroke can land in between
+			if (model.getValue() !== expected) { return false; }
+			if (text === null) {
+				await this._fileService.del(uri, { useTrash: true });
+				return true;
+			}
 			const wasDirty = this._textFileService.isDirty(uri);
 			model.pushStackElement();
 			model.pushEditOperations([], [{ range: model.getFullModelRange(), text }], () => null);
 			model.pushStackElement();
 			if (!wasDirty) { await this._textFileService.save(uri); }
-			return;
+			return true;
+		}
+		const disk = await this._readDisk(uri);
+		if (this._openModel(uri)) { return this._writeUser(uri, expected, text); } // opened meanwhile: go through the model
+		if (disk !== expected) { return false; }
+		if (text === null) {
+			if (disk !== null) { await this._fileService.del(uri, { useTrash: true }); }
+			return true;
 		}
 		await this._fileService.writeFile(uri, VSBuffer.fromString(text));
+		return true;
 	}
 
 	/** Writes the agent's file in the worktree. `null` deletes it. */
@@ -435,12 +465,14 @@ export class BackgroundAgentsService extends Disposable implements IBackgroundAg
 		if (review.fileConflict) { return; }
 		const user = this._userUri(agent, file.path);
 		if (review.kind === 'added') {
-			if (s.current !== s.agentText) { await this._writeUser(user, s.agentText); }
+			const ok = s.current === s.agentText ? await this._currentIs(user, s.current) : await this._writeUser(user, s.current, s.agentText);
+			if (!ok) { return; }
 			await this._worktree.writeBase(agent.agentId, file.path, s.agentText);
 			return;
 		}
 		if (review.kind === 'deleted') {
-			if (s.current !== null) { await this._writeUser(user, null); }
+			const ok = s.current === null ? await this._currentIs(user, null) : await this._writeUser(user, s.current, null);
+			if (!ok) { return; }
 			await this._worktree.writeBase(agent.agentId, file.path, null);
 			return;
 		}
@@ -454,7 +486,7 @@ export class BackgroundAgentsService extends Disposable implements IBackgroundAg
 			({ base, current } = acceptHunkText(next, base, current));
 		}
 		if (base === s.base) { return; }
-		await this._writeUser(user, current);
+		if (!await this._writeUser(user, s.current, current)) { return; }
 		await this._worktree.writeBase(agent.agentId, file.path, base);
 	}
 
@@ -480,23 +512,34 @@ export class BackgroundAgentsService extends Disposable implements IBackgroundAg
 		if (agentText !== s.agentText) { await this._writeWorktree(agent, file.path, agentText); }
 	}
 
-	acceptHunk(threadId: string, path: string, hunkIdx: number): Promise<void> {
+	/** the fresh hunk identical to the one the UI rendered, if any */
+	private _freshHunk(review: FileReview, rendered: HunkState): HunkState | undefined {
+		const same = (a: readonly string[], b: readonly string[]) => a.length === b.length && a.every((l, i) => l === b[i]);
+		return review.hunks.find(h =>
+			h.status === rendered.status
+			&& h.hunk.baseStart === rendered.hunk.baseStart
+			&& same(h.hunk.baseLines, rendered.hunk.baseLines)
+			&& same(h.hunk.agentLines, rendered.hunk.agentLines)
+			&& (h.status !== 'conflict' || rendered.status !== 'conflict' || same(h.currentLines, rendered.currentLines)));
+	}
+
+	acceptHunk(threadId: string, path: string, rendered: HunkState): Promise<void> {
 		return this._write(threadId, path, async s => {
 			const { agent, review } = s;
-			const state = review.hunks[hunkIdx];
+			const state = this._freshHunk(review, rendered);
 			if (!state || review.fileConflict || s.file.binary) { return; }
 			if (review.kind !== 'modified') { return this._acceptWhole(s); } // an added/deleted file's single hunk is the whole file
 			if (s.base === null || s.current === null) { return; }
 			// on a conflict this is "Use agent's": the agent's version replaces the user's overlapping region
 			const { base, current } = acceptHunkText(state, s.base, s.current);
-			await this._writeUser(this._userUri(agent, s.file.path), current);
+			if (!await this._writeUser(this._userUri(agent, s.file.path), s.current, current)) { return; }
 			await this._worktree.writeBase(agent.agentId, s.file.path, base);
 		});
 	}
 
-	rejectHunk(threadId: string, path: string, hunkIdx: number): Promise<void> {
+	rejectHunk(threadId: string, path: string, rendered: HunkState): Promise<void> {
 		return this._write(threadId, path, async s => {
-			const state = s.review.hunks[hunkIdx];
+			const state = this._freshHunk(s.review, rendered);
 			if (!state || s.file.binary) { return; }
 			if (s.review.kind !== 'modified') { return this._rejectWhole(s, false); }
 			if (s.agentText === null) { return; }
@@ -521,8 +564,9 @@ export class BackgroundAgentsService extends Disposable implements IBackgroundAg
 		return this._enqueue(threadId, async () => {
 			const agent = this._agentOf(threadId);
 			if (!agent) { return; }
-			for (const s of await this._pendingFiles(agent)) {
-				await this._acceptWhole(s);
+			for (const { file } of await this._pendingFiles(agent)) {
+				const s = await this._fileState(agent, file.path); // fresh, right before merging this file
+				if (s) { await this._acceptWhole(s); }
 			}
 			await this._refresh(threadId, true);
 		});
@@ -532,8 +576,9 @@ export class BackgroundAgentsService extends Disposable implements IBackgroundAg
 		return this._enqueue(threadId, async () => {
 			const agent = this._agentOf(threadId);
 			if (!agent) { return; }
-			for (const s of await this._pendingFiles(agent)) {
-				await this._rejectWhole(s, true);
+			for (const { file } of await this._pendingFiles(agent)) {
+				const s = await this._fileState(agent, file.path); // fresh, right before this file
+				if (s) { await this._rejectWhole(s, true); }
 			}
 			await this._refresh(threadId, true);
 		});
