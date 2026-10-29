@@ -64,6 +64,7 @@ import './fileService.js'
 // register source control management
 import './zeroEgressSCMService.js'
 import './egressTargetsContribution.js'
+import './localStatusContribution.js'
 
 // ---------- common (unclear if these actually need to be imported, because they're already imported wherever they're used) ----------
 

@@ -182,3 +182,43 @@
 .ze-scrollable-element *::-webkit-scrollbar-corner {
 	background-color: var(--ze-bg-3) !important;
 }
+
+/* Title bar: ZeroEgress mark and the Local / LAN / Internet pill (localStatusContribution.ts) */
+.monaco-workbench .part.titlebar .ze-titlebar-brand {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	padding: 0 8px;
+	font-size: 12px;
+	font-weight: 600;
+	color: var(--vscode-titleBar-activeForeground);
+}
+
+/* macOS draws its window buttons over the left of the title bar (except in full screen) */
+.monaco-workbench.mac:not(.web):not(.fullscreen) .part.titlebar .ze-titlebar-brand {
+	margin-left: 70px;
+}
+
+.monaco-workbench .part.titlebar .ze-titlebar-status {
+	display: flex;
+	align-items: center;
+	align-self: center;
+	margin-right: 8px;
+	padding: 2px 9px;
+	border: 1px solid var(--vscode-commandCenter-border);
+	border-radius: 999px;
+	font-size: 11px;
+	line-height: 16px;
+	cursor: pointer;
+	-webkit-app-region: no-drag;
+	color: var(--vscode-descriptionForeground);
+}
+
+.monaco-workbench .part.titlebar .ze-titlebar-status[data-kind="local"] {
+	color: var(--vscode-charts-green);
+}
+
+.monaco-workbench .part.titlebar .ze-titlebar-status[data-kind="internet"] {
+	color: var(--vscode-statusBarItem-warningForeground);
+	background-color: var(--vscode-statusBarItem-warningBackground);
+}
