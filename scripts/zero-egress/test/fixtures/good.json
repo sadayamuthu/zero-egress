@@ -23,7 +23,8 @@
 				"to": "2026-10-01T11:30:00.000Z",
 				"why": "crash"
 			}
-		]
+		],
+		"recordingSince": "2026-10-01T08:00:00.000Z"
 	},
 	"allowed": [
 		{
@@ -211,10 +212,10 @@
 		]
 	},
 	"key": {
-		"publicKey": "YmiopGYXrkPUZKR835qOE5AQpp7OOJ1SyOe+1vfrIfM=",
-		"fingerprint": "9bd3-6d0a-fc52-9668",
+		"publicKey": "CAQ5ss1/fyzWHcVjWJ6+f75PRS3msPwZhRu6reI9BnA=",
+		"fingerprint": "8a3e-b320-aa4b-5efc-fd1a-134c-9cde-8ec4",
 		"storage": "file"
 	},
 	"pdfSha256": "5fb9c338125c8bc8d53b23f0a0afc92b7463dd98e8c2eb5561aff528b5708593",
-	"signature": "WB6/TB3gE1AZS0UkaC7kUM5bzrt33+OzdQKmkW7WMu9/FwsQhxOowrhc+In8+sJcM5k1UjdVNFDweL4B6wPoAA=="
+	"signature": "t4H0zLyZ84wlqC4qfpRXnVWz39yvbdVobWrfGyuoIXjY8N8a0844ksoy4D03TkIeqmd7fjprvXe6wyaGAihUBQ=="
 }

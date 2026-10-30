@@ -11,14 +11,15 @@ import React, { useCallback, useEffect, useState } from 'react'
 import type { EgressProofPeriod, EgressProofSummary } from '../../../../../common/egressProofService.js'
 import type { ProofCheck } from '../../../../../common/egressProof.js'
 import { ZeroEgressButtonBgDarken, ZeroEgressCheckBox, ZeroEgressSimpleInputBox } from '../../util/inputs.js'
-import { fileUri, useAccessor, useConfigurationValue } from '../../util/services.js'
+import { useAccessor, useConfigurationValue } from '../../util/services.js'
 
 // Written out because the bundle keeps imports from outside react/src as written (see AgentsSection.tsx).
 const AUDIT_ENABLED_SETTING = 'zeroEgress.audit.enabled' // common/zeroEgressConfiguration.ts
 const SHOW_NETWORK_LOG_COMMAND_ID = 'zeroEgress.showNetworkLog'
 const SIGNATURE_LIMIT = 'A valid signature proves this report wasn\'t changed and was made with this device\'s key. It does not prove the machine itself wasn\'t tampered with.' // EGRESS_PROOF_SIGNATURE_LIMIT, common/egressProof.ts
 const VERIFY_COMMAND = 'node verify-egress-proof.mjs <file>'
-const MAX_REPORT_FILE_BYTES = 64 * 1024 * 1024 // as main's MAX_REPORT_FILE_BYTES
+const SIGNATURE_CHECK = 'Signature valid' // SIGNATURE_CHECK, electron-main/egressLedger/egressProofReport.ts
+const FINGERPRINT_CHECK = 'Fingerprint matches the public key' // FINGERPRINT_CHECK, same file
 
 type PeriodChoice = '7' | '30' | '90' | 'custom'
 const PERIODS: { id: PeriodChoice; label: string }[] = [
@@ -152,7 +153,6 @@ const CreatePanel = ({ fingerprint, onClose, onCreated }: { fingerprint: string;
 const VerifyPanel = ({ onClose }: { onClose: () => void }) => {
 	const accessor = useAccessor()
 	const proofService = accessor.get('IEgressProofService')
-	const fileService = accessor.get('IFileService')
 
 	const [busy, setBusy] = useState(false)
 	const [error, setError] = useState<string | undefined>()
@@ -164,20 +164,18 @@ const VerifyPanel = ({ onClose }: { onClose: () => void }) => {
 			const picked = await proofService.pickReportFiles()
 			if (!picked) return
 			setBusy(true); setResult(undefined)
-			const checks = await proofService.verifyReport(picked.jsonPath, picked.pdfPath)
-			let fingerprint: string | undefined
-			try { // the key the report names; shown so it can be compared with the PDF's "Signed by" line
-				const content = await fileService.readFile(fileUri(picked.jsonPath), { limits: { size: MAX_REPORT_FILE_BYTES } })
-				const fp = JSON.parse(content.value.toString())?.key?.fingerprint
-				if (typeof fp === 'string' && fp) fingerprint = fp
-			} catch { /* the checks already say why the file is unreadable */ }
+			// main computes the fingerprint from the report's public key; the file is never read here
+			const { checks, fingerprint } = await proofService.verifyReport(picked.jsonPath, picked.pdfPath)
 			setResult({ file: basename(picked.jsonPath), checks, fingerprint })
 		} catch (e) {
 			setError(errorText(e))
 		} finally {
 			setBusy(false)
 		}
-	}, [proofService, fileService])
+	}, [proofService])
+
+	const passed = (name: string) => result?.checks.some(c => c.name === name && c.ok) === true
+	const signedByKey = passed(SIGNATURE_CHECK) && passed(FINGERPRINT_CHECK)
 
 	return <div className='mt-3 rounded-sm border border-ze-border-2 bg-ze-bg-2 px-4 py-3 text-sm flex flex-col gap-3'>
 		<div className='text-base'>Verify a report</div>
@@ -195,7 +193,11 @@ const VerifyPanel = ({ onClose }: { onClose: () => void }) => {
 					{c.detail ? <span className='text-ze-fg-3'> · {c.detail}</span> : null}
 				</div>
 			)}
-			<div className='mt-1'>Signed by device key <span className='font-mono'>{result.fingerprint ?? 'unavailable'}</span></div>
+			{signedByKey
+				? <div className='mt-1'>Signed by device key <span className='font-mono'>{result.fingerprint}</span></div>
+				: result.fingerprint
+					? <div className='mt-1 text-ze-warning'>Not verified as signed by this key. The key in the file has fingerprint <span className='font-mono'>{result.fingerprint}</span> (unverified).</div>
+					: null}
 		</div> : null}
 		<div className='text-ze-fg-3'>{SIGNATURE_LIMIT}</div>
 	</div>
@@ -222,8 +224,8 @@ export const EgressProofCard = () => {
 			<div className='mt-1 select-text'>
 				Since <span className='font-semibold'>{since}</span> (when recording started):{' '}
 				{summary.verdict === 'ok'
-					? <span className='text-ze-ok'>every connection went to an allowed destination.</span>
-					: <span className='text-ze-warning'>every connection went to an allowed destination, with gaps in the record. See the report.</span>}
+					? <span className='text-ze-ok'>every recorded connection went to an allowed destination.</span>
+					: <span className='text-ze-warning'>every recorded connection went to an allowed destination, with gaps in the record{summary.resetSince ? ` (the ledger was reset on ${formatDate(summary.resetSince)})` : ''}. See the report.</span>}
 			</div>
 			<div className='text-xs text-ze-fg-3 mt-1 select-text'>{summary.scope}</div>
 			<div className='text-sm text-ze-fg-3 mt-2 select-text'>

@@ -10,13 +10,13 @@ import { BrowserWindow, safeStorage } from 'electron';
 import { IDialogMainService } from '../../../../../platform/dialogs/electron-main/dialogMainService.js';
 import { LedgerRecord } from '../../common/egressLedger.js';
 import { EgressTarget } from '../../common/egressPolicy.js';
-import { EGRESS_PROOF_SCOPE, EgressProofBody, ProofCheck, buildEgressProof, canonicalProof } from '../../common/egressProof.js';
+import { EGRESS_PROOF_SCOPE, EgressProofBody, EgressProofVerification, EgressSummaryAccumulator, buildEgressProof, canonicalProof } from '../../common/egressProof.js';
 import { renderProofHtml } from '../../common/egressProofHtml.js';
 import { EgressProofPeriod, EgressProofSummary, IEgressProofService } from '../../common/egressProofService.js';
 import { LocalAuditStore } from '../audit/localAuditStore.js';
 import { EgressLedgerService } from './egressLedgerService.js';
 import { EgressProofKey } from './egressProofKey.js';
-import { ON_MACHINE_CHECK, ThisMachineLedger, auditCoverage, lastAuditState, periodOf, reportBasePath, reportFileProblem, targetLabel, verifyReportText } from './egressProofReport.js';
+import { ON_MACHINE_CHECK, ThisMachineLedger, auditCoverage, lastAuditState, periodOf, reportBasePath, reportFileProblem, summarySince, targetLabel, verifyReportText } from './egressProofReport.js';
 
 const AUDIT_LOOKBACK_MS = 31 * 24 * 3600_000;
 
@@ -77,36 +77,51 @@ export class EgressProofMainService implements Omit<IEgressProofService, '_servi
 		return { publicKey: k.publicKey, fingerprint: k.fingerprint, storage: k.storage };
 	}
 
-	async getSummary(): Promise<EgressProofSummary> {
+	/** Running totals since the ledger began, extended with each summary; created (with one full chain check) on first use. */
+	private _summary: { acc: EgressSummaryAccumulator; chainOk: boolean } | undefined;
+	private _summaryQueue: Promise<unknown> = Promise.resolve();
+
+	getSummary(): Promise<EgressProofSummary> {
+		const run = this._summaryQueue.then(() => this._getSummary());
+		this._summaryQueue = run.catch(() => undefined);
+		return run;
+	}
+
+	/**
+	 * Cheap on every call: only records appended since the last summary are read and folded in, and their links are
+	 * checked onto the last record seen. The whole chain is verified once, on first use (reports verify it in full).
+	 */
+	private async _getSummary(): Promise<EgressProofSummary> {
 		const { ledger } = this.opts;
 		await ledger.open();
 		await ledger.flush();
 		const store = ledger.store;
-		const since = await store.createdAt();
-		const to = new Date().toISOString();
-		const chain = await store.verifyChain();
-		let key: EgressProofBody['key'] = { publicKey: '', fingerprint: '', storage: 'file' };
+		if (!this._summary) {
+			const chain = await store.verifyChain();
+			this._summary = { acc: new EgressSummaryAccumulator(), chainOk: chain.ok };
+		}
+		const { acc } = this._summary;
+		const head = await store.head(); // first: records a timer flush appends after it are left for the next summary
+		acc.add((await store.recordsAfter(acc.lastSeq)).filter(r => r.seq <= head.seq));
+		const headMatches = acc.lastHash === undefined || (acc.lastSeq === head.seq && acc.lastHash === head.hash);
+		const chainOk = this._summary.chainOk && acc.brokenAtSeq === undefined && headMatches;
+		const resetSince = ledger.resetSince();
+		const totals = acc.result(ledger.heldCounts(), { resetSince, chainOk });
+		let fingerprint = '';
 		try {
-			key = this.keyInfo();
+			fingerprint = this.keyInfo().fingerprint;
 		} catch (e) {
 			this.opts.onError?.('[ZeroEgress] Egress Proof signing key unavailable', e); // the summary still shows; only the fingerprint is blank
 		}
-		const body = buildEgressProof(await store.recordsBetween(since, to), {
-			createdAt: to,
-			period: { from: since, to },
-			identity: { machineId: '', user: '', version: '', commit: '', os: '', networkSettings: [] },
-			modelUsage: null,
-			brokenAtSeq: chain.ok ? undefined : chain.brokenAtSeq,
-			key,
-		});
 		return {
-			since,
-			destinations: body.allowed.length,
-			blocked: body.blocked.reduce((s, r) => s + r.count, 0) + body.lookupsBlocked.reduce((s, r) => s + r.count, 0),
-			intact: chain.ok,
-			verdict: body.verdict,
+			since: summarySince(await store.createdAt(), resetSince, ledger.expectedSince()),
+			...(resetSince !== undefined ? { resetSince } : {}),
+			destinations: totals.destinations,
+			blocked: totals.blocked,
+			intact: chainOk,
+			verdict: totals.verdict,
 			scope: EGRESS_PROOF_SCOPE,
-			fingerprint: body.key.fingerprint,
+			fingerprint,
 		};
 	}
 
@@ -122,7 +137,7 @@ export class EgressProofMainService implements Omit<IEgressProofService, '_servi
 
 		const { ledger } = this.opts;
 		await ledger.open();
-		await ledger.flush(); // 1. so the report includes counts up to now
+		await ledger.flush(true); // 1. so the report includes counts up to now, the open hour's too
 		const store = ledger.store;
 		const now = Date.now();
 		const period = periodOf(opts, now);
@@ -135,6 +150,7 @@ export class EgressProofMainService implements Omit<IEgressProofService, '_servi
 			modelUsage: includeModelUsage ? await this.modelUsage(period, records) : null,
 			resetSince: ledger.resetSince(),
 			brokenAtSeq: chain.ok ? undefined : chain.brokenAtSeq,
+			recordingSince: await store.createdAt(),
 			key: this.keyInfo(),
 		});
 		const pdf = await printToPdf(renderProofHtml(body)); // 4. and 5.
@@ -154,10 +170,10 @@ export class EgressProofMainService implements Omit<IEgressProofService, '_servi
 		return { jsonPath, pdfPath };
 	}
 
-	async verifyReport(jsonPath: string, pdfPath?: string): Promise<ProofCheck[]> {
+	async verifyReport(jsonPath: string, pdfPath?: string): Promise<EgressProofVerification> {
 		const json = await readBounded(jsonPath);
 		if ('problem' in json) {
-			return [{ name: 'Report file is readable', ok: false, detail: json.problem }];
+			return { checks: [{ name: 'Report file is readable', ok: false, detail: json.problem }] };
 		}
 		let pdf: Buffer | undefined;
 		let pdfError: string | undefined;
@@ -165,12 +181,13 @@ export class EgressProofMainService implements Omit<IEgressProofService, '_servi
 			const read = await readBounded(pdfPath);
 			if ('problem' in read) { pdfError = read.problem; } else { pdf = read.data; }
 		}
-		const checks = await verifyReportText(json.data.toString('utf8'), pdf, await this.thisMachine());
+		const result = await verifyReportText(json.data.toString('utf8'), pdf, await this.thisMachine());
+		const { checks } = result;
 		if (pdfError !== undefined && !(checks.length === 1 && !checks[0].ok)) {
 			const at = checks.findIndex(c => c.name === ON_MACHINE_CHECK);
 			checks.splice(at === -1 ? checks.length : at, 0, { name: 'PDF matches JSON', ok: false, detail: `The PDF could not be read: ${pdfError}` });
 		}
-		return checks;
+		return result;
 	}
 
 	async pickReportFiles(): Promise<{ jsonPath: string; pdfPath?: string } | undefined> {

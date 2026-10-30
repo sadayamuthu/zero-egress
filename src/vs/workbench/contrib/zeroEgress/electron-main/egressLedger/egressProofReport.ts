@@ -9,7 +9,7 @@ import * as path from 'path';
 import { createHash } from 'crypto';
 import { LedgerRecord } from '../../common/egressLedger.js';
 import { EgressTarget } from '../../common/egressPolicy.js';
-import { EgressProofBody, ProofCheck, canonicalProof, checkProofBody } from '../../common/egressProof.js';
+import { EgressProofBody, EgressProofVerification, ProofCheck, canonicalProof, checkProofBody } from '../../common/egressProof.js';
 import { EgressProofKey } from './egressProofKey.js';
 
 const DAY_MS = 24 * 3600_000;
@@ -17,6 +17,8 @@ const DAY_MS = 24 * 3600_000;
 export type ReportPeriodOptions = { days: number } | { from: string; to: string };
 
 export const ON_MACHINE_CHECK = 'This machine\'s ledger contains this report';
+export const SIGNATURE_CHECK = 'Signature valid';
+export const FINGERPRINT_CHECK = 'Fingerprint matches the public key';
 
 /** `<folder>/egress-proof-<date>`, or `-2`, `-3`… when a .json or .pdf with that name already exists. Never overwrites. */
 export function reportBasePath(folder: string, date: string, exists: (p: string) => boolean): string {
@@ -62,6 +64,14 @@ export function lastAuditState(records: LedgerRecord[]): boolean | undefined {
 	return undefined;
 }
 
+/**
+ * The start of the Settings verdict: the ledger's creation, or, after a reset, the profile's marker (when recording
+ * first started), so the reset falls inside the summary and shows as a gap.
+ */
+export function summarySince(createdAt: string, resetSince: string | undefined, expectedSince: string | undefined): string {
+	return resetSince !== undefined && expectedSince !== undefined && expectedSince < createdAt ? expectedSince : createdAt;
+}
+
 /** Largest report JSON or PDF that verify will read, so a huge file can't exhaust main. */
 export const MAX_REPORT_FILE_BYTES = 64 * 1024 * 1024;
 
@@ -101,28 +111,40 @@ function malformed(v: any): string | undefined {
 	return bad ? `Missing or malformed field: ${bad[0]}` : undefined;
 }
 
+/** The stated `key.fingerprint` must be the one computed from the embedded public key: it is what a reviewer compares. */
+function fingerprintCheck(key: { publicKey: string; fingerprint?: unknown }, computed: string | undefined): ProofCheck {
+	if (computed === undefined) { return { name: FINGERPRINT_CHECK, ok: false, detail: 'The public key is not a valid Ed25519 key' }; }
+	if (key.fingerprint !== computed) {
+		return { name: FINGERPRINT_CHECK, ok: false, detail: `The report states ${typeof key.fingerprint === 'string' ? key.fingerprint : 'no fingerprint'}; its public key's fingerprint is ${computed}` };
+	}
+	return { name: FINGERPRINT_CHECK, ok: true };
+}
+
 /**
- * All checks for a report, in order: signature, the four body checks, the PDF (if given), and, for a report this machine
- * made whose head is still in its ledger, the on-machine check. An unreadable file gives one failed check.
+ * All checks for a report, in order: signature, fingerprint, the four body checks, the PDF (if given), and, for a report
+ * this machine made whose head is still in its ledger, the on-machine check. An unreadable file gives one failed check.
+ * `fingerprint` is computed from the embedded public key (never read from the file), when that key is well-formed.
  */
-export async function verifyReportText(jsonText: string, pdf: Uint8Array | undefined, machine: ThisMachineLedger | undefined): Promise<ProofCheck[]> {
+export async function verifyReportText(jsonText: string, pdf: Uint8Array | undefined, machine: ThisMachineLedger | undefined): Promise<EgressProofVerification> {
 	let parsed: any;
 	try {
 		parsed = JSON.parse(jsonText);
 	} catch {
-		return [{ name: 'Report file is readable', ok: false, detail: 'The file is not valid JSON' }];
+		return { checks: [{ name: 'Report file is readable', ok: false, detail: 'The file is not valid JSON' }] };
 	}
 	const why = malformed(parsed);
-	if (why) { return [{ name: 'Report file is readable', ok: false, detail: why }]; }
+	if (why) { return { checks: [{ name: 'Report file is readable', ok: false, detail: why }] }; }
 	const body = parsed as EgressProofBody & { signature?: unknown };
 
 	const checks: ProofCheck[] = [];
 	const signature = body.signature;
 	checks.push(typeof signature !== 'string'
-		? { name: 'Signature valid', ok: false, detail: 'The report has no signature' }
+		? { name: SIGNATURE_CHECK, ok: false, detail: 'The report has no signature' }
 		: EgressProofKey.verify(body.key.publicKey, canonicalProof(body), signature)
-			? { name: 'Signature valid', ok: true }
-			: { name: 'Signature valid', ok: false, detail: 'The signature does not match this report and key' });
+			? { name: SIGNATURE_CHECK, ok: true }
+			: { name: SIGNATURE_CHECK, ok: false, detail: 'The signature does not match this report and key' });
+	const fingerprint = EgressProofKey.fingerprintOfBase64(body.key.publicKey);
+	checks.push(fingerprintCheck(body.key, fingerprint));
 
 	try {
 		checks.push(...checkProofBody(body));
@@ -148,5 +170,5 @@ export async function verifyReportText(jsonText: string, pdf: Uint8Array | undef
 					: { name: ON_MACHINE_CHECK, ok: true });
 		}
 	}
-	return checks;
+	return { checks, fingerprint };
 }

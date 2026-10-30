@@ -16,6 +16,19 @@ export interface SafeStorageLike {
 	isEncryptionAvailable(): boolean;
 	encryptString(s: string): Buffer;
 	decryptString(b: Buffer): string;
+	/** Linux only (Electron's safeStorage.getSelectedStorageBackend): which secret store encrypts the data. */
+	getSelectedStorageBackend?(): string;
+}
+
+/**
+ * True when `safe` really encrypts with an OS secret store. On Linux without a secret service, Electron reports
+ * encryption as available but uses the `basic_text` backend, a hard-coded password: that is not OS encryption.
+ */
+export function osEncryptionUsable(safe: SafeStorageLike, platform: string = process.platform): boolean {
+	if (!safe.isEncryptionAvailable()) { return false; }
+	if (platform !== 'linux') { return true; }
+	const backend = safe.getSelectedStorageBackend?.();
+	return backend !== 'basic_text' && backend !== 'unknown';
 }
 
 function rawPublicKey(key: KeyObject): Buffer {
@@ -28,15 +41,18 @@ export class EgressProofKey {
 	/**
 	 * Loads the key from `dir`, creating it on first use. The private key is kept encrypted with `safe` when encryption
 	 * is available, otherwise as an owner-only PEM file. An existing key is always reused, never silently replaced.
+	 * An encrypted key whose backend turns out to be Linux `basic_text` is reported as an owner-only file.
 	 */
-	static load(dir: string, safe: SafeStorageLike): EgressProofKey {
+	static load(dir: string, safe: SafeStorageLike, platform: string = process.platform): EgressProofKey {
 		const encryptedPath = path.join(dir, ENCRYPTED_FILE);
 		const plainPath = path.join(dir, PLAIN_FILE);
 		if (fs.existsSync(encryptedPath)) {
 			if (!safe.isEncryptionAvailable()) {
 				throw new Error('The Egress Proof signing key is encrypted, but OS encryption is not available right now.');
 			}
-			return new EgressProofKey(createPrivateKey(safe.decryptString(fs.readFileSync(encryptedPath))), 'safeStorage');
+			const usable = osEncryptionUsable(safe, platform);
+			if (!usable && platform !== 'win32') { fs.chmodSync(encryptedPath, 0o600); } // its only protection is the file mode
+			return new EgressProofKey(createPrivateKey(safe.decryptString(fs.readFileSync(encryptedPath))), usable ? 'safeStorage' : 'file');
 		}
 		if (fs.existsSync(plainPath)) {
 			if (process.platform !== 'win32') { fs.chmodSync(plainPath, 0o600); } // keep it owner-only even if it was loosened
@@ -45,7 +61,7 @@ export class EgressProofKey {
 		const { privateKey } = generateKeyPairSync('ed25519');
 		const pem = privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
 		fs.mkdirSync(dir, { recursive: true });
-		if (safe.isEncryptionAvailable()) {
+		if (osEncryptionUsable(safe, platform)) {
 			fs.writeFileSync(encryptedPath, safe.encryptString(pem), { mode: 0o600, flag: 'wx' });
 			return new EgressProofKey(privateKey, 'safeStorage');
 		}
@@ -56,7 +72,7 @@ export class EgressProofKey {
 
 	/** Raw 32-byte public key, base64. */
 	readonly publicKey: string;
-	/** First 16 hex chars of sha256(raw public key), as `xxxx-xxxx-xxxx-xxxx`. */
+	/** First 32 hex chars (128 bits) of sha256(raw public key), as eight groups `xxxx-xxxx-…-xxxx`. */
 	readonly fingerprint: string;
 
 	private constructor(private readonly privateKey: KeyObject, readonly storage: 'safeStorage' | 'file') {
@@ -66,7 +82,14 @@ export class EgressProofKey {
 	}
 
 	static fingerprintOf(rawPublicKey: Buffer): string {
-		return createHash('sha256').update(rawPublicKey).digest('hex').slice(0, 16).match(/.{4}/g)!.join('-');
+		return createHash('sha256').update(rawPublicKey).digest('hex').slice(0, 32).match(/.{4}/g)!.join('-');
+	}
+
+	/** Fingerprint of a base64 raw public key, or undefined when it is not a 32-byte Ed25519 key. */
+	static fingerprintOfBase64(publicKey: unknown): string | undefined {
+		if (typeof publicKey !== 'string') { return undefined; }
+		const raw = Buffer.from(publicKey, 'base64');
+		return raw.length === 32 ? EgressProofKey.fingerprintOf(raw) : undefined;
 	}
 
 	/** Ed25519 signature of the UTF-8 bytes of `data`, base64. */

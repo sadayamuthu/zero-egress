@@ -12,7 +12,7 @@ import { GENESIS_HASH, chainHash } from '../../../common/auditTypes.js';
 import { LedgerBody, LedgerRecord } from '../../../common/egressLedger.js';
 import { buildEgressProof, canonicalProof } from '../../../common/egressProof.js';
 import { EgressProofKey } from '../egressProofKey.js';
-import { MAX_REPORT_FILE_BYTES, auditCoverage, periodOf, reportBasePath, reportFileProblem, targetLabel, verifyReportText } from '../egressProofReport.js';
+import { MAX_REPORT_FILE_BYTES, auditCoverage, periodOf, reportBasePath, reportFileProblem, summarySince, targetLabel, verifyReportText } from '../egressProofReport.js';
 
 const H = (h: number) => new Date(Date.UTC(2026, 9, 30, h)).toISOString();
 
@@ -69,6 +69,12 @@ suite('EgressProofReport', () => {
 		if (process.platform !== 'win32') { assert.strictEqual(reportFileProblem(fs.statSync('/dev/zero')), 'Not a regular file'); }
 	});
 
+	test('summary since: a reset keeps the profile\'s start, so the reset falls inside the verdict', () => {
+		assert.strictEqual(summarySince(H(5), undefined, H(1)), H(5));
+		assert.strictEqual(summarySince(H(5), H(5), H(1)), H(1));
+		assert.strictEqual(summarySince(H(5), H(5), undefined), H(5));
+	});
+
 	test('target labels', () => {
 		assert.strictEqual(targetLabel({ host: '192.168.1.2', port: 8000, reason: 'MCP server' }), '192.168.1.2:8000 (MCP server)');
 		assert.strictEqual(targetLabel({ host: '::1', port: 80 }), '[::1]:80');
@@ -96,9 +102,11 @@ suite('EgressProofReport', () => {
 
 		test('good report: checks in order', async () => {
 			const report = signed(dir);
-			const checks = await verifyReportText(JSON.stringify(report), pdf, machine('m1', report.ledger.headHash));
+			const { checks, fingerprint } = await verifyReportText(JSON.stringify(report), pdf, machine('m1', report.ledger.headHash));
+			assert.strictEqual(fingerprint, report.key.fingerprint);
 			assert.deepStrictEqual(checks.map(c => [c.name, c.ok]), [
 				['Signature valid', true],
+				['Fingerprint matches the public key', true],
 				['Records form an unbroken chain', true],
 				['Every row recomputes from the records', true],
 				['Coverage recomputes from the records', true],
@@ -111,7 +119,7 @@ suite('EgressProofReport', () => {
 		test('tampering, another pdf and another ledger fail', async () => {
 			const report = signed(dir);
 			report.allowed[0].count = 1;
-			const checks = await verifyReportText(JSON.stringify(report), Buffer.from('other'), machine('m1', 'different'));
+			const { checks } = await verifyReportText(JSON.stringify(report), Buffer.from('other'), machine('m1', 'different'));
 			const failed = checks.filter(c => !c.ok).map(c => c.name);
 			assert.deepStrictEqual(failed, ['Signature valid', 'Every row recomputes from the records', 'PDF matches JSON', 'This machine\'s ledger contains this report']);
 		});
@@ -119,7 +127,7 @@ suite('EgressProofReport', () => {
 		test('on-machine check only when the head is in this ledger of this machine', async () => {
 			const report = signed(dir);
 			const names = async (m: ReturnType<typeof machine> | undefined, withPdf: boolean) =>
-				(await verifyReportText(JSON.stringify(report), withPdf ? pdf : undefined, m)).map(c => c.name);
+				(await verifyReportText(JSON.stringify(report), withPdf ? pdf : undefined, m)).checks.map(c => c.name);
 			assert.ok(!(await names(machine('m1', undefined), true)).includes('This machine\'s ledger contains this report'));
 			assert.ok(!(await names(machine('other', report.ledger.headHash), true)).includes('This machine\'s ledger contains this report'));
 			assert.ok(!(await names(undefined, false)).includes('PDF matches JSON'));
@@ -127,13 +135,27 @@ suite('EgressProofReport', () => {
 
 		test('unreadable report is one failed check', async () => {
 			for (const text of ['not json', JSON.stringify({ schemaVersion: 2 }), JSON.stringify({ schemaVersion: 1 })]) {
-				const checks = await verifyReportText(text, undefined, undefined);
+				const { checks, fingerprint } = await verifyReportText(text, undefined, undefined);
+				assert.strictEqual(fingerprint, undefined);
 				assert.strictEqual(checks.length, 1);
 				assert.strictEqual(checks[0].name, 'Report file is readable');
 				assert.strictEqual(checks[0].ok, false);
 				assert.ok(checks[0].detail);
 			}
-			assert.strictEqual((await verifyReportText('{"secret bytes', undefined, undefined))[0].detail, 'The file is not valid JSON');
+			assert.strictEqual((await verifyReportText('{"secret bytes', undefined, undefined)).checks[0].detail, 'The file is not valid JSON');
+		});
+
+		test('a report signed by another key that states this device\'s fingerprint fails the fingerprint check', async () => {
+			const victim = signed(dir);
+			const attackerDir = fs.mkdtempSync(path.join(dir, 'attacker-'));
+			const attacker = EgressProofKey.load(attackerDir, { isEncryptionAvailable: () => false, encryptString: () => { throw new Error(); }, decryptString: () => { throw new Error(); } });
+			const { signature: _s, ...forged } = signed(attackerDir);
+			forged.key = { ...forged.key, fingerprint: victim.key.fingerprint };
+			const body = { ...forged, signature: attacker.sign(canonicalProof(forged)) }; // a valid signature by the attacker's own key
+			const { checks, fingerprint } = await verifyReportText(JSON.stringify(body), pdf, undefined);
+			assert.deepStrictEqual(checks.slice(0, 2).map(c => [c.name, c.ok]), [['Signature valid', true], ['Fingerprint matches the public key', false]]);
+			assert.strictEqual(fingerprint, attacker.fingerprint, 'the fingerprint returned is the signing key\'s, not the stated one');
+			assert.notStrictEqual(fingerprint, victim.key.fingerprint);
 		});
 	});
 });

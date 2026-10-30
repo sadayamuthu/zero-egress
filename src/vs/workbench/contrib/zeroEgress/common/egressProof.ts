@@ -24,7 +24,8 @@ export interface EgressProofBody {
 	identity: { machineId: string; user: string; version: string; commit: string; os: string; networkSettings: string[] };
 	scope: string;
 	verdict: 'ok' | 'gaps';
-	coverage: { hoursRecorded: number; gaps: EgressProofGap[] };
+	/** `recordingSince`: when this machine's ledger started, if that is after the period's start (nothing before it is covered). */
+	coverage: { hoursRecorded: number; gaps: EgressProofGap[]; recordingSince?: string };
 	allowed: EgressProofAllowedRow[];
 	blocked: EgressProofBlockedRow[];
 	lookupsBlocked: EgressProofLookupRow[];
@@ -42,6 +43,8 @@ export interface EgressProofInput {
 	modelUsage: EgressProofBody['modelUsage'];
 	resetSince?: string;
 	brokenAtSeq?: number;
+	/** When the ledger was created; stated in coverage when it is after the period's start. */
+	recordingSince?: string;
 	key: EgressProofBody['key'];
 }
 
@@ -121,7 +124,7 @@ function computeSessions(records: LedgerRecord[], period: { from: string; to: st
 const sortGaps = (gaps: EgressProofGap[]) => gaps.sort((a, b) => cmp(a.from, b.from) || cmp(a.why, b.why) || cmp(a.to ?? '', b.to ?? ''));
 
 function computeCoverage(records: LedgerRecord[], input: EgressProofInput): EgressProofBody['coverage'] {
-	const { period, resetSince, brokenAtSeq } = input;
+	const { period, resetSince, brokenAtSeq, recordingSince } = input;
 	const { hoursRecorded, crashGaps } = computeSessions(records, period);
 	const gaps = [...crashGaps];
 	if (resetSince !== undefined && resetSince > period.from) {
@@ -131,7 +134,8 @@ function computeCoverage(records: LedgerRecord[], input: EgressProofInput): Egre
 		const rec = records.find(r => r.seq === brokenAtSeq);
 		gaps.push({ from: rec ? timeOf(rec.body) : period.from, why: 'chain' });
 	}
-	return { hoursRecorded, gaps: sortGaps(gaps) };
+	const late = recordingSince !== undefined && recordingSince > period.from;
+	return late ? { hoursRecorded, gaps: sortGaps(gaps), recordingSince } : { hoursRecorded, gaps: sortGaps(gaps) };
 }
 
 export function buildEgressProof(records: LedgerRecord[], input: EgressProofInput): EgressProofBody {
@@ -167,6 +171,9 @@ export function canonicalProof(body: EgressProofBody): string {
 }
 
 export type ProofCheck = { name: string; ok: boolean; detail?: string };
+
+/** Result of verifying a report file. `fingerprint` is computed in main from the embedded public key, never read from the file. */
+export interface EgressProofVerification { checks: ProofCheck[]; fingerprint?: string }
 
 function checkChain(ledger: EgressProofBody['ledger']): ProofCheck {
 	const name = 'Records form an unbroken chain';
@@ -232,6 +239,9 @@ function checkCoverage(body: EgressProofBody): ProofCheck {
 			return { name, ok: false, detail: 'A gap is malformed' };
 		}
 	}
+	if (coverage.recordingSince !== undefined && !isIso(coverage.recordingSince)) {
+		return { name, ok: false, detail: 'The recording start is malformed' };
+	}
 	if (body.verdict !== (coverage.gaps.length > 0 ? 'gaps' : 'ok')) {
 		return { name, ok: false, detail: 'Verdict does not match the gaps' };
 	}
@@ -245,4 +255,51 @@ export function checkProofBody(body: EgressProofBody): ProofCheck[] {
 		checkCoverage(body),
 		body.scope === EGRESS_PROOF_SCOPE ? { name: 'Scope statement present', ok: true } : { name: 'Scope statement present', ok: false, detail: 'Scope statement is missing or changed' },
 	];
+}
+
+function countInto(totals: { dests: Set<string>; blocked: number }, body: LedgerRecord['body']): void {
+	if (body.type === 'allowed') { totals.dests.add(body.dest); }
+	else if (body.type === 'blocked' || body.type === 'blocked_lookup') { totals.blocked += body.count; }
+}
+
+/**
+ * Running totals for the Settings verdict over the whole ledger, fed records in seq order a batch at a time, so a
+ * summary only reads what was appended since the last one. Crash gaps follow computeSessions; `add` also checks that
+ * each batch links onto the last record it saw, so the chain stays verified without re-hashing the whole ledger.
+ */
+export class EgressSummaryAccumulator {
+	lastSeq = 0;
+	lastHash: string | undefined;
+	/** The seq where a batch failed to link onto the records before it, if one did. */
+	brokenAtSeq: number | undefined;
+	private readonly totals = { dests: new Set<string>(), blocked: 0 };
+	private crashGaps = 0;
+	private openSession = false;
+
+	add(records: LedgerRecord[]): void {
+		for (const r of records) {
+			if (this.lastHash === undefined) {
+				this.openSession = r.body.type !== 'session_start'; // records may start mid-session, as in computeSessions
+			} else if (this.brokenAtSeq === undefined && (r.seq !== this.lastSeq + 1 || r.prevHash !== this.lastHash)) {
+				this.brokenAtSeq = r.seq !== this.lastSeq + 1 ? this.lastSeq + 1 : r.seq;
+			}
+			this.lastHash = chainHash(r.prevHash, { seq: r.seq, body: JSON.parse(JSON.stringify(r.body)) });
+			this.lastSeq = r.seq;
+			countInto(this.totals, r.body);
+			if (r.body.type === 'session_start') {
+				if (this.openSession) { this.crashGaps++; }
+				this.openSession = true;
+			} else if (r.body.type === 'session_end') {
+				this.openSession = false;
+			}
+		}
+	}
+
+	/** Totals including `held` count rows not yet written; the verdict has gaps for a crash, a reset or a broken chain. */
+	result(held: readonly LedgerRecord['body'][], opts: { resetSince?: string; chainOk: boolean }): { destinations: number; blocked: number; verdict: 'ok' | 'gaps' } {
+		const totals = { dests: new Set(this.totals.dests), blocked: this.totals.blocked };
+		for (const b of held) { countInto(totals, b); }
+		const gaps = this.crashGaps > 0 || opts.resetSince !== undefined || !opts.chainOk;
+		return { destinations: totals.dests.size, blocked: totals.blocked, verdict: gaps ? 'gaps' : 'ok' };
+	}
 }

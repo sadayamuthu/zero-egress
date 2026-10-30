@@ -7,7 +7,7 @@ import assert from 'assert';
 import * as os from 'os';
 import * as path from 'path';
 import * as fs from 'fs';
-import { EgressProofKey } from '../egressProofKey.js';
+import { EgressProofKey, osEncryptionUsable } from '../egressProofKey.js';
 
 suite('EgressProofKey', () => {
 	let dir: string;
@@ -15,10 +15,11 @@ suite('EgressProofKey', () => {
 	setup(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zero-egress-proof-key-')); });
 	teardown(() => { fs.rmSync(dir, { recursive: true, force: true }); });
 
-	function fakeSafe(available: boolean) {
+	function fakeSafe(available: boolean, backend?: string) {
 		const encrypted: string[] = [];
 		return {
 			encrypted,
+			getSelectedStorageBackend: backend === undefined ? undefined : () => backend,
 			isEncryptionAvailable: () => available,
 			encryptString: (s: string) => { encrypted.push(s); return Buffer.from('enc:' + Buffer.from(s).toString('base64')); },
 			decryptString: (b: Buffer) => Buffer.from(b.toString().slice(4), 'base64').toString(),
@@ -32,7 +33,10 @@ suite('EgressProofKey', () => {
 		assert.strictEqual(b.publicKey, a.publicKey);
 		assert.strictEqual(b.fingerprint, a.fingerprint);
 		assert.strictEqual(Buffer.from(a.publicKey, 'base64').length, 32);
-		assert.match(a.fingerprint, /^[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}$/);
+		assert.match(a.fingerprint, /^[0-9a-f]{4}(-[0-9a-f]{4}){7}$/, '128 bits, eight groups');
+		assert.strictEqual(EgressProofKey.fingerprintOfBase64(a.publicKey), a.fingerprint);
+		assert.strictEqual(EgressProofKey.fingerprintOfBase64('c2hvcnQ='), undefined);
+		assert.strictEqual(EgressProofKey.fingerprintOfBase64(42), undefined);
 		assert.strictEqual(safe.encrypted.length, 1, 'the key is created only once');
 	});
 
@@ -63,6 +67,28 @@ suite('EgressProofKey', () => {
 			EgressProofKey.load(dir, safe);
 			assert.strictEqual(fs.statSync(file).mode & 0o777, 0o600, 'a reused key file is made owner-only again');
 		}
+	});
+
+	test('on Linux, the basic_text or unknown backend is not OS encryption: owner-only file instead', () => {
+		for (const backend of ['basic_text', 'unknown']) {
+			const sub = fs.mkdtempSync(path.join(dir, 'k-'));
+			const safe = fakeSafe(true, backend);
+			const key = EgressProofKey.load(sub, safe, 'linux');
+			assert.strictEqual(key.storage, 'file', backend);
+			assert.strictEqual(safe.encrypted.length, 0);
+			assert.ok(fs.existsSync(path.join(sub, 'zero-egress-proof-key.pem')));
+		}
+		assert.strictEqual(osEncryptionUsable(fakeSafe(true, 'gnome_libsecret'), 'linux'), true);
+		assert.strictEqual(osEncryptionUsable(fakeSafe(true, 'basic_text'), 'darwin'), true, 'the backend only matters on Linux');
+		assert.strictEqual(osEncryptionUsable(fakeSafe(false, 'gnome_libsecret'), 'linux'), false);
+	});
+
+	test('on Linux, a key encrypted under basic_text is reused but reported as a file', () => {
+		const first = EgressProofKey.load(dir, fakeSafe(true, 'gnome_libsecret'), 'linux');
+		assert.strictEqual(first.storage, 'safeStorage');
+		const again = EgressProofKey.load(dir, fakeSafe(true, 'basic_text'), 'linux');
+		assert.strictEqual(again.publicKey, first.publicKey);
+		assert.strictEqual(again.storage, 'file');
 	});
 
 	test('sign and verify round trip; tampered data fails', () => {

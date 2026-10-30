@@ -7,7 +7,7 @@ import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { GENESIS_HASH, chainHash } from '../auditTypes.js';
 import { LedgerBody, LedgerRecord } from '../egressLedger.js';
-import { EGRESS_PROOF_SCOPE, EGRESS_PROOF_SIGNATURE_LIMIT, buildEgressProof, canonicalProof, checkProofBody } from '../egressProof.js';
+import { EGRESS_PROOF_SCOPE, EGRESS_PROOF_SIGNATURE_LIMIT, EgressSummaryAccumulator, buildEgressProof, canonicalProof, checkProofBody } from '../egressProof.js';
 
 suite('EgressProof', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
@@ -186,5 +186,66 @@ suite('EgressProof', () => {
 
 		const reset = buildEgressProof(crash, { ...input, resetSince: H(3) });
 		assert.strictEqual(checkProofBody(reset)[2].ok, true);
+	});
+
+	test('recordingSince is stated only when the ledger began after the period start, and must be well-formed', () => {
+		const records = chain([{ type: 'session_start', time: H(3), version: '1', commit: 'c' }, { type: 'session_end', time: H(4) }]);
+		assert.strictEqual(buildEgressProof(records, { ...input, recordingSince: H(0) }).coverage.recordingSince, undefined);
+		assert.ok(!('recordingSince' in buildEgressProof(records, input).coverage));
+		const late = buildEgressProof(records, { ...input, recordingSince: H(3) });
+		assert.strictEqual(late.coverage.recordingSince, H(3));
+		assert.strictEqual(late.verdict, 'ok', 'a late start alone is not a gap');
+		assert.ok(checkProofBody(late).every(c => c.ok));
+		late.coverage.recordingSince = 'yesterday';
+		assert.deepStrictEqual(checkProofBody(late).find(c => !c.ok)?.detail, 'The recording start is malformed');
+	});
+
+	suite('EgressSummaryAccumulator', () => {
+		const bodies: LedgerBody[] = [
+			{ type: 'session_start', time: H(1), version: '1', commit: 'c' },
+			allowed(1, 'a.example:443', 'main', 2),
+			{ type: 'blocked', minute: H(1), dest: 'x.example:80', origin: 'main', count: 5 },
+			{ type: 'session_start', time: H(2), version: '1', commit: 'c' }, // crash before it
+			allowed(2, 'b.example:443', 'main', 1),
+			{ type: 'blocked_lookup', minute: H(2), host: 'x.example', origin: 'renderer', count: 2 },
+			{ type: 'session_end', time: H(3) },
+		];
+
+		test('fed in batches, it matches a full build', () => {
+			const records = chain(bodies);
+			const acc = new EgressSummaryAccumulator();
+			acc.add(records.slice(0, 2));
+			acc.add(records.slice(2, 5));
+			acc.add([]);
+			acc.add(records.slice(5));
+			const full = buildEgressProof(records, input);
+			const r = acc.result([], { chainOk: true });
+			assert.strictEqual(r.destinations, full.allowed.length);
+			assert.strictEqual(r.blocked, full.blocked.reduce((n, x) => n + x.count, 0) + full.lookupsBlocked.reduce((n, x) => n + x.count, 0));
+			assert.strictEqual(r.verdict, full.verdict);
+			assert.strictEqual(r.verdict, 'gaps');
+			assert.strictEqual(acc.lastSeq, full.ledger.headSeq);
+			assert.strictEqual(acc.lastHash, full.ledger.headHash);
+			assert.strictEqual(acc.brokenAtSeq, undefined);
+		});
+
+		test('a reset, a broken chain, or a batch that does not link gives gaps', () => {
+			const clean = chain([bodies[0], bodies[1], bodies[6]]);
+			const acc = new EgressSummaryAccumulator();
+			acc.add(clean);
+			assert.strictEqual(acc.result([], { chainOk: true }).verdict, 'ok');
+			assert.strictEqual(acc.result([], { chainOk: true, resetSince: H(1) }).verdict, 'gaps');
+			assert.strictEqual(acc.result([], { chainOk: false }).verdict, 'gaps');
+			acc.add(chain([{ type: 'heartbeat', hour: H(5) }], 5)); // seq 5 after 3, and a prevHash that is not the last hash
+			assert.strictEqual(acc.brokenAtSeq, 4);
+		});
+
+		test('held counts are included without being kept', () => {
+			const acc = new EgressSummaryAccumulator();
+			acc.add(chain([bodies[0], bodies[1]]));
+			const held: LedgerBody[] = [allowed(4, 'c.example:443', 'main', 1), allowed(4, 'a.example:443', 'main', 1), { type: 'blocked', minute: H(4), dest: 'y:1', origin: 'main', count: 3 }];
+			assert.deepStrictEqual(acc.result(held, { chainOk: true }), { destinations: 2, blocked: 3, verdict: 'ok' });
+			assert.deepStrictEqual(acc.result([], { chainOk: true }), { destinations: 1, blocked: 0, verdict: 'ok' });
+		});
 	});
 });

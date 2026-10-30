@@ -143,6 +143,7 @@ import { MCPChannel } from '../../workbench/contrib/zeroEgress/electron-main/mcp
 import { EgressGuard, EgressGuardChannel } from '../../workbench/contrib/zeroEgress/electron-main/egressGuard.js';
 import { EgressLedgerService } from '../../workbench/contrib/zeroEgress/electron-main/egressLedger/egressLedgerService.js'; // ZeroEgress
 import { EgressProofMainService } from '../../workbench/contrib/zeroEgress/electron-main/egressLedger/egressProofMainService.js'; // ZeroEgress
+import { EgressProofChannel } from '../../workbench/contrib/zeroEgress/electron-main/egressLedger/egressProofChannel.js'; // ZeroEgress
 import { EGRESS_PROOF_CHANNEL } from '../../workbench/contrib/zeroEgress/common/egressProofService.js'; // ZeroEgress
 import { EGRESS_GUARD_CHANNEL } from '../../workbench/contrib/zeroEgress/common/egressGuardService.js';
 import { describeDestination, endpointWarning, targetFromUrl } from '../../workbench/contrib/zeroEgress/common/egressPolicy.js';
@@ -191,7 +192,7 @@ export class CodeApplication extends Disposable {
 		this.resolveLedgerAuditEnabled = resolveLedgerAuditEnabled; // ZeroEgress
 		this.egressLedger = new EgressLedgerService({ // ZeroEgress
 			dbPath: join(this.environmentMainService.userDataPath, 'zero-egress-ledger.vscdb'), // ZeroEgress
-			version: this.productService.version ?? '', // ZeroEgress
+			version: (this.productService as any).zeroEgressVersion || (this.productService.version ?? ''), // ZeroEgress: same version as the report identity
 			commit: this.productService.commit ?? '', // ZeroEgress
 			auditEnabled: resolveLedgerAuditEnabled(), // ZeroEgress
 			expectedSince: { // ZeroEgress
@@ -1330,7 +1331,7 @@ export class CodeApplication extends Disposable {
 			dialog: accessor.get(IDialogMainService), // ZeroEgress
 			onError: (msg, e) => this.logService.error(msg, e), // ZeroEgress
 		}); // ZeroEgress
-		mainProcessElectronServer.registerChannel(EGRESS_PROOF_CHANNEL, ProxyChannel.fromService(egressProofService, disposables)); // ZeroEgress
+		mainProcessElectronServer.registerChannel(EGRESS_PROOF_CHANNEL, new EgressProofChannel(egressProofService)); // ZeroEgress: only the interface methods
 
 		// Build the real audit pipeline asynchronously and hot-swap it in when ready.
 		void (async () => {

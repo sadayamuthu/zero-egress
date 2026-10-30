@@ -7,13 +7,15 @@ import { ProxyChannel } from '../../../../base/parts/ipc/common/ipc.js';
 import { registerSingleton, InstantiationType } from '../../../../platform/instantiation/common/extensions.js';
 import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
 import { IMainProcessService } from '../../../../platform/ipc/common/mainProcessService.js';
-import { ProofCheck } from './egressProof.js';
+import { EgressProofVerification } from './egressProof.js';
 
 export const EGRESS_PROOF_CHANNEL = 'zero-egress-channel-egress-proof';
 
 export interface EgressProofSummary {
-	/** When this machine's ledger was created: the start of everything it can prove. */
+	/** When recording started on this profile: the ledger's creation, or the profile's marker if the ledger was reset since. */
 	since: string;
+	/** When the ledger was reset (deleted and recreated), if it was: the verdict then has gaps. */
+	resetSince?: string;
 	destinations: number;
 	blocked: number;
 	intact: boolean;
@@ -30,7 +32,8 @@ export interface IEgressProofService {
 	getSummary(): Promise<EgressProofSummary>;
 	/** Main shows the folder picker; `undefined` when it is cancelled. */
 	createReport(opts: EgressProofPeriod, includeModelUsage: boolean): Promise<{ jsonPath: string; pdfPath: string } | undefined>;
-	verifyReport(jsonPath: string, pdfPath?: string): Promise<ProofCheck[]>;
+	/** Checks in order, and the fingerprint main computed from the report's public key. */
+	verifyReport(jsonPath: string, pdfPath?: string): Promise<EgressProofVerification>;
 	pickReportFiles(): Promise<{ jsonPath: string; pdfPath?: string } | undefined>;
 }
 

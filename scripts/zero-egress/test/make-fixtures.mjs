@@ -53,6 +53,7 @@ async function main() {
 			period: { from: '2026-10-01T00:00:00.000Z', to: '2026-10-02T00:00:00.000Z' },
 			identity: { machineId: 'fixture-machine', user: 'fixture-user', version: '1.0.0', commit: 'abc1234', os: 'fixture-os', networkSettings: [] },
 			modelUsage: null,
+			recordingSince: '2026-10-01T08:00:00.000Z',
 			key: { publicKey: key.publicKey, fingerprint: key.fingerprint, storage: key.storage },
 		});
 		const pdf = Buffer.from('%PDF-1.4\n% stand-in PDF for the verify script fixtures\n%%EOF\n');

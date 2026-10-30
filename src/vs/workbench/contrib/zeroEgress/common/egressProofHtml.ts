@@ -94,12 +94,17 @@ export function renderProofHtml(body: EgressProofBody): string {
 	const blockedTotal = body.blocked.reduce((s, r) => s + r.count, 0) + body.lookupsBlocked.reduce((s, r) => s + r.count, 0);
 	const blockedLine = blockedTotal === 0 ? 'No other attempts were blocked.' : `${plural(blockedTotal, 'other attempt was', 'other attempts were')} blocked.`;
 	const ok = body.verdict === 'ok';
-	const verdict = ok
-		? `Every connection in this period went to an allowed destination. ${blockedLine}`
-		: `Every recorded connection in this period went to an allowed destination, but the record has gaps (listed below). ${blockedLine}`;
+	const nothing = body.allowed.length === 0 && blockedTotal === 0;
+	const verdict = nothing
+		? (ok ? 'No connections were recorded in this period.' : 'No connections were recorded in this period, and the record has gaps (listed below).')
+		: ok
+			? `Every recorded connection in this period went to an allowed destination. ${blockedLine}`
+			: `Every recorded connection in this period went to an allowed destination, but the record has gaps (listed below). ${blockedLine}`;
+	const since = body.coverage.recordingSince;
+	const started = since !== undefined ? ` Recording started ${dayYear(since)}; nothing before it is covered.` : '';
 	const coverage = body.coverage.gaps.length === 0
-		? `Coverage: the ledger recorded ${plural(body.coverage.hoursRecorded, 'hour', 'hours')} of the app being open in this period. No gaps.`
-		: `Coverage: the ledger recorded ${plural(body.coverage.hoursRecorded, 'hour', 'hours')} of the app being open in this period. Gaps:`;
+		? `Coverage: the ledger recorded ${plural(body.coverage.hoursRecorded, 'hour', 'hours')} of the app being open in this period.${started} No gaps.`
+		: `Coverage: the ledger recorded ${plural(body.coverage.hoursRecorded, 'hour', 'hours')} of the app being open in this period.${started} Gaps:`;
 	const gaps = body.coverage.gaps.length === 0 ? '' : `<ul>${body.coverage.gaps.map(g => `<li>${esc(gapText(g))}</li>`).join('')}</ul>`;
 	const id = body.identity;
 	const intact = !body.coverage.gaps.some(g => g.why === 'chain');

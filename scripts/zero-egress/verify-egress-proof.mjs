@@ -173,6 +173,9 @@ function checkCoverage(body) {
 			return { name, ok: false, detail: 'A gap is malformed' };
 		}
 	}
+	if (coverage.recordingSince !== undefined && !isIso(coverage.recordingSince)) {
+		return { name, ok: false, detail: 'The recording start is malformed' };
+	}
 	if (body.verdict !== (coverage.gaps.length > 0 ? 'gaps' : 'ok')) {
 		return { name, ok: false, detail: 'Verdict does not match the gaps' };
 	}
@@ -217,7 +220,25 @@ function malformed(v) {
 	return bad ? `Missing or malformed field: ${bad[0]}` : undefined;
 }
 
-/** All checks in order: signature, the four body checks, the PDF if given. Returns { checks, body }. */
+function fingerprintOf(publicKeyB64) {
+	if (typeof publicKeyB64 !== 'string') { return undefined; }
+	const raw = Buffer.from(publicKeyB64, 'base64');
+	return raw.length === 32 ? createHash('sha256').update(raw).digest('hex').slice(0, 32).match(/.{4}/g).join('-') : undefined;
+}
+
+function fingerprintCheck(key, computed) {
+	const name = 'Fingerprint matches the public key';
+	if (computed === undefined) { return { name, ok: false, detail: 'The public key is not a valid Ed25519 key' }; }
+	if (key.fingerprint !== computed) {
+		return { name, ok: false, detail: `The report states ${typeof key.fingerprint === 'string' ? key.fingerprint : 'no fingerprint'}; its public key's fingerprint is ${computed}` };
+	}
+	return { name, ok: true };
+}
+
+/**
+ * All checks in order: signature, fingerprint, the four body checks, the PDF if given.
+ * Returns { checks, fingerprint }, the fingerprint computed from the embedded public key.
+ */
 export function verifyReportText(jsonText, pdf) {
 	let parsed;
 	try {
@@ -236,6 +257,8 @@ export function verifyReportText(jsonText, pdf) {
 		: verifySignature(body.key.publicKey, canonicalProof(body), signature)
 			? { name: 'Signature valid', ok: true }
 			: { name: 'Signature valid', ok: false, detail: 'The signature does not match this report and key' });
+	const fingerprint = fingerprintOf(body.key.publicKey);
+	checks.push(fingerprintCheck(body.key, fingerprint));
 
 	try {
 		checks.push(...checkProofBody(body));
@@ -249,12 +272,7 @@ export function verifyReportText(jsonText, pdf) {
 			? { name: 'PDF matches JSON', ok: true }
 			: { name: 'PDF matches JSON', ok: false, detail: 'The PDF is not the one this report was made with' });
 	}
-	return { checks, body };
-}
-
-function fingerprintOf(publicKeyB64) {
-	const raw = Buffer.from(publicKeyB64, 'base64');
-	return createHash('sha256').update(raw).digest('hex').slice(0, 16).match(/.{4}/g).join('-');
+	return { checks, fingerprint };
 }
 
 function readBounded(file) {
@@ -270,21 +288,22 @@ function main(argv) {
 		return 2;
 	}
 	let checks;
-	let body;
+	let fingerprint;
 	try {
 		const json = readBounded(argv[0]).toString('utf8');
 		const pdf = argv[1] !== undefined ? readBounded(argv[1]) : undefined;
-		({ checks, body } = verifyReportText(json, pdf));
+		({ checks, fingerprint } = verifyReportText(json, pdf));
 	} catch (e) {
 		checks = [{ name: 'Report file is readable', ok: false, detail: e instanceof Error ? e.message : String(e) }];
 	}
 	for (const c of checks) {
 		console.log(`${c.ok ? '✓' : '✗'} ${c.name}${c.ok || !c.detail ? '' : ` - ${c.detail}`}`);
 	}
-	if (body) {
-		let fp = '';
-		try { fp = fingerprintOf(body.key.publicKey); } catch { /* shown blank */ }
-		console.log(`\nKey fingerprint: ${fp}`);
+	if (fingerprint !== undefined) {
+		// Only a valid signature by a key whose fingerprint the report states correctly names the signer.
+		const passed = name => checks.some(c => c.name === name && c.ok);
+		const verified = passed('Signature valid') && passed('Fingerprint matches the public key');
+		console.log(`\nKey fingerprint: ${fingerprint}${verified ? '' : ' (unverified)'}`);
 	}
 	console.log(SIGNATURE_LIMIT);
 	return checks.every(c => c.ok) ? 0 : 1;

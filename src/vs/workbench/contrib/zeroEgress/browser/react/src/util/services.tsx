@@ -468,9 +468,6 @@ export const useLocalStatus = () => {
 }
 
 // a configuration value, kept current
-/** URI.file, for components outside util/, whose own paths to base/ would not resolve from the bundle's folder. */
-export const fileUri = (fsPath: string) => URI.file(fsPath)
-
 export const useConfigurationValue = <T,>(key: string): T | undefined => {
 	const accessor = useAccessor()
 	const configurationService = accessor.get('IConfigurationService')

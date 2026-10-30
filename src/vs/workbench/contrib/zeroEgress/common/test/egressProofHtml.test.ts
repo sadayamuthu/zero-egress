@@ -57,6 +57,34 @@ suite('EgressProofHtml', () => {
 		assert.ok(html.includes('9 other attempts were blocked'));
 	});
 
+	test('verdict wording claims only what was recorded', () => {
+		const html = renderProofHtml(body());
+		assert.ok(html.includes('Every recorded connection in this period went to an allowed destination.'));
+		assert.ok(!html.includes('Every connection'));
+		assert.ok(!html.includes('Recording started'));
+	});
+
+	test('a period with no records says so', () => {
+		const empty = buildEgressProof([], {
+			createdAt: H(12), period: { from: H(0), to: H(12) },
+			identity: { machineId: 'm', user: 'u', version: '1', commit: 'c', os: 'o', networkSettings: [] },
+			modelUsage: null, key: { publicKey: 'cHVibGljLWtleQ==', fingerprint: 'abcd', storage: 'file' },
+		});
+		const html = renderProofHtml(empty);
+		assert.ok(html.includes('No connections were recorded in this period.'));
+		assert.ok(!html.includes('Every recorded connection'));
+	});
+
+	test('a ledger younger than the period states when recording started', () => {
+		const late = buildEgressProof(chain([{ type: 'session_start', time: H(5), version: '1', commit: 'c' }, { type: 'session_end', time: H(6) }]), {
+			createdAt: H(12), period: { from: H(0), to: H(12) },
+			identity: { machineId: 'm', user: 'u', version: '1', commit: 'c', os: 'o', networkSettings: [] },
+			modelUsage: null, recordingSince: H(5), key: { publicKey: 'cHVibGljLWtleQ==', fingerprint: 'abcd', storage: 'file' },
+		});
+		assert.strictEqual(late.coverage.recordingSince, H(5));
+		assert.ok(renderProofHtml(late).includes('Recording started 30 Oct 2026; nothing before it is covered.'));
+	});
+
 	test('escapes values', () => {
 		const html = renderProofHtml(body('<script>alert(1)</script>:1', '"><img src=x>:2'));
 		assert.ok(!html.includes('<script>'));
