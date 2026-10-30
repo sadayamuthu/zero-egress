@@ -11,17 +11,19 @@ import { EgressTargetDto, MainThreadEgressGuardShape } from '../../common/extHos
 import { ExtHostEgressGuard } from '../../node/extHostEgressGuard.js';
 
 suite('ExtHostEgressGuard', () => {
-	ensureNoDisposablesAreLeakedInTestSuite();
+
+	const store = ensureNoDisposablesAreLeakedInTestSuite();
 
 	function mainThread(getTargets: () => Promise<EgressTargetDto[]>) {
 		const reported: string[] = [];
-		const shape: MainThreadEgressGuardShape = { $getTargets: getTargets, $reportBlocked: url => { reported.push(url); }, dispose() { } };
-		return { shape, reported };
+		const allowed: { url: string; count: number }[][] = [];
+		const shape: MainThreadEgressGuardShape = { $getTargets: getTargets, $reportBlocked: url => { reported.push(url); }, $reportAllowed: counts => { allowed.push(counts); }, dispose() { } };
+		return { shape, reported, allowed };
 	}
 
 	test('before init only loopback passes; init loads the allow-list', async () => {
 		const { shape, reported } = mainThread(async () => [{ host: 'gpubox', port: 8000 }]);
-		const guard = new ExtHostEgressGuard(shape, new NullLogService());
+		const guard = store.add(new ExtHostEgressGuard(shape, new NullLogService()));
 		assert.strictEqual(guard.check('http://127.0.0.1:11434/'), true);
 		assert.strictEqual(guard.check('http://gpubox:8000/'), false);
 		await guard.init();
@@ -33,7 +35,7 @@ suite('ExtHostEgressGuard', () => {
 	test('a push that races the initial reply wins', async () => {
 		const reply = new DeferredPromise<EgressTargetDto[]>();
 		const { shape } = mainThread(() => reply.p);
-		const guard = new ExtHostEgressGuard(shape, new NullLogService());
+		const guard = store.add(new ExtHostEgressGuard(shape, new NullLogService()));
 		const init = guard.init();
 		await guard.$setTargets([{ host: 'new.corp.internal', port: 443 }]);
 		reply.complete([{ host: 'old.corp.internal', port: 443 }]);
@@ -44,7 +46,7 @@ suite('ExtHostEgressGuard', () => {
 
 	test('a failed init leaves loopback only', async () => {
 		const { shape } = mainThread(async () => { throw new Error('no main thread'); });
-		const guard = new ExtHostEgressGuard(shape, new NullLogService());
+		const guard = store.add(new ExtHostEgressGuard(shape, new NullLogService()));
 		await guard.init();
 		assert.strictEqual(guard.check('http://localhost:1234/'), true);
 		assert.strictEqual(guard.check('http://10.0.0.5:8000/'), false);
@@ -52,10 +54,26 @@ suite('ExtHostEgressGuard', () => {
 
 	test('$setTargets replaces the list', async () => {
 		const { shape } = mainThread(async () => [{ host: '10.0.0.5', port: 8000 }]);
-		const guard = new ExtHostEgressGuard(shape, new NullLogService());
+		const guard = store.add(new ExtHostEgressGuard(shape, new NullLogService()));
 		await guard.init();
 		await guard.$setTargets([{ host: '10.0.0.7', port: 8000 }]);
 		assert.strictEqual(guard.check('http://10.0.0.5:8000/'), false);
 		assert.strictEqual(guard.check('http://10.0.0.7:8000/'), true);
+	});
+
+	test('allowed socket checks are counted per URL and reported in batches', async () => {
+		const { shape, allowed, reported } = mainThread(async () => [{ host: 'gpubox', port: 8000, reason: 'model server (set in Settings)' }]);
+		const guard = store.add(new ExtHostEgressGuard(shape, new NullLogService()));
+		await guard.init();
+		assert.strictEqual(guard.check('http://gpubox:8000/', 'socket'), true);
+		assert.strictEqual(guard.check('http://gpubox:8000/', 'socket'), true);
+		assert.strictEqual(guard.check('http://gpubox:8000/v1', 'wrapper'), true);
+		assert.strictEqual(guard.check('dns://gpubox/', 'lookup'), true);
+		assert.strictEqual(guard.check('http://example.com:80/', 'socket'), false);
+		assert.deepStrictEqual(allowed, [], 'nothing is sent before the interval');
+		guard.flushAllowed();
+		guard.flushAllowed();
+		assert.deepStrictEqual(allowed, [[{ url: 'http://gpubox:8000/', count: 2 }]]);
+		assert.deepStrictEqual(reported, ['http://example.com:80/']);
 	});
 });

@@ -13,6 +13,7 @@ import * as dns from 'dns';
 import { Event } from '../../../../../base/common/event.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { BlockedAttempt } from '../../common/egressGuardService.js';
+import { LedgerAggregator, LedgerBody } from '../../common/egressLedger.js';
 import { EgressGuard, EgressGuardChannel } from '../egressGuard.js';
 
 const blockedMessage = (hostPort: string) => `ZeroEgress blocked connection to ${hostPort} (not a configured server)`;
@@ -200,6 +201,93 @@ suite('EgressGuard', () => {
 			hooks.dispose();
 			await new Promise(r => server.close(r));
 		}
+	});
+
+	suite('ledger counting', () => {
+		const strip = (rows: LedgerBody[]) => rows.map(r => {
+			const { hour, minute, ...rest } = r as LedgerBody & { hour?: string; minute?: string };
+			return rest;
+		});
+
+		test('counts allowed sockets and requests, not wrappers or lookups', () => {
+			const ledger = new LedgerAggregator();
+			const guard = store.add(new EgressGuard(ledger));
+			guard.setTargets('settings', ['http://10.0.0.5:8000']);
+			assert.strictEqual(guard.check('http://10.0.0.5:8000/', 'main', 'socket'), true);
+			assert.strictEqual(guard.check('http://10.0.0.5:8000/v1/chat?x=1', 'renderer'), true);
+			assert.strictEqual(guard.check('http://10.0.0.5:8000/v1', 'main', 'wrapper'), true);
+			assert.strictEqual(guard.check('dns://10.0.0.5/', 'main', 'lookup'), true);
+			assert.strictEqual(guard.check('vscode-file://vscode-app/x.js', 'renderer'), true);
+			assert.deepStrictEqual(strip(ledger.drain()), [
+				{ type: 'allowed', dest: '10.0.0.5:8000', kind: 'local network', reason: 'model server (set in Settings)', origin: 'main', count: 1 },
+				{ type: 'allowed', dest: '10.0.0.5:8000', kind: 'local network', reason: 'model server (set in Settings)', origin: 'renderer', count: 1 },
+			]);
+		});
+
+		test('a matched target without a reason is still allowed, under a fallback label', () => {
+			const ledger = new LedgerAggregator();
+			const guard = store.add(new EgressGuard(ledger));
+			guard.setTargets('settings', ['http://10.0.0.5:8000']);
+			// a reason-less target (as an extension host's older DTO could carry) must not change the decision
+			(guard as unknown as { _targets: { host: string; port: number }[] })._targets = [{ host: '10.0.0.5', port: 8000 }];
+			assert.strictEqual(guard.check('http://10.0.0.5:8000/', 'main', 'socket'), true);
+			assert.deepStrictEqual(strip(ledger.drain()).map(r => (r as { reason?: string }).reason), ['listed target']);
+		});
+
+		test('reportAllowed uses current reason and falls back', async () => {
+			const ledger = new LedgerAggregator();
+			const guard = store.add(new EgressGuard(ledger));
+			guard.setTargets('mcp', ['http://mcp.corp.internal:9000/sse']);
+			guard.reportAllowed([{ url: 'http://mcp.corp.internal:9000/', count: 3 }, { url: 'http://127.0.0.1:1/', count: 2 }, { url: 'http://gone.corp.internal:80/', count: 1 }], 'extensionHost');
+			const channel = new EgressGuardChannel(guard, { canSetSettings: false, reportOrigin: 'sharedProcess' });
+			await channel.call('main', 'reportAllowed', [[{ url: 'http://127.0.0.1:2/', count: 4 }, { url: 'http://127.0.0.1:3/', count: -1 }, { url: 7, count: 1 }, 'junk']]);
+			assert.deepStrictEqual(strip(ledger.drain()), [
+				{ type: 'allowed', dest: '127.0.0.1:1', kind: 'this machine', reason: 'this machine', origin: 'extensionHost', count: 2 },
+				{ type: 'allowed', dest: '127.0.0.1:2', kind: 'this machine', reason: 'this machine', origin: 'sharedProcess', count: 4 },
+				{ type: 'allowed', dest: 'gone.corp.internal:80', kind: 'local network', reason: 'allowed by that process', origin: 'extensionHost', count: 1 },
+				{ type: 'allowed', dest: 'mcp.corp.internal:9000', kind: 'local network', reason: 'MCP server', origin: 'extensionHost', count: 3 },
+			]);
+		});
+
+		test('blocks are counted per kind', async () => {
+			const ledger = new LedgerAggregator();
+			const guard = store.add(new EgressGuard(ledger));
+			assert.strictEqual(guard.check('https://example.com/a', 'main', 'wrapper'), false);
+			assert.strictEqual(guard.check('http://example.com:443/', 'main', 'socket'), false);
+			assert.strictEqual(guard.check('dns://exfil.example.com/', 'main', 'lookup'), false);
+			assert.strictEqual(guard.check('https://example.com/b', 'renderer'), false);
+			await new EgressGuardChannel(guard, { canSetSettings: true, reportOrigin: 'extensionHost' }).call('window:1', 'reportBlocked', ['https://example.com/']);
+			const key = (r: object) => Object.entries(r).sort().join('|');
+			const byKey = (x: object, y: object) => key(x).localeCompare(key(y));
+			assert.deepStrictEqual(strip(ledger.drain()).sort(byKey), [
+				{ type: 'blocked', dest: 'example.com:443', origin: 'extensionHost', count: 1 },
+				{ type: 'blocked', dest: 'example.com:443', origin: 'main', count: 2 },
+				{ type: 'blocked', dest: 'example.com:443', origin: 'renderer', count: 1 },
+				{ type: 'blocked_lookup', host: 'exfil.example.com', origin: 'main', count: 1 },
+			].sort(byKey));
+			assert.strictEqual(guard.recentBlocked.length, 5, 'each block is recorded once');
+		});
+
+		test('main node hooks count the socket, not the fetch wrapper', async () => {
+			const ledger = new LedgerAggregator();
+			const guard = store.add(new EgressGuard(ledger));
+			const hooks = guard.installNodeHooks();
+			const server = http.createServer((_q, r) => r.end('ok'));
+			try {
+				await new Promise<void>(r => server.listen(0, '127.0.0.1', r));
+				const port = (server.address() as net.AddressInfo).port;
+				assert.strictEqual(await (await fetch(`http://127.0.0.1:${port}/path?q=1`)).text(), 'ok');
+				await assert.rejects(fetch('https://exfil.example.com/'));
+				assert.deepStrictEqual(strip(ledger.drain()).map(r => [r.type, (r as { dest?: string }).dest, (r as { count?: number }).count]), [
+					['allowed', `127.0.0.1:${port}`, 1],
+					['blocked', 'exfil.example.com:443', 1],
+				]);
+			} finally {
+				hooks.dispose();
+				server.closeAllConnections();
+				await new Promise(r => server.close(r));
+			}
+		});
 	});
 
 	suite('EgressGuardChannel', () => {

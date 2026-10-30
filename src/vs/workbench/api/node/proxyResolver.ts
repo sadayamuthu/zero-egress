@@ -109,7 +109,7 @@ export async function connectProxyResolver(
 	// ZeroEgress: enforce on top of the proxy patches, before any extension can load http/https/net/tls/dgram/dns.
 	// The module objects are the ones handed to extensions (see configureModuleLoading), so they get the guard too;
 	// net.Socket.prototype.connect is the choke point under proxy-agent's own agents and sockets.
-	const egressGuard = new ExtHostEgressGuard(extHostRpc.getProxy(MainContext.MainThreadEgressGuard), extHostLogService);
+	const egressGuard = disposables.add(new ExtHostEgressGuard(extHostRpc.getProxy(MainContext.MainThreadEgressGuard), extHostLogService)); // ZeroEgress
 	extHostRpc.set(ExtHostEgressGuardContext, egressGuard);
 	await egressGuard.init();
 	disposables.add(installEgressNodeHooks(egressGuard.check, { global: globalThis, http, https, net, dgram, dns, electronNet: loadElectronNet(extHostLogService) }));

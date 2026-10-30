@@ -6,14 +6,18 @@
 // Runtime egress guard (electron-main). One instance, constructed in CodeApplication before anything
 // can make a request. It holds the allow-list per source, answers check() for the session webRequest
 // filter (renderer, webviews, Electron net) and for the main-process Node hooks, and records blocks.
+// With a ledger, it also counts: allowed 'request' (webRequest) and 'socket' checks, allowed counts the
+// extension host and shared process report, and every block, wherever it was decided.
 
 import { createRequire } from 'node:module';
+import { onUnexpectedError } from '../../../../base/common/errors.js';
 import { Emitter, Event } from '../../../../base/common/event.js';
 import { Disposable, IDisposable, toDisposable } from '../../../../base/common/lifecycle.js';
 import { IServerChannel } from '../../../../base/parts/ipc/common/ipc.js';
 import { BlockedAttempt, EgressSource } from '../common/egressGuardService.js';
-import { collectEgressTargets, EgressTarget, isAllowed } from '../common/egressPolicy.js';
-import { installEgressNodeHooks } from '../node/egressNodeHooks.js';
+import { EgressOrigin, LedgerAggregator } from '../common/egressLedger.js';
+import { allowedBy, collectEgressTargets, EgressTarget, isAllowed } from '../common/egressPolicy.js';
+import { EgressCheckKind, installEgressNodeHooks } from '../node/egressNodeHooks.js';
 
 const require = createRequire(import.meta.url);
 
@@ -40,6 +44,10 @@ export class EgressGuard extends Disposable {
 
 	private readonly _onDidChangeTargets = this._register(new Emitter<EgressTarget[]>());
 	readonly onDidChangeTargets: Event<EgressTarget[]> = this._onDidChangeTargets.event;
+
+	constructor(private readonly ledger?: LedgerAggregator) {
+		super();
+	}
 
 	get targets(): EgressTarget[] { return this._targets; }
 
@@ -112,27 +120,58 @@ export class EgressGuard extends Disposable {
 		this._onDidChangeTargets.fire(this._targets);
 	}
 
-	/** True when `url` may be reached. A false result is recorded and fired on onDidBlock. */
-	check(url: string, origin: BlockedAttempt['origin'] = 'main'): boolean {
+	/**
+	 * True when `url` may be reached. A false result is recorded (and counted) through reportBlocked and fired
+	 * on onDidBlock. An allowed 'request' (webRequest) or 'socket' check is counted; 'wrapper' and 'lookup'
+	 * checks are not, since the connection behind them is checked (and counted) as a socket.
+	 */
+	check(url: string, origin: EgressOrigin = 'main', kind: EgressCheckKind | 'request' = 'request'): boolean {
 		if (isAllowed(url, this._targets)) {
+			if (this.ledger && (kind === 'socket' || kind === 'request')) {
+				this.count(ledger => ledger.addAllowed(url, allowedBy(url, this._targets) ?? 'listed target', origin, Date.now()));
+			}
 			return true;
 		}
 		this.reportBlocked(url, origin);
 		return false;
 	}
 
-	/** Records a block decided elsewhere (extension host, shared process). */
-	reportBlocked(url: string, origin: BlockedAttempt['origin']): void {
+	/** Records a block, decided here (check) or elsewhere (extension host, shared process), and counts it. */
+	reportBlocked(url: string, origin: EgressOrigin): void {
 		const attempt: BlockedAttempt = { url, origin, time: Date.now() };
 		this._recentBlocked.push(attempt);
 		if (this._recentBlocked.length > MAX_RECENT_BLOCKED) {
 			this._recentBlocked.shift();
 		}
+		this.count(ledger => ledger.addBlocked(url, origin, attempt.time));
 		this._onDidBlock.fire(attempt);
 	}
 
+	/**
+	 * Counts connections another process allowed. The reason is today's, from the current targets; a URL no
+	 * target matches any more (the list changed since) keeps a generic reason.
+	 */
+	reportAllowed(counts: readonly { url: string; count: number }[], origin: EgressOrigin): void {
+		const now = Date.now();
+		this.count(ledger => {
+			for (const { url, count } of counts) {
+				ledger.addAllowed(url, allowedBy(url, this._targets) ?? 'allowed by that process', origin, now, count);
+			}
+		});
+	}
+
+	/** Counting must never change a decision or throw into a hook: a failure is reported and dropped. */
+	private count(add: (ledger: LedgerAggregator) => void): void {
+		if (!this.ledger) { return; }
+		try {
+			add(this.ledger);
+		} catch (e) {
+			onUnexpectedError(e);
+		}
+	}
+
 	installNodeHooks(): IDisposable {
-		return installEgressNodeHooks(url => this.check(url, 'main'), {
+		return installEgressNodeHooks((url, kind) => this.check(url, 'main', kind), {
 			global: globalThis,
 			http: require('http'),
 			https: require('https'),
@@ -147,13 +186,13 @@ export class EgressGuard extends Disposable {
  * The 'zero-egress-channel-egress' channel (renderer side: IEgressGuardService). Hand-written rather than
  * ProxyChannel.fromService so 'settings' can be keyed by the calling window (`ctx`).
  * - `canSetSettings`: windows may set 'settings' (their own entry only); nothing may set 'mcp' or 'audit'.
- * - `reportOrigin`: the origin recorded for reportBlocked from this channel's clients.
+ * - `reportOrigin`: the origin recorded for reportBlocked and reportAllowed from this channel's clients.
  */
 export class EgressGuardChannel implements IServerChannel<string> {
 
 	constructor(
 		private readonly guard: EgressGuard,
-		private readonly options: { readonly canSetSettings: boolean; readonly reportOrigin: BlockedAttempt['origin'] },
+		private readonly options: { readonly canSetSettings: boolean; readonly reportOrigin: EgressOrigin },
 	) { }
 
 	listen(_ctx: string, event: string): Event<any> {
@@ -177,6 +216,13 @@ export class EgressGuardChannel implements IServerChannel<string> {
 			}
 			case 'getTargets': return this.guard.targets;
 			case 'reportBlocked': this.guard.reportBlocked(String(args[0]), this.options.reportOrigin); return;
+			case 'reportAllowed': {
+				// from another process: keep only well-formed entries
+				const counts = (Array.isArray(args[0]) ? args[0] : []).filter((c): c is { url: string; count: number } =>
+					typeof c === 'object' && c !== null && typeof c.url === 'string' && Number.isSafeInteger(c.count) && c.count > 0);
+				this.guard.reportAllowed(counts.map(c => ({ url: c.url, count: c.count })), this.options.reportOrigin);
+				return;
+			}
 			case 'getRecentBlocked': return [...this.guard.recentBlocked];
 		}
 		throw new Error(`Call not found: ${command}`);

@@ -8,6 +8,7 @@ import { ProxyChannel } from '../../../../base/parts/ipc/common/ipc.js';
 import { registerSingleton, InstantiationType } from '../../../../platform/instantiation/common/extensions.js';
 import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
 import { IMainProcessService } from '../../../../platform/ipc/common/mainProcessService.js';
+import { EgressOrigin } from './egressLedger.js';
 import { EgressTarget } from './egressPolicy.js';
 
 /** Who supplied an allow-list entry. Each source's list is replaced wholesale on update. */
@@ -15,7 +16,7 @@ export type EgressSource = 'settings' | 'mcp' | 'audit';
 
 export interface BlockedAttempt {
 	readonly url: string;
-	readonly origin: 'renderer' | 'main' | 'extensionHost' | 'sharedProcess';
+	readonly origin: EgressOrigin;
 	readonly time: number;
 }
 
@@ -32,6 +33,8 @@ export interface IEgressGuardService {
 	getTargets(): Promise<EgressTarget[]>;
 	/** Records a block that happened in this client's extension host (or, from the shared process, there). */
 	reportBlocked(url: string): Promise<void>;
+	/** Adds allowed connection counts from this client's extension host (or the shared process) to the ledger. */
+	reportAllowed(counts: { url: string; count: number }[]): Promise<void>;
 	/** Blocks that happened before this window subscribed (bounded). */
 	getRecentBlocked(): Promise<BlockedAttempt[]>;
 	readonly onDidBlock: Event<BlockedAttempt>;
@@ -56,6 +59,7 @@ export class EgressGuardService implements IEgressGuardService {
 	setTargets(source: 'settings', urls: string[]) { return this.proxy.setTargets(source, urls); }
 	getTargets() { return this.proxy.getTargets(); }
 	reportBlocked(url: string) { return this.proxy.reportBlocked(url); }
+	reportAllowed(counts: { url: string; count: number }[]) { return this.proxy.reportAllowed(counts); }
 	getRecentBlocked() { return this.proxy.getRecentBlocked(); }
 }
 

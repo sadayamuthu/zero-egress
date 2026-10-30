@@ -141,6 +141,7 @@ import { WorktreeMainService } from '../../workbench/contrib/zeroEgress/electron
 import { IZeroEgressWorktreeService, WORKTREE_CHANNEL } from '../../workbench/contrib/zeroEgress/common/worktreeTypes.js'; // ZeroEgress
 import { MCPChannel } from '../../workbench/contrib/zeroEgress/electron-main/mcpChannel.js';
 import { EgressGuard, EgressGuardChannel } from '../../workbench/contrib/zeroEgress/electron-main/egressGuard.js';
+import { LedgerAggregator } from '../../workbench/contrib/zeroEgress/common/egressLedger.js'; // ZeroEgress
 import { EGRESS_GUARD_CHANNEL } from '../../workbench/contrib/zeroEgress/common/egressGuardService.js';
 import { describeDestination, endpointWarning, targetFromUrl } from '../../workbench/contrib/zeroEgress/common/egressPolicy.js';
 /**
@@ -177,7 +178,7 @@ export class CodeApplication extends Disposable {
 	) {
 		super();
 
-		this.egressGuard = this._register(new EgressGuard());
+		this.egressGuard = this._register(new EgressGuard(new LedgerAggregator())); // ZeroEgress: the ledger service (Task 5) will own the aggregator
 		this._register(this.egressGuard.installNodeHooks());
 		this._register(this.egressGuard.onDidBlock(e => this.logService.warn(`[ZeroEgress] blocked connection to ${describeDestination(e.url)} from ${e.origin}`)));
 

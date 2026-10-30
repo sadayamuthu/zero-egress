@@ -15,13 +15,14 @@ import * as proxyAgent from '@vscode/proxy-agent';
 import { IDisposable } from '../../../../../base/common/lifecycle.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { isAllowed } from '../../common/egressPolicy.js';
-import { installEgressNodeHooks } from '../egressNodeHooks.js';
+import { AllowedCountBatcher, EgressCheckKind, installEgressNodeHooks, installLoopbackOnlyEgressHooks } from '../egressNodeHooks.js';
 
 const require = createRequire(import.meta.url);
 const http: typeof httpType = require('http');
 const https: typeof httpType = require('https');
 const net: typeof netType = require('net');
 const tls: typeof tlsType = require('tls');
+const dns: typeof import('dns') = require('dns');
 
 const blockedMessage = (hostPort: string) => `ZeroEgress blocked connection to ${hostPort} (not a configured server)`;
 
@@ -679,6 +680,64 @@ suite('egressNodeHooks', () => {
 		await assert.rejects(c.response, (e: Error) => e.name === 'AbortError');
 		c.req.serverRedirects('http://localhost:2/');
 		assert.deepStrictEqual(c.req.followed, [], 'aborted request cancelled');
+	});
+
+	test('kinds reach check', async () => {
+		const calls: [string, EgressCheckKind][] = [];
+		hooks = installEgressNodeHooks((url, kind) => { calls.push([url, kind]); return false; }, { global: globalThis, http, https, net, dns });
+		assert.strictEqual(await outcome(net.connect({ host: '127.0.0.1', port })), blockedMessage(`127.0.0.1:${port}`));
+		assert.deepStrictEqual(calls, [[`http://127.0.0.1:${port}/`, 'socket']]);
+		calls.length = 0;
+		await new Promise<void>(r => dns.lookup('exfil.example.com', () => r()));
+		assert.deepStrictEqual(calls, [['dns://exfil.example.com/', 'lookup']]);
+		calls.length = 0;
+		await assert.rejects(fetch('https://exfil.example.com/x'));
+		assert.deepStrictEqual(calls, [['https://exfil.example.com/x', 'wrapper']], 'a blocked fetch is one wrapper check and nothing else');
+		assert.strictEqual(connections, 0);
+	});
+
+	test('loopback-only hooks report allowed socket checks only', async () => {
+		const allowed: string[] = [];
+		const blocked: string[] = [];
+		hooks = installLoopbackOnlyEgressHooks(url => blocked.push(url), undefined, url => allowed.push(url));
+		assert.strictEqual(await (await fetch(`http://127.0.0.1:${port}/a?q=1`)).text(), 'reached');
+		assert.deepStrictEqual(allowed, [`http://127.0.0.1:${port}/`], 'the fetch wrapper check is not reported; its socket is');
+		await assert.rejects(fetch('https://exfil.example.com/'));
+		assert.deepStrictEqual(blocked, ['https://exfil.example.com/']);
+		assert.strictEqual(allowed.length, 1);
+	});
+
+	suite('AllowedCountBatcher', () => {
+		test('counts per URL and sends nothing when empty', () => {
+			const sent: { url: string; count: number }[][] = [];
+			const batcher = new AllowedCountBatcher(counts => sent.push(counts));
+			batcher.flush();
+			assert.deepStrictEqual(sent, []);
+			batcher.add('http://10.0.0.5:8000/');
+			batcher.add('http://10.0.0.5:8000/');
+			batcher.add('http://127.0.0.1:1/');
+			batcher.flush();
+			batcher.flush();
+			assert.deepStrictEqual(sent, [[{ url: 'http://10.0.0.5:8000/', count: 2 }, { url: 'http://127.0.0.1:1/', count: 1 }]]);
+			batcher.add('http://127.0.0.1:1/');
+			batcher.dispose();
+			assert.deepStrictEqual(sent[1], [{ url: 'http://127.0.0.1:1/', count: 1 }], 'dispose flushes what is left');
+		});
+
+		test('flushes on its interval; a failing send does not throw', async () => {
+			const sent: { url: string; count: number }[][] = [];
+			let fail = true;
+			const batcher = new AllowedCountBatcher(counts => { if (fail) { fail = false; throw new Error('gone'); } sent.push(counts); }, 5);
+			try {
+				batcher.add('http://127.0.0.1:1/');
+				await new Promise(r => setTimeout(r, 30));
+				batcher.add('http://127.0.0.1:2/');
+				await new Promise(r => setTimeout(r, 30));
+				assert.deepStrictEqual(sent, [[{ url: 'http://127.0.0.1:2/', count: 1 }]]);
+			} finally {
+				batcher.dispose();
+			}
+		});
 	});
 
 	test('dispose restores every original', () => {
