@@ -5,9 +5,9 @@
 
 import type { Database } from '@vscode/sqlite3';
 import { GENESIS_HASH, chainHash } from '../../common/auditTypes.js';
-import { LedgerBody } from '../../common/egressLedger.js';
+import { LedgerBody, LedgerRecord } from '../../common/egressLedger.js';
 
-export interface LedgerRecord { seq: number; prevHash: string; body: LedgerBody }
+export type { LedgerRecord };
 
 function timeOf(body: LedgerBody): string {
 	switch (body.type) {

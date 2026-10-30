@@ -20,6 +20,8 @@ export type LedgerBody =
 	| { type: 'blocked_lookup'; minute: string; host: string; origin: EgressOrigin; count: number }
 	| { type: 'audit_state'; time: string; enabled: boolean };
 
+export interface LedgerRecord { seq: number; prevHash: string; body: LedgerBody }
+
 export function kindOfHost(host: string): DestinationKind {
 	return isLoopbackHost(host) ? 'this machine' : isPrivateHost(host) ? 'local network' : 'internet';
 }
@@ -84,6 +86,7 @@ export class LedgerAggregator {
 		this.buckets.clear();
 		const time = (r: LedgerBody) => r.type === 'allowed' ? r.hour : r.type === 'blocked' || r.type === 'blocked_lookup' ? r.minute : '';
 		const dest = (r: LedgerBody) => r.type === 'blocked_lookup' ? r.host : r.type === 'allowed' || r.type === 'blocked' ? r.dest : '';
-		return rows.sort((a, b) => time(a).localeCompare(time(b)) || dest(a).localeCompare(dest(b)));
+		const cmp = (x: string, y: string) => x < y ? -1 : x > y ? 1 : 0; // ordinal, so output is identical on every machine
+		return rows.sort((a, b) => cmp(time(a), time(b)) || cmp(dest(a), dest(b)));
 	}
 }
