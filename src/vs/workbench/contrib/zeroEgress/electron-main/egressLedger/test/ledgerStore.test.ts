@@ -112,6 +112,43 @@ suite('LedgerStore', () => {
 		assert.deepStrictEqual(await store.verifyChain(), { ok: false, brokenAtSeq: 2 });
 	});
 
+	test('deleting the oldest rows by hand breaks the chain', async () => {
+		await store.append([allowed('2026-07-12T01:00:00.000Z'), allowed('2026-07-12T02:00:00.000Z'), allowed('2026-07-12T03:00:00.000Z')]);
+		await rawUpdate(`DELETE FROM ledger_records WHERE seq <= 2`, []);
+		assert.deepStrictEqual(await store.verifyChain(), { ok: false, brokenAtSeq: 1 });
+	});
+
+	test('deleting the oldest rows after a prune breaks the chain', async () => {
+		await store.append([allowed('2026-07-10T01:00:00.000Z'), allowed('2026-07-11T01:00:00.000Z'), allowed('2026-07-12T01:00:00.000Z'), allowed('2026-07-13T01:00:00.000Z')]);
+		assert.strictEqual(await store.pruneOlderThan('2026-07-11T00:00:00.000Z'), 1);
+		assert.deepStrictEqual(await store.verifyChain(), { ok: true });
+		await rawUpdate(`DELETE FROM ledger_records WHERE seq = 2`, []);
+		assert.deepStrictEqual(await store.verifyChain(), { ok: false, brokenAtSeq: 2 });
+	});
+
+	test('deleting every row by hand breaks the chain', async () => {
+		assert.deepStrictEqual(await store.verifyChain(), { ok: true }, 'a new, empty ledger is intact');
+		await store.append([allowed('2026-07-12T01:00:00.000Z'), allowed('2026-07-12T02:00:00.000Z')]);
+		await rawUpdate(`DELETE FROM ledger_records`, []);
+		assert.deepStrictEqual(await store.verifyChain(), { ok: false, brokenAtSeq: 1 });
+	});
+
+	test('pruning every row is not a break, until a later row is deleted', async () => {
+		await store.append([allowed('2026-07-12T01:00:00.000Z'), allowed('2026-07-12T02:00:00.000Z')]);
+		assert.strictEqual(await store.pruneOlderThan('2030-01-01T00:00:00.000Z'), 2);
+		assert.deepStrictEqual(await store.verifyChain(), { ok: true });
+		await store.append([allowed('2030-07-13T01:00:00.000Z')]);
+		assert.deepStrictEqual(await store.verifyChain(), { ok: true });
+		await rawUpdate(`DELETE FROM ledger_records`, []);
+		assert.deepStrictEqual(await store.verifyChain(), { ok: false, brokenAtSeq: 3 });
+	});
+
+	test('recordsAfter returns later records in seq order', async () => {
+		await store.append([allowed('2026-07-12T03:00:00.000Z'), allowed('2026-07-12T01:00:00.000Z'), allowed('2026-07-12T02:00:00.000Z')]);
+		assert.deepStrictEqual((await store.recordsAfter(1)).map(r => r.seq), [2, 3]);
+		assert.deepStrictEqual(await store.recordsAfter(3), []);
+	});
+
 	test('recordsBetween filters by bucket time', async () => {
 		await store.append([
 			allowed('2026-07-12T01:00:00.000Z'),

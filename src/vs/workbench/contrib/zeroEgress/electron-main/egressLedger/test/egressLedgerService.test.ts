@@ -11,6 +11,7 @@ import { EgressLedgerService } from '../egressLedgerService.js';
 import { LedgerBody } from '../../../common/egressLedger.js';
 
 const DAY = 24 * 3600_000;
+const HOUR = 3600_000;
 const FAR = '2000-01-01T00:00:00.000Z';
 const FAR_END = '2999-01-01T00:00:00.000Z';
 
@@ -69,16 +70,61 @@ suite('EgressLedgerService', () => {
 		assert.ok(!types.includes('session_end'), 'old session_end was pruned');
 	});
 
-	test('flush writes heartbeat and counts', async () => {
+	test('flush writes the hour\'s heartbeat once, and counts only when their hour closes', async () => {
+		clock = Math.floor(Date.now() / HOUR) * HOUR + 10 * 60_000; // 10 minutes into an hour
+		const hour = new Date(Math.floor(clock / HOUR) * HOUR).toISOString();
 		service = await create();
 		service.aggregator.addAllowed('https://api.example.com/v1?x=1', 'model server (set in Settings)', 'main', clock, 3);
 		await service.flush();
+		let b = await bodies();
+		assert.ok(!b.some(x => x.type === 'allowed'), 'the open hour\'s counts are held');
+		assert.deepStrictEqual(b.filter(x => x.type === 'heartbeat'), [{ type: 'heartbeat', hour }]);
+		assert.deepStrictEqual(service.heldCounts().map(x => (x as { count: number }).count), [3]);
+
+		clock += 20 * 60_000; // same hour: no new heartbeat; counts merge into the held row
+		service.aggregator.addAllowed('https://api.example.com/v2', 'model server (set in Settings)', 'main', clock, 2);
+		await service.flush();
+		b = await bodies();
+		assert.strictEqual(b.filter(x => x.type === 'heartbeat').length, 1);
+		assert.ok(!b.some(x => x.type === 'allowed'));
+
+		clock += HOUR; // the hour closed: one row for it, and the new hour's heartbeat
+		await service.flush();
+		b = await bodies();
+		const allowed = b.filter(x => x.type === 'allowed');
+		assert.strictEqual(allowed.length, 1);
+		assert.ok(allowed[0].type === 'allowed' && allowed[0].dest === 'api.example.com:443' && allowed[0].count === 5 && allowed[0].hour === hour);
+		assert.deepStrictEqual(b.filter(x => x.type === 'heartbeat').map(x => (x as { hour: string }).hour), [hour, new Date(Date.parse(hour) + HOUR).toISOString()]);
+		assert.deepStrictEqual(service.heldCounts(), []);
+	});
+
+	test('dispose writes the held counts of the open hour', async () => {
+		service = await create();
+		service.aggregator.addAllowed('https://api.example.com/', 'model server (set in Settings)', 'main', clock, 4);
+		await service.flush();
+		await service.dispose();
+		service = await create();
+		const allowed = (await bodies()).filter(x => x.type === 'allowed');
+		assert.deepStrictEqual(allowed.map(x => (x as { count: number }).count), [4]);
+	});
+
+	test('flush(true) writes the open hour\'s counts, for a report up to now', async () => {
+		service = await create();
+		service.aggregator.addBlocked('https://evil.example/', 'renderer', clock);
+		await service.flush(true);
+		assert.deepStrictEqual((await bodies()).filter(x => x.type === 'blocked').map(x => (x as { count: number }).count), [1]);
+		assert.deepStrictEqual(service.heldCounts(), []);
+	});
+
+	test('the 60 s flush still writes audit_state without waiting for the hour', async () => {
+		service = await create(true);
+		await service.flush();
+		const before = (await bodies()).length;
+		service.setAuditEnabled(false);
+		await service.flush();
 		const b = await bodies();
-		const allowed = b.find(x => x.type === 'allowed');
-		assert.ok(allowed && allowed.type === 'allowed' && allowed.dest === 'api.example.com:443' && allowed.count === 3);
-		const hb = b.filter(x => x.type === 'heartbeat');
-		assert.strictEqual(hb.length, 1);
-		assert.strictEqual((hb[0] as { hour: string }).hour, new Date(Math.floor(clock / 3600_000) * 3600_000).toISOString());
+		assert.strictEqual(b.length, before + 1);
+		assert.deepStrictEqual(b[b.length - 1], { type: 'audit_state', time: new Date(clock).toISOString(), enabled: false });
 	});
 
 	test('dispose writes session_end', async () => {
@@ -107,11 +153,11 @@ suite('EgressLedgerService', () => {
 		let fail = true;
 		store.append = async (b: LedgerBody[]) => { if (fail) { throw new Error('disk full'); } return original(b); };
 		service.aggregator.addAllowed('https://a.example.com/', 'model server (set in Settings)', 'main', clock);
-		await service.flush(); // must not throw
+		await service.flush(true); // must not throw
 		assert.strictEqual(errors.length, 1);
 		fail = false;
 		service.aggregator.addAllowed('https://b.example.com/', 'model server (set in Settings)', 'main', clock);
-		await service.flush();
+		await service.flush(true);
 		const dests = (await bodies()).filter(x => x.type === 'allowed').map(x => (x as { dest: string }).dest);
 		assert.deepStrictEqual(dests, ['b.example.com:443']);
 	});
@@ -131,7 +177,7 @@ suite('EgressLedgerService', () => {
 		const svc = new EgressLedgerService({ dbPath, version: '1', commit: 'c', auditEnabled: true, expectedSince, now: () => clock, flushMs: 3_600_000 });
 		svc.aggregator.addAllowed('https://early.example.com/', 'model server (set in Settings)', 'main', clock);
 		await svc.open();
-		await svc.flush();
+		await svc.flush(true);
 		service = svc;
 		const types = (await bodies()).map(x => x.type);
 		assert.strictEqual(types[0], 'session_start');

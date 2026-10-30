@@ -3,7 +3,7 @@
  *  Licensed under the Apache License, Version 2.0. See LICENSE.txt for more information.
  *--------------------------------------------------------------------------------------*/
 
-import { LedgerAggregator, LedgerBody } from '../../common/egressLedger.js';
+import { LedgerAggregator, LedgerBody, timeOf } from '../../common/egressLedger.js';
 import { LedgerStore } from './ledgerStore.js';
 
 const RETENTION_MS = 400 * 24 * 3600_000;
@@ -20,9 +20,27 @@ export interface EgressLedgerServiceOptions {
 	onError?: (message: string, error: unknown) => void;
 }
 
+function hourOf(time: string): string {
+	return new Date(Math.floor(Date.parse(time) / HOUR_MS) * HOUR_MS).toISOString();
+}
+
+function bucketKey(b: LedgerBody): string {
+	switch (b.type) {
+		case 'allowed': return `allowed|${b.hour}|${b.dest}|${b.origin}|${b.reason}`;
+		case 'blocked': return `blocked|${b.minute}|${b.dest}|${b.origin}|`;
+		case 'blocked_lookup': return `blocked_lookup|${b.minute}|${b.host}|${b.origin}|`;
+		default: return `${b.type}|${timeOf(b)}`;
+	}
+}
+
+const isCount = (b: LedgerBody): b is Extract<LedgerBody, { count: number }> => b.type === 'allowed' || b.type === 'blocked' || b.type === 'blocked_lookup';
+
 /**
- * Owns the ledger store and the aggregator. Main flushes the aggregator to disk every `flushMs` (60 s) and on shutdown;
- * there is no per-request disk I/O. The aggregator exists from construction so the guard can use it before `open()` resolves.
+ * Owns the ledger store and the aggregator. Main flushes every `flushMs` (60 s) and on shutdown; there is no per-request
+ * disk I/O. Each flush writes pending audit_state and session records; a heartbeat is written once per hour (the first
+ * flush in that hour), and count rows are held in memory until their hour closes (or shutdown), so each destination
+ * gets at most one row per hour, origin and reason. The aggregator exists from construction so the guard can use it
+ * before `open()` resolves.
  */
 export class EgressLedgerService {
 
@@ -38,6 +56,9 @@ export class EgressLedgerService {
 	private _resetSince: string | undefined;
 	private _timer: ReturnType<typeof setInterval> | undefined;
 	private _pending: LedgerBody[] = [];
+	/** Count rows drained from the aggregator whose hour has not closed yet, merged by bucket. */
+	private readonly _held = new Map<string, LedgerBody>();
+	private _lastHeartbeatHour: string | undefined;
 	private _auditEnabled: boolean;
 	private _queue: Promise<void> = Promise.resolve();
 	private _disposed = false;
@@ -95,23 +116,49 @@ export class EgressLedgerService {
 		this._pending.push({ type: 'audit_state', time: this.iso(), enabled });
 	}
 
-	/** Drains the aggregator and appends it with a heartbeat for the current hour. A failed write drops that batch and is logged. */
-	flush(): Promise<void> {
+	/** The profile's marker for when recording started on this profile (see resetSince). */
+	expectedSince(): string | undefined {
+		return this.opts.expectedSince.get();
+	}
+
+	/** Count rows not yet written because their hour has not closed. Call after flush() to include the aggregator. */
+	heldCounts(): LedgerBody[] {
+		return [...this._held.values()].map(b => ({ ...b }));
+	}
+
+	/**
+	 * Writes pending records, the hour's heartbeat (once per hour) and the count rows of closed hours.
+	 * `closeHour` also writes the current hour's counts (shutdown, and a report that must include counts up to now).
+	 * A failed write drops that batch's counts and is logged; audit_state and session records are kept for the next attempt.
+	 */
+	flush(closeHour = false): Promise<void> {
 		if (this._closed) { return Promise.resolve(); }
-		const run = this._queue.then(() => this._flush());
+		const run = this._queue.then(() => this._flush(closeHour));
 		this._queue = run.catch(() => undefined);
 		return run;
 	}
 
-	private async _flush(): Promise<void> {
+	private async _flush(closeHour: boolean): Promise<void> {
 		if (!this._store) { return; }
 		const hour = new Date(Math.floor(this._now() / HOUR_MS) * HOUR_MS).toISOString();
+		for (const b of this.aggregator.drain()) {
+			const key = bucketKey(b);
+			const row = this._held.get(key);
+			if (row && isCount(row) && isCount(b)) { row.count += b.count; } else { this._held.set(key, b); }
+		}
+		const counts: LedgerBody[] = [];
+		for (const [key, b] of this._held) {
+			if (closeHour || hourOf(timeOf(b)) < hour) { counts.push(b); this._held.delete(key); }
+		}
+		const heartbeat = hour !== this._lastHeartbeatHour;
 		const kept = this._pending;
-		const bodies: LedgerBody[] = [...kept, ...this.aggregator.drain(), { type: 'heartbeat', hour }];
+		const bodies: LedgerBody[] = [...kept, ...counts, ...(heartbeat ? [{ type: 'heartbeat' as const, hour }] : [])];
 		this._pending = [];
+		if (bodies.length === 0) { return; }
 		try {
 			await this._store.append(bodies);
 			this._lastFlushOk = true;
+			if (heartbeat) { this._lastHeartbeatHour = hour; }
 		} catch (e) {
 			this._lastFlushOk = false;
 			this._pending = [...kept, ...this._pending]; // counts are dropped; audit_state and session_end are kept for the next attempt
@@ -127,8 +174,8 @@ export class EgressLedgerService {
 		const store = this._store;
 		if (!store) { return; }
 		this._pending.push({ type: 'session_end', time: this.iso() });
-		await this.flush();
-		if (!this._lastFlushOk) { await this.flush(); } // one retry, so a transient error doesn't look like a crash
+		await this.flush(true);
+		if (!this._lastFlushOk) { await this.flush(true); } // one retry, so a transient error doesn't look like a crash
 		this._closed = true;
 		try {
 			await store.close();

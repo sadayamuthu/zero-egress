@@ -6,7 +6,7 @@
 // Pure aggregation model for the egress ledger. Keeps only host:port (never a URL path or query),
 // bucketed by hour (allowed) or minute (blocked), so the ledger stays small however chatty the app is.
 
-import { dnsQueryHost, isLoopbackHost, isPrivateHost, targetFromUrl } from './egressPolicy.js';
+import { describeDestination, dnsQueryHost, isLoopbackHost, isPrivateHost, targetFromUrl } from './egressPolicy.js';
 
 export type EgressOrigin = 'renderer' | 'main' | 'extensionHost' | 'sharedProcess';
 export type DestinationKind = 'this machine' | 'local network' | 'internet';
@@ -80,10 +80,11 @@ export class LedgerAggregator {
 			key = `blocked_lookup|${minute}|${host}|${origin}|`;
 			fresh = { type: 'blocked_lookup', minute, host, origin, count: 1 };
 		} else {
-			const d = destinationOf(url);
-			if (!d) { return; }
-			key = `blocked|${minute}|${d.dest}|${origin}|`;
-			fresh = { type: 'blocked', minute, dest: d.dest, origin, count: 1 };
+			// Not host:port-shaped (an unknown scheme, the hooks' invalid-host:// forms): recorded as `scheme://host`,
+			// never with a path or query, so no block goes unlisted.
+			const dest = destinationOf(url)?.dest ?? describeDestination(url);
+			key = `blocked|${minute}|${dest}|${origin}|`;
+			fresh = { type: 'blocked', minute, dest, origin, count: 1 };
 		}
 		const row = this.buckets.get(key);
 		if (row && (row.type === 'blocked' || row.type === 'blocked_lookup')) { row.count++; return; }

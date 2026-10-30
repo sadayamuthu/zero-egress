@@ -29,6 +29,12 @@ export class LedgerStore {
 			`CREATE TABLE IF NOT EXISTS ledger_meta (id INTEGER PRIMARY KEY CHECK (id = 0), last_seq INTEGER NOT NULL, last_hash TEXT NOT NULL, created_at TEXT NOT NULL)`, []);
 		await store.run(
 			`INSERT OR IGNORE INTO ledger_meta (id, last_seq, last_hash, created_at) VALUES (0, 0, ?, ?)`, [GENESIS_HASH, new Date().toISOString()]);
+		// Where retention pruning stopped: the first surviving record must link to it, so a deleted prefix shows.
+		const columns = await store.all<{ name: string }>(`PRAGMA table_info(ledger_meta)`, []);
+		if (!columns.some(c => c.name === 'pruned_through_seq')) {
+			await store.run(`ALTER TABLE ledger_meta ADD COLUMN pruned_through_seq INTEGER NOT NULL DEFAULT 0`, []);
+			await store.run(`ALTER TABLE ledger_meta ADD COLUMN pruned_through_hash TEXT NOT NULL DEFAULT '${GENESIS_HASH}'`, []);
+		}
 		return store;
 	}
 
@@ -91,6 +97,15 @@ export class LedgerStore {
 		return rows.map(r => ({ seq: r.seq, prevHash: r.prevHash, body: JSON.parse(r.json) as LedgerBody }));
 	}
 
+	/** Every record with seq > `seq`, in seq order. */
+	recordsAfter(seq: number): Promise<LedgerRecord[]> {
+		return this.serialized(async () => {
+			const rows = await this.all<{ seq: number; prevHash: string; json: string }>(
+				`SELECT seq, prevHash, json FROM ledger_records WHERE seq > ? ORDER BY seq ASC`, [seq]);
+			return rows.map(r => ({ seq: r.seq, prevHash: r.prevHash, body: JSON.parse(r.json) as LedgerBody }));
+		});
+	}
+
 	head(): Promise<{ seq: number; hash: string }> {
 		return this.serialized(() => this._head());
 	}
@@ -125,9 +140,18 @@ export class LedgerStore {
 	private async _verifyChain(): Promise<{ ok: true } | { ok: false; brokenAtSeq: number }> {
 		const rows = await this.all<{ seq: number; prevHash: string; json: string }>(
 			`SELECT seq, prevHash, json FROM ledger_records ORDER BY seq ASC`, []);
-		const meta = await this.get<{ last_seq: number; last_hash: string }>(`SELECT last_seq, last_hash FROM ledger_meta WHERE id = 0`, []);
+		const meta = await this.get<{ last_seq: number; last_hash: string; pruned_through_seq: number; pruned_through_hash: string }>(
+			`SELECT last_seq, last_hash, pruned_through_seq, pruned_through_hash FROM ledger_meta WHERE id = 0`, []);
+		if (!meta) { return rows.length === 0 ? { ok: true } : { ok: false, brokenAtSeq: rows[0].seq }; }
+		// The first surviving row must follow the last pruned record (or start the chain: seq 1 after GENESIS).
+		// An empty table must be exactly what pruning left: otherwise rows were deleted by hand.
+		if (rows.length === 0) {
+			return meta.last_seq === meta.pruned_through_seq && meta.last_hash === meta.pruned_through_hash
+				? { ok: true } : { ok: false, brokenAtSeq: meta.pruned_through_seq + 1 };
+		}
+		if (rows[0].seq !== meta.pruned_through_seq + 1) { return { ok: false, brokenAtSeq: meta.pruned_through_seq + 1 }; }
+		if (rows[0].prevHash !== meta.pruned_through_hash) { return { ok: false, brokenAtSeq: rows[0].seq }; }
 		// Pairwise: each row's own hash must equal what the next row (or the meta head, for the last row) recorded.
-		// The earliest surviving row's prevHash is not checked: after a prune it points at a deleted record.
 		for (let i = 0; i < rows.length; i++) {
 			const row = rows[i];
 			const hash = chainHash(row.prevHash, { seq: row.seq, body: JSON.parse(row.json) });
@@ -135,7 +159,7 @@ export class LedgerStore {
 			if (next) {
 				if (next.seq !== row.seq + 1) { return { ok: false, brokenAtSeq: row.seq + 1 }; } // a record in the middle is missing
 				if (next.prevHash !== hash) { return { ok: false, brokenAtSeq: row.seq }; }
-			} else if (meta && meta.last_seq > 0) {
+			} else {
 				// Last surviving row: it must be the head, otherwise the tail was truncated.
 				if (meta.last_seq !== row.seq) { return { ok: false, brokenAtSeq: row.seq + 1 }; }
 				if (meta.last_hash !== hash) { return { ok: false, brokenAtSeq: row.seq }; }
@@ -147,15 +171,27 @@ export class LedgerStore {
 	/**
 	 * Deletes the contiguous seq prefix that precedes the first record whose time is >= `iso`
 	 * (all records if none is). Bucket times are not monotonic in seq, so a time-only delete could leave
-	 * holes. The meta row is untouched, so the chain continues.
+	 * holes. The meta row keeps the chain going and records the last deleted record (`pruned_through_*`),
+	 * which verifyChain requires the first surviving record to follow.
 	 */
 	async pruneOlderThan(iso: string): Promise<number> {
 		return this.serialized(async () => {
 			const first = await this.get<{ s: number | null }>(`SELECT MIN(seq) AS s FROM ledger_records WHERE t >= ?`, [iso]);
-			if (first?.s === null || first?.s === undefined) {
-				return (await this.run(`DELETE FROM ledger_records`, [])).changes;
+			const last = first?.s === null || first?.s === undefined
+				? await this.get<{ seq: number; prevHash: string; json: string }>(`SELECT seq, prevHash, json FROM ledger_records ORDER BY seq DESC LIMIT 1`, [])
+				: await this.get<{ seq: number; prevHash: string; json: string }>(`SELECT seq, prevHash, json FROM ledger_records WHERE seq < ? ORDER BY seq DESC LIMIT 1`, [first.s]);
+			if (!last) { return 0; }
+			const hash = chainHash(last.prevHash, { seq: last.seq, body: JSON.parse(last.json) });
+			await this.run('BEGIN', []);
+			try {
+				const { changes } = await this.run(`DELETE FROM ledger_records WHERE seq <= ?`, [last.seq]);
+				await this.run(`UPDATE ledger_meta SET pruned_through_seq = ?, pruned_through_hash = ? WHERE id = 0`, [last.seq, hash]);
+				await this.run('COMMIT', []);
+				return changes;
+			} catch (e) {
+				await this.run('ROLLBACK', []).catch(() => undefined);
+				throw e;
 			}
-			return (await this.run(`DELETE FROM ledger_records WHERE seq < ?`, [first.s])).changes;
 		});
 	}
 

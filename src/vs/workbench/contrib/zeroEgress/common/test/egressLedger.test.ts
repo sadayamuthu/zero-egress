@@ -49,12 +49,23 @@ suite('EgressLedger', () => {
 		assert.deepStrictEqual(l.drain(), [{ type: 'blocked_lookup', minute: '2026-10-30T10:15:00.000Z', host: 'evil.example', origin: 'main', count: 1 }]);
 	});
 
-	test('non-network schemes are ignored', () => {
+	test('non-network schemes are not counted as allowed', () => {
 		const l = new LedgerAggregator();
 		l.addAllowed('vscode-file://vscode-app/a/b.js', 'r', 'renderer', T);
 		l.addAllowed('data:text/plain,hi', 'r', 'renderer', T);
-		l.addBlocked('data:text/plain,hi', 'renderer', T);
 		assert.deepStrictEqual(l.drain(), []);
+	});
+
+	test('blocks that are not host:port-shaped are recorded as scheme://host, without path or query', () => {
+		const l = new LedgerAggregator();
+		l.addBlocked('ftp://user:pw@evil.example/secret/file.txt?token=abc', 'renderer', T);
+		l.addBlocked('invalid-host://bad%20host', 'extensionHost', T);
+		l.addBlocked('tcp://evil.example', 'main', T); // no port
+		l.addBlocked('data:text/plain,secret', 'renderer', T);
+		const rows = l.drain() as { dest: string }[];
+		assert.deepStrictEqual(rows.map(r => r.dest).sort(), ['data:', 'ftp://evil.example', 'invalid-host://bad%20host', 'tcp://evil.example']);
+		const s = JSON.stringify(rows);
+		assert.ok(!s.includes('secret') && !s.includes('token') && !s.includes('pw') && !s.includes('file.txt'));
 	});
 
 	test('kinds', () => {
