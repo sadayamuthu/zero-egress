@@ -71,6 +71,9 @@ import './egressTargetsContribution.js'
 import './localStatusContribution.js'
 import './agentsViewContribution.js'
 
+// Home (empty window): clone command
+import './homeActions.js'
+
 // first-run detection of local model servers
 import './localModelDetectionService.js'
 

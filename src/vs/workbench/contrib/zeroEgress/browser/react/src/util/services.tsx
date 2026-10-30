@@ -57,6 +57,9 @@ import { IExtensionManagementService } from '../../../../../../../platform/exten
 import { IMCPService } from '../../../../common/mcpService.js';
 import { ILocalModelDetectionService } from '../../../localModelDetectionService.js';
 import { IStorageService, StorageScope } from '../../../../../../../platform/storage/common/storage.js'
+import { IWorkspacesService } from '../../../../../../../platform/workspaces/common/workspaces.js'
+import { IHostService } from '../../../../../../services/host/browser/host.js'
+import { ILabelService } from '../../../../../../../platform/label/common/label.js'
 
 
 // normally to do this you'd use a useEffect that calls .onDidChangeState(), but useEffect mounts too late and misses initial state changes
@@ -242,6 +245,9 @@ const getReactAccessor = (accessor: ServicesAccessor) => {
 		ILocalModelDetectionService: accessor.get(ILocalModelDetectionService),
 
 		IStorageService: accessor.get(IStorageService),
+		IWorkspacesService: accessor.get(IWorkspacesService),
+		IHostService: accessor.get(IHostService),
+		ILabelService: accessor.get(ILabelService),
 
 	} as const
 	return reactAccessor

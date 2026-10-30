@@ -10,6 +10,7 @@ export default defineConfig({
 		'./src2/zero-egress-editor-widgets-tsx/index.tsx',
 		'./src2/sidebar-tsx/index.tsx',
 		'./src2/agents-tsx/index.tsx',
+		'./src2/home-tsx/index.tsx',
 		'./src2/zero-egress-settings-tsx/index.tsx',
 		'./src2/zero-egress-tooltip/index.tsx',
 		'./src2/zero-egress-onboarding/index.tsx',

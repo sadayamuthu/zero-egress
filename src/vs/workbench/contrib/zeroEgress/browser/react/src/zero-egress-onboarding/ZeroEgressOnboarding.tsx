@@ -5,6 +5,7 @@
 
 import { useEffect, useState } from 'react';
 import { useAccessor, useIsDark, useSettingsState } from '../util/services.js';
+import { ZeroEgressWordmark } from '../util/ZeroEgressWordmark.js';
 import { OneClickSwitchButton } from '../zero-egress-settings-tsx/Settings.js';
 import ErrorBoundary from '../sidebar-tsx/ErrorBoundary.js';
 import { ConnectModelStep, useConnectModel } from './ConnectModelStep.js';
@@ -30,37 +31,6 @@ export const ZeroEgressOnboarding = () => {
 				<ErrorBoundary>
 					<ZeroEgressOnboardingContent />
 				</ErrorBoundary>
-			</div>
-		</div>
-	)
-}
-
-// The splash mark and wordmark are drawn inline (no raster, no card) so they sit
-// directly on the editor background in every theme. Mark geometry is the bare
-// mark from resources/zero-egress/logo.svg (crop box 12 22 72 64); keep in sync.
-const ZE_MINT = '#34d399'
-const ZeroEgressWordmark = () => {
-	// Faded arcs: .3 as in logo.svg on dark themes; a touch stronger on light
-	// themes, where mint at .3 almost disappears into white.
-	const arcOpacity = useIsDark() ? '.3' : '.5'
-	return (
-		<div className='flex flex-col items-center gap-5 select-none' role='img' aria-label='ZeroEgress'>
-			<svg viewBox='12 22 72 64' width='128' height='114' aria-hidden='true'>
-				<path d='M16 40 a44 44 0 0 1 64 0' fill='none' stroke={ZE_MINT} strokeWidth='7' strokeLinecap='round' opacity={arcOpacity} />
-				<path d='M28 51 a28 28 0 0 1 40 0' fill='none' stroke={ZE_MINT} strokeWidth='7' strokeLinecap='round' opacity={arcOpacity} />
-				<ellipse cx='48' cy='70' rx='9' ry='12' fill='none' stroke={ZE_MINT} strokeWidth='5.5' />
-				<line x1='43' y1='78' x2='53' y2='62' stroke={ZE_MINT} strokeWidth='5' strokeLinecap='round' />
-			</svg>
-			<div
-				style={{
-					color: 'var(--vscode-foreground)',
-					fontFamily: 'system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
-					fontSize: '56px',
-					lineHeight: 1,
-					letterSpacing: '-0.5px',
-				}}
-			>
-				<span style={{ fontWeight: 700 }}>Zero</span><span style={{ fontWeight: 400 }}>Egress</span>
 			</div>
 		</div>
 	)

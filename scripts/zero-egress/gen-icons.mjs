@@ -363,7 +363,7 @@ for (const [theme, color, opacity, note] of [
 }
 
 // README banner (1536x1024, 3:2): dark panel so it reads on GitHub light and dark.
-// (The in-app onboarding splash draws the mark inline; see ZeroEgressOnboarding.tsx.)
+// (The in-app onboarding splash draws the mark inline; see react/src/util/ZeroEgressWordmark.tsx.)
 const BANNER = stacked(1536, 1024, { textColor: TEXT_DARK_BG, mutedColor: MUTED_DARK_BG, withTagline: true, bare: true, bg: BG, panel: true });
 png('resources/zero-egress/zero-egress-banner.png', BANNER, 1536, 1024);
 out('src/vs/workbench/contrib/zeroEgress/browser/media/zero-egress-wordmark-dark.svg', wordmarkSvg);

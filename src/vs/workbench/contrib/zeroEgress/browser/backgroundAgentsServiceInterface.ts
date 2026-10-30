@@ -37,6 +37,11 @@ export interface IBackgroundAgentsService {
 	acceptAll(threadId: string): Promise<void>;
 	/** clean hunks and whole-file changes only; conflicts stay pending */
 	rejectAll(threadId: string): Promise<void>;
+	/**
+	 * For every folder that has background agents (any window, keyed by `agent.userRoot`): how many of its agents have at
+	 * least one pending file. Agents whose worktree was removed are skipped; one that can't be read counts 0. Never throws.
+	 */
+	pendingReviewCountsByFolder(): Promise<Map<string, number>>;
 }
 
 export const IBackgroundAgentsService = createDecorator<IBackgroundAgentsService>('zeroEgressBackgroundAgentsService');

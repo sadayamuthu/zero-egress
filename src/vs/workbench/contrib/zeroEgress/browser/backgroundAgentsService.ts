@@ -377,6 +377,18 @@ export class BackgroundAgentsService extends Disposable implements IBackgroundAg
 		return pending.map(s => s.review);
 	}
 
+	async pendingReviewCountsByFolder(): Promise<Map<string, number>> {
+		const counts = new Map<string, number>();
+		try {
+			const agents = this._agentThreads().map(t => t.agent!).filter(a => a.worktreePath !== '');
+			const pending = await Promise.all(agents.map(a => this._pendingFiles(a).then(files => files.length, () => 0)));
+			agents.forEach((a, i) => counts.set(a.userRoot, (counts.get(a.userRoot) ?? 0) + (pending[i] > 0 ? 1 : 0)));
+		} catch (e) {
+			onUnexpectedError(e);
+		}
+		return counts;
+	}
+
 	// ---------- review writes ----------
 
 	private _enqueue<T>(threadId: string, task: () => Promise<T>): Promise<T> {
