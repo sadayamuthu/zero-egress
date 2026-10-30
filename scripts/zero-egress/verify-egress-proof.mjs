@@ -5,8 +5,8 @@
 // keep the two in step (the fixtures test compares them check by check).
 
 import { createHash, createPublicKey, verify } from 'node:crypto';
-import { readFileSync, statSync } from 'node:fs';
-import { pathToFileURL } from 'node:url';
+import { readFileSync, realpathSync, statSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 const SCOPE = 'Covers connections made by ZeroEgress itself. Programs it starts (git, terminal and agent commands, language servers) are not covered.';
 const SIGNATURE_LIMIT = 'A valid signature proves this report wasn\'t changed and was made with this device\'s key. It does not prove the machine itself wasn\'t tampered with.';
@@ -309,4 +309,9 @@ function main(argv) {
 	return checks.every(c => c.ok) ? 0 : 1;
 }
 
-if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) { process.exitCode = main(process.argv.slice(2)); }
+// Run only when invoked directly (the test imports this file). Compare real paths: import.meta.url is
+// already resolved, but argv[1] may go through a symlink (macOS /var, /tmp), which would skip main().
+const invokedDirectly = (() => {
+	try { return !!process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); } catch { return false; }
+})();
+if (invokedDirectly) { process.exitCode = main(process.argv.slice(2)); }

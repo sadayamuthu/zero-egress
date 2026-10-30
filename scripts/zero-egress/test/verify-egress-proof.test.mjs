@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { generateKeyPairSync, sign } from 'node:crypto';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -76,6 +76,19 @@ test('pdf mismatch exits 1', () => {
 test('usage exits 2', () => {
 	assert.equal(run().status, 2);
 	assert.equal(run('a', 'b', 'c').status, 2);
+});
+
+// A downloaded copy run through a symlinked path (macOS /var, /tmp) must still run its checks.
+test('runs when invoked through a symlinked path', () => {
+	const real = mkdtempSync(join(tmpdir(), 'verify-egress-proof-real-'));
+	copyFileSync(script, join(real, 'verify-egress-proof.mjs'));
+	const link = join(tmp, 'linked');
+	symlinkSync(real, link);
+	const linked = join(link, 'verify-egress-proof.mjs');
+	assert.equal(spawnSync(process.execPath, [linked], { encoding: 'utf8' }).status, 2);
+	const good = spawnSync(process.execPath, [linked, GOOD_JSON, GOOD_PDF], { encoding: 'utf8' });
+	assert.equal(good.status, 0);
+	assert.match(good.stdout, /✓ Signature valid/);
 });
 
 test('script and the in-repo TS checker agree on every check', async (t) => {
