@@ -48,13 +48,17 @@ export interface IAuditConfig {
 export const GENESIS_HASH = '0'.repeat(64);
 
 // Deterministic JSON: sort object keys recursively so hashing is stable across key insertion order.
-function stableStringify(value: unknown): string {
+export function stableStringify(value: unknown): string {
 	if (value === null || typeof value !== 'object') return JSON.stringify(value);
 	if (Array.isArray(value)) return '[' + value.map(stableStringify).join(',') + ']';
 	const keys = Object.keys(value as Record<string, unknown>).sort();
 	return '{' + keys.map(k => JSON.stringify(k) + ':' + stableStringify((value as Record<string, unknown>)[k])).join(',') + '}';
 }
 
+export function chainHash(prevHash: string, body: unknown): string {
+	return createHash('sha256').update(prevHash).update(stableStringify(body)).digest('hex');
+}
+
 export function computeRecordHash(prevHash: string, record: Omit<AuditRecord, 'prevHash'>): string {
-	return createHash('sha256').update(prevHash).update(stableStringify(record)).digest('hex');
+	return chainHash(prevHash, record);
 }
