@@ -109,4 +109,16 @@ suite('LocalAuditStore', () => {
 		const check = await store.verifyChain();
 		assert.deepStrictEqual(check, { ok: false, brokenAtSeq: 2 });
 	});
+
+	test('countByModel counts per provider and model within the period', async () => {
+		await store.append(body({ id: 'a', timestamp: '2026-07-12T01:00:00.000Z' }));
+		await store.append(body({ id: 'b', timestamp: '2026-07-12T02:00:00.000Z' }));
+		await store.append(body({ id: 'c', timestamp: '2026-07-12T02:30:00.000Z', provider: 'ollama', modelName: 'qwen3' }));
+		await store.append(body({ id: 'd', timestamp: '2026-07-12T05:00:00.000Z', provider: 'ollama', modelName: 'qwen3' }));
+		assert.deepStrictEqual(await store.countByModel('2026-07-12T01:00:00.000Z', '2026-07-12T05:00:00.000Z'), [
+			{ provider: 'anthropic', model: 'claude-opus-4-8', requests: 2 },
+			{ provider: 'ollama', model: 'qwen3', requests: 1 },
+		]);
+		assert.deepStrictEqual(await store.countByModel('2026-07-13T00:00:00.000Z', '2026-07-14T00:00:00.000Z'), []);
+	});
 });
