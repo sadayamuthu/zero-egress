@@ -15,7 +15,7 @@
 // - Build targets only via targetFromUrl / collectEgressTargets. Hosts passed straight to
 //   isLoopbackHost / isPrivateHost are expected in targetFromUrl-normalized form.
 
-export interface EgressTarget { readonly host: string; readonly port: number }
+export interface EgressTarget { readonly host: string; readonly port: number; readonly reason?: string }
 
 export interface EgressSources {
 	providerEndpoints: readonly string[];
@@ -124,20 +124,43 @@ export function dnsQueryHost(url: string): string | undefined {
 	return targetFromUrl(`http://${u.hostname}/`)?.host;
 }
 
+const REASON_LOOPBACK = 'this machine';
+const REASON_MODEL_SERVER = 'model server (set in Settings)';
+const REASON_MCP = 'MCP server';
+const REASON_AUDIT = 'audit collector';
+
+/** The allow decision: `reason` is undefined for a matched target that carries none. Undefined result means denied. */
+function matchAllowed(url: string, targets: readonly EgressTarget[]): { reason: string | undefined } | undefined {
+	if (url.startsWith('dns:')) {
+		const q = dnsQueryHost(url);
+		if (q === undefined) { return undefined; }
+		if (isLoopbackHost(q)) { return { reason: REASON_LOOPBACK }; }
+		const m = targets.find(x => x.host === q);
+		return m && { reason: m.reason };
+	}
+	const t = targetFromUrl(url);
+	// Schemes that never leave the machine are allowed for the same reason as loopback.
+	if (!t) { return isExplicitNonNetwork(url) ? { reason: REASON_LOOPBACK } : undefined; }
+	if (isLoopbackHost(t.host)) { return { reason: REASON_LOOPBACK }; }
+	const m = targets.find(x => x.host === t.host && x.port === t.port);
+	return m && { reason: m.reason };
+}
+
+/**
+ * Why a URL is allowed: `this machine` for loopback (and schemes that never leave the machine), else the reason
+ * of the matched target. Undefined when the URL is denied, or when the matched target carries no reason.
+ */
+export function allowedBy(url: string, targets: readonly EgressTarget[]): string | undefined {
+	return matchAllowed(url, targets)?.reason;
+}
+
 /**
  * A URL is allowed when it is loopback, matches a configured host and port exactly, or never leaves the
  * machine. A DNS query (`dns://<name>/`) is allowed for loopback names and for the host of any configured
  * target, whatever its port: that is the lookup a connection to it needs.
  */
 export function isAllowed(url: string, targets: readonly EgressTarget[]): boolean {
-	if (url.startsWith('dns:')) {
-		const q = dnsQueryHost(url);
-		return q !== undefined && (isLoopbackHost(q) || targets.some(x => x.host === q));
-	}
-	const t = targetFromUrl(url);
-	if (!t) { return isExplicitNonNetwork(url); }
-	if (isLoopbackHost(t.host)) { return true; }
-	return targets.some(x => x.host === t.host && x.port === t.port);
+	return matchAllowed(url, targets) !== undefined;
 }
 
 /** Short, credential- and path-free name of a destination for logs and errors: `host:port`, else `scheme://host`. */
@@ -153,8 +176,14 @@ export function describeDestination(url: string): string {
 export function collectEgressTargets(s: EgressSources): EgressTarget[] {
 	const out: EgressTarget[] = [];
 	const seen = new Set<string>();
-	for (const url of [...s.providerEndpoints, ...s.mcpServerUrls, s.auditCollectorUrl]) {
-		const t = url ? targetFromUrl(url) : undefined;
+	const sources: [string | undefined, string][] = [
+		...s.providerEndpoints.map((u): [string, string] => [u, REASON_MODEL_SERVER]),
+		...s.mcpServerUrls.map((u): [string, string] => [u, REASON_MCP]),
+		[s.auditCollectorUrl, REASON_AUDIT],
+	];
+	for (const [url, reason] of sources) {
+		const t0 = url ? targetFromUrl(url) : undefined;
+		const t = t0 && { ...t0, reason };
 		if (!t) { continue; }
 		const key = `${t.host}:${t.port}`;
 		if (seen.has(key)) { continue; }
