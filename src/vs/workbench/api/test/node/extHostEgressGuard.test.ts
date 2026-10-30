@@ -11,19 +11,18 @@ import { EgressTargetDto, MainThreadEgressGuardShape } from '../../common/extHos
 import { ExtHostEgressGuard } from '../../node/extHostEgressGuard.js';
 
 suite('ExtHostEgressGuard', () => {
-
-	const store = ensureNoDisposablesAreLeakedInTestSuite();
+	const store = ensureNoDisposablesAreLeakedInTestSuite(); // ZeroEgress
 
 	function mainThread(getTargets: () => Promise<EgressTargetDto[]>) {
 		const reported: string[] = [];
-		const allowed: { url: string; count: number }[][] = [];
-		const shape: MainThreadEgressGuardShape = { $getTargets: getTargets, $reportBlocked: url => { reported.push(url); }, $reportAllowed: counts => { allowed.push(counts); }, dispose() { } };
-		return { shape, reported, allowed };
+		const allowed: { url: string; count: number }[][] = []; // ZeroEgress
+		const shape: MainThreadEgressGuardShape = { $getTargets: getTargets, $reportBlocked: url => { reported.push(url); }, $reportAllowed: counts => { allowed.push(counts); }, dispose() { } }; // ZeroEgress
+		return { shape, reported, allowed }; // ZeroEgress
 	}
 
 	test('before init only loopback passes; init loads the allow-list', async () => {
 		const { shape, reported } = mainThread(async () => [{ host: 'gpubox', port: 8000 }]);
-		const guard = store.add(new ExtHostEgressGuard(shape, new NullLogService()));
+		const guard = store.add(new ExtHostEgressGuard(shape, new NullLogService())); // ZeroEgress
 		assert.strictEqual(guard.check('http://127.0.0.1:11434/'), true);
 		assert.strictEqual(guard.check('http://gpubox:8000/'), false);
 		await guard.init();
@@ -35,7 +34,7 @@ suite('ExtHostEgressGuard', () => {
 	test('a push that races the initial reply wins', async () => {
 		const reply = new DeferredPromise<EgressTargetDto[]>();
 		const { shape } = mainThread(() => reply.p);
-		const guard = store.add(new ExtHostEgressGuard(shape, new NullLogService()));
+		const guard = store.add(new ExtHostEgressGuard(shape, new NullLogService())); // ZeroEgress
 		const init = guard.init();
 		await guard.$setTargets([{ host: 'new.corp.internal', port: 443 }]);
 		reply.complete([{ host: 'old.corp.internal', port: 443 }]);
@@ -46,7 +45,7 @@ suite('ExtHostEgressGuard', () => {
 
 	test('a failed init leaves loopback only', async () => {
 		const { shape } = mainThread(async () => { throw new Error('no main thread'); });
-		const guard = store.add(new ExtHostEgressGuard(shape, new NullLogService()));
+		const guard = store.add(new ExtHostEgressGuard(shape, new NullLogService())); // ZeroEgress
 		await guard.init();
 		assert.strictEqual(guard.check('http://localhost:1234/'), true);
 		assert.strictEqual(guard.check('http://10.0.0.5:8000/'), false);
@@ -54,16 +53,17 @@ suite('ExtHostEgressGuard', () => {
 
 	test('$setTargets replaces the list', async () => {
 		const { shape } = mainThread(async () => [{ host: '10.0.0.5', port: 8000 }]);
-		const guard = store.add(new ExtHostEgressGuard(shape, new NullLogService()));
+		const guard = store.add(new ExtHostEgressGuard(shape, new NullLogService())); // ZeroEgress
 		await guard.init();
 		await guard.$setTargets([{ host: '10.0.0.7', port: 8000 }]);
 		assert.strictEqual(guard.check('http://10.0.0.5:8000/'), false);
 		assert.strictEqual(guard.check('http://10.0.0.7:8000/'), true);
 	});
 
+	// ZeroEgress: allowed-count batching for the Egress Proof ledger
 	test('allowed socket checks are counted per URL and reported in batches', async () => {
 		const { shape, allowed, reported } = mainThread(async () => [{ host: 'gpubox', port: 8000, reason: 'model server (set in Settings)' }]);
-		const guard = store.add(new ExtHostEgressGuard(shape, new NullLogService()));
+		const guard = store.add(new ExtHostEgressGuard(shape, new NullLogService())); // ZeroEgress
 		await guard.init();
 		assert.strictEqual(guard.check('http://gpubox:8000/', 'socket'), true);
 		assert.strictEqual(guard.check('http://gpubox:8000/', 'socket'), true);
@@ -76,5 +76,5 @@ suite('ExtHostEgressGuard', () => {
 		guard.flushAllowed();
 		assert.deepStrictEqual(allowed, [[{ url: 'http://gpubox:8000/', count: 2 }, { url: 'http://127.0.0.1:1/', count: 1 }]], 'host:port only, never the path');
 		assert.deepStrictEqual(reported, ['http://example.com:80/']);
-	});
+	}); // ZeroEgress
 });

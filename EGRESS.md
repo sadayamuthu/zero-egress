@@ -156,16 +156,24 @@ user data folder. It holds only `host:port`, counts, times, origins
 paths, queries, request bodies, code, prompts, answers or file names. It
 records:
 
-- `session_start` and `session_end`, and a heartbeat row on every flush (about every 60 seconds), stamped with the current hour
+- `session_start` and `session_end`, and one heartbeat row per hour the app is open
 - allowed connections, counted per hour
-- blocked connections, counted per minute
+- blocked connections, counted per minute. A blocked address that isn't `host:port` (an unknown scheme, say) is listed as `scheme://host`, still without a path or query
 - blocked name lookups, listed separately
 - when the audit was turned on or off
 
 Main flushes to disk every 60 seconds and on shutdown. The extension host
-and the shared process report their allowed counts every 10 seconds. Rows
-older than 400 days are pruned when the ledger opens at startup. The hash chain survives pruning, so a
-report still verifies after old rows are gone.
+and the shared process report their allowed counts every 10 seconds. Each
+60-second flush writes session and audit records at once, but count rows
+are kept in memory until their hour ends (or the app closes, or you create
+a report), so a destination gets at most one row per hour. If the app
+crashes, that hour's counts are lost; the crash gap already covers that
+time. Rows older than 400 days are pruned when the ledger opens at startup.
+The hash chain survives pruning, so a report still verifies after old rows
+are gone. The ledger notes where pruning stopped, so rows deleted by hand
+from the start of the ledger, or all of them, show up as a chain break.
+Restoring an older copy of the whole ledger file can't be detected without
+a copy kept somewhere else.
 
 **What a count means.**
 
@@ -179,19 +187,41 @@ report still verifies after old rows are gone.
 DNS lookups aren't counted. A lookup the guard blocks is listed
 separately, as a blocked name lookup.
 
+Counts are close, not exact: redirect hops of Electron `net` requests made
+outside the main process aren't counted, and in rare cases one connection
+is counted twice (for example, a socket counted as allowed whose name
+lookup is then blocked, which also appears as a block).
+
 **Gaps.** The report shows a yellow verdict, with the gaps listed, when the
 ledger can't vouch for every moment. There is no red state. A gap is one of:
 
 - a crash: a session that started and never ended
 - a ledger reset: the ledger file is newer than the first-run marker
-- a chain break: the records no longer link to each other
+- a chain break: the records no longer link to each other, or rows were deleted
+
+A crash in the last session of a custom period that ends in the past isn't
+shown, because the next session start falls outside that period.
+
+When the ledger started after the start of the report's period, the report
+says "Recording started <date>"; nothing before that date is covered. A
+green verdict reads "Every recorded connection in this period went to an
+allowed destination." A period with nothing in it reads "No connections
+were recorded in this period."
 
 **Create a report.** Settings, **Network & privacy**, **Egress Proof**,
 **Create report…**. It saves `egress-proof-<date>.pdf` and
 `egress-proof-<date>.json`. The report is signed with an Ed25519 key that
 belongs to this device. The key is stored with the operating system's
 encryption (Electron `safeStorage`). Where the OS offers none, the key is
-a file only your account can read, and the report says so.
+a file only your account can read, and the report says so. On Linux
+without a secret service (the `basic_text` backend), Electron's
+encryption uses a fixed password, so ZeroEgress treats that as no
+encryption and uses the owner-only file.
+
+The key's fingerprint is the first 128 bits of the SHA-256 of its public
+key, written as eight groups of four hex digits (`xxxx-xxxx-…-xxxx`).
+Compare it with the fingerprint the report's author gives you some other
+way.
 
 **What the report covers.** The same sentence is in the JSON `scope` field,
 under the verdict in the PDF and under the verdict in Settings:
@@ -203,6 +233,7 @@ This is the same boundary as [Known limits](#known-limits).
 **Verify a report.** In Settings, **Verify a report…** runs these checks:
 
 - Signature valid
+- Fingerprint matches the public key (the fingerprint the report states is the one computed from its public key)
 - Records form an unbroken chain
 - Every row recomputes from the records
 - Coverage recomputes from the records
@@ -210,7 +241,11 @@ This is the same boundary as [Known limits](#known-limits).
 - PDF matches JSON
 
 On the machine that made the report it also checks that
-**This machine's ledger contains this report**.
+**This machine's ledger contains this report**. The app shows "Signed by
+device key <fingerprint>" only when the signature and fingerprint checks
+both pass; the fingerprint is computed from the report's public key, never
+read from the file. The script prints the fingerprint the same way, marked
+"(unverified)" unless both checks pass.
 
 To verify without the app, on any machine with Node.js:
 
