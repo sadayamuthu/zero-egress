@@ -57,6 +57,7 @@ import { IExtensionManagementService } from '../../../../../../../platform/exten
 import { IMCPService } from '../../../../common/mcpService.js';
 import { ILocalModelDetectionService } from '../../../localModelDetectionService.js';
 import { ILocalStatusService } from '../../../localStatusService.js';
+import { IEgressProofService } from '../../../../common/egressProofService.js';
 import { IStorageService, StorageScope } from '../../../../../../../platform/storage/common/storage.js'
 import { IWorkspacesService } from '../../../../../../../platform/workspaces/common/workspaces.js'
 import { IHostService } from '../../../../../../services/host/browser/host.js'
@@ -245,6 +246,7 @@ const getReactAccessor = (accessor: ServicesAccessor) => {
 		IBackgroundAgentsService: accessor.get(IBackgroundAgentsService),
 		ILocalModelDetectionService: accessor.get(ILocalModelDetectionService),
 		ILocalStatusService: accessor.get(ILocalStatusService),
+		IEgressProofService: accessor.get(IEgressProofService),
 
 		IStorageService: accessor.get(IStorageService),
 		IWorkspacesService: accessor.get(IWorkspacesService),
@@ -466,6 +468,9 @@ export const useLocalStatus = () => {
 }
 
 // a configuration value, kept current
+/** URI.file, for components outside util/, whose own paths to base/ would not resolve from the bundle's folder. */
+export const fileUri = (fsPath: string) => URI.file(fsPath)
+
 export const useConfigurationValue = <T,>(key: string): T | undefined => {
 	const accessor = useAccessor()
 	const configurationService = accessor.get('IConfigurationService')
