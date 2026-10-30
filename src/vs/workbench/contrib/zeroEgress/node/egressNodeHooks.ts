@@ -36,6 +36,7 @@ import { isIP } from 'net';
 import { Readable, Writable } from 'stream';
 import { createRequire, syncBuiltinESMExports } from 'node:module';
 import { Disposable, IDisposable, toDisposable } from '../../../../base/common/lifecycle.js';
+import { destinationOf } from '../common/egressLedger.js';
 import { describeDestination, isAllowed, isLoopbackHost, targetFromUrl } from '../common/egressPolicy.js';
 
 export interface EgressHookTargets {
@@ -54,9 +55,12 @@ export interface EgressHookTargets {
 /**
  * What a check is for, so the caller can count it once: 'socket' is a connection (net.Socket connect, dgram send
  * or connect), 'lookup' a name query (or a lookup result refused for a loopback name), 'wrapper' the early check of
- * fetch, http(s).request, a redirect hop or Electron net, whose connection (if any) is checked again as a socket.
+ * fetch, http(s).request or a redirect hop, whose connection (if any) is checked again as a socket.
+ * 'electronNet' is the destination Electron's net.request (or a net.fetch without one) dials: Chromium makes that
+ * connection, so no socket check follows, and outside main no session webRequest filter sees it either. It is the
+ * only check of such a request a process other than main can count; main counts the request in webRequest instead.
  */
-export type EgressCheckKind = 'socket' | 'lookup' | 'wrapper';
+export type EgressCheckKind = 'socket' | 'lookup' | 'wrapper' | 'electronNet';
 
 export type EgressCheck = (url: string, kind: EgressCheckKind) => boolean;
 
@@ -458,7 +462,8 @@ export function installEgressNodeHooks(check: EgressCheck, t: EgressHookTargets)
 		// Electron stringifies a truthy `url` of any type; do it once here so it and we see the same string.
 		const snapshot = typeof options === 'string' ? options : snapshotOptions(options);
 		if (typeof snapshot !== 'string' && snapshot.url) { snapshot.url = String(snapshot.url); }
-		const denied = electronRequestUrls(snapshot).find(url => !check(url, 'wrapper'));
+		// the first URL is the one Electron dials (one 'electronNet' check per request); the rest are defense in depth
+		const denied = electronRequestUrls(snapshot).find((url, i) => !check(url, i === 0 ? 'electronNet' : 'wrapper'));
 		if (denied !== undefined) { throw egressBlockedError(denied); }
 		// Electron follows redirects by default and only the first URL was checked above. 'error' (and any value
 		// Electron rejects) can pass as is; 'follow' and 'manual' run as 'manual' behind guardRedirects. A string
@@ -483,7 +488,7 @@ export function installEgressNodeHooks(check: EgressCheck, t: EgressHookTargets)
 	} else {
 		tryPatch('fetch', original => async function (this: unknown, input: unknown, ...rest: unknown[]) {
 			const { url, input: checked } = fetchInput(input);
-			if (!check(url, 'wrapper')) { throw egressBlockedError(url); }
+			if (!check(url, 'electronNet')) { throw egressBlockedError(url); } // no guarded net.request below to count it
 			return original.call(this, checked, ...rest);
 		});
 	}
@@ -592,13 +597,13 @@ function patchDns(dns: typeof import('dns'), check: EgressCheck, patch: Patch): 
 /**
  * For processes that never need more than loopback (the shared process): installs the hooks on this
  * process's own modules with an empty allow-list, plus Electron `net` when given. `onBlocked` records;
- * `onAllowed` hears each allowed 'socket' check (the ledger's counting unit).
+ * `onAllowed` hears each allowed 'socket' and 'electronNet' check (one per connection, the ledger's counting unit).
  */
 export function installLoopbackOnlyEgressHooks(onBlocked: (url: string) => void, electronNet?: EgressHookTargets['electronNet'], onAllowed?: (url: string) => void): IDisposable {
 	const require = createRequire(import.meta.url);
 	const check: EgressCheck = (url, kind) => {
 		if (isAllowed(url, [])) {
-			if (kind === 'socket') { onAllowed?.(url); }
+			if (kind === 'socket' || kind === 'electronNet') { onAllowed?.(url); }
 			return true;
 		}
 		onBlocked(url);
@@ -611,14 +616,19 @@ export function installLoopbackOnlyEgressHooks(onBlocked: (url: string) => void,
 export const ALLOWED_REPORT_INTERVAL_MS = 10_000;
 
 /**
- * Counts allowed checks per URL in a process other than main and hands them over every interval (and on
- * dispose); an empty interval sends nothing. The timer never keeps the process alive, and a failing `send`
+ * Counts allowed checks per destination in a process other than main and hands them over every interval (and on
+ * dispose); an empty interval sends nothing. Only `http://host:port/` leaves the process, never a path or query;
+ * non-network URLs are not counted (the ledger would drop them). The timer never keeps the process alive, and a failing `send`
  * is logged, never thrown into a socket hook or the timer.
  */
 export class AllowedCountBatcher extends Disposable {
 	private readonly counts = new Map<string, number>();
 
-	constructor(private readonly send: (counts: { url: string; count: number }[]) => void, intervalMs = ALLOWED_REPORT_INTERVAL_MS) {
+	constructor(
+		private readonly send: (counts: { url: string; count: number }[]) => void,
+		intervalMs = ALLOWED_REPORT_INTERVAL_MS,
+		private readonly logError: (message: string, error: unknown) => void = (message, error) => console.error(message, error),
+	) {
 		super();
 		const timer = setInterval(() => this.flush(), intervalMs);
 		(timer as { unref?: () => void }).unref?.();
@@ -629,7 +639,10 @@ export class AllowedCountBatcher extends Disposable {
 	}
 
 	add(url: string): void {
-		this.counts.set(url, (this.counts.get(url) ?? 0) + 1);
+		const d = destinationOf(url);
+		if (!d) { return; }
+		const key = `http://${d.dest}/`;
+		this.counts.set(key, (this.counts.get(key) ?? 0) + 1);
 	}
 
 	flush(): void {
@@ -639,7 +652,7 @@ export class AllowedCountBatcher extends Disposable {
 		try {
 			this.send(counts);
 		} catch (e) {
-			console.error('ZeroEgress: could not report allowed connections', e);
+			this.logError('ZeroEgress: could not report allowed connections', e);
 		}
 	}
 }

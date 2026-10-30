@@ -23,6 +23,10 @@ const require = createRequire(import.meta.url);
 
 const MAX_RECENT_BLOCKED = 100;
 
+/** Bounds on one reportAllowed batch (10 s of one process's connections); anything beyond is dropped. */
+const MAX_REPORTED_ENTRIES = 1000;
+const MAX_REPORTED_COUNT = 100_000;
+
 /** Client key used when electron-main itself sets the 'settings' source. */
 const MAIN_CLIENT = 'main';
 
@@ -123,7 +127,8 @@ export class EgressGuard extends Disposable {
 	/**
 	 * True when `url` may be reached. A false result is recorded (and counted) through reportBlocked and fired
 	 * on onDidBlock. An allowed 'request' (webRequest) or 'socket' check is counted; 'wrapper' and 'lookup'
-	 * checks are not, since the connection behind them is checked (and counted) as a socket.
+	 * checks are not, since the connection behind them is checked (and counted) as a socket, nor is 'electronNet':
+	 * main's Electron net requests go through webRequest and are counted there as 'request'.
 	 */
 	check(url: string, origin: EgressOrigin = 'main', kind: EgressCheckKind | 'request' = 'request'): boolean {
 		if (isAllowed(url, this._targets)) {
@@ -217,10 +222,10 @@ export class EgressGuardChannel implements IServerChannel<string> {
 			case 'getTargets': return this.guard.targets;
 			case 'reportBlocked': this.guard.reportBlocked(String(args[0]), this.options.reportOrigin); return;
 			case 'reportAllowed': {
-				// from another process: keep only well-formed entries
+				// from another process: keep only well-formed entries, bounded in number and size
 				const counts = (Array.isArray(args[0]) ? args[0] : []).filter((c): c is { url: string; count: number } =>
 					typeof c === 'object' && c !== null && typeof c.url === 'string' && Number.isSafeInteger(c.count) && c.count > 0);
-				this.guard.reportAllowed(counts.map(c => ({ url: c.url, count: c.count })), this.options.reportOrigin);
+				this.guard.reportAllowed(counts.slice(0, MAX_REPORTED_ENTRIES).map(c => ({ url: c.url, count: Math.min(c.count, MAX_REPORTED_COUNT) })), this.options.reportOrigin);
 				return;
 			}
 			case 'getRecentBlocked': return [...this.guard.recentBlocked];

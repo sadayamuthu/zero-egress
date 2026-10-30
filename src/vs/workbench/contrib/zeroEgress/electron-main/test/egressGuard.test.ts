@@ -217,6 +217,7 @@ suite('EgressGuard', () => {
 			assert.strictEqual(guard.check('http://10.0.0.5:8000/v1/chat?x=1', 'renderer'), true);
 			assert.strictEqual(guard.check('http://10.0.0.5:8000/v1', 'main', 'wrapper'), true);
 			assert.strictEqual(guard.check('dns://10.0.0.5/', 'main', 'lookup'), true);
+			assert.strictEqual(guard.check('http://10.0.0.5:8000/', 'main', 'electronNet'), true, 'main counts its Electron net in webRequest');
 			assert.strictEqual(guard.check('vscode-file://vscode-app/x.js', 'renderer'), true);
 			assert.deepStrictEqual(strip(ledger.drain()), [
 				{ type: 'allowed', dest: '10.0.0.5:8000', kind: 'local network', reason: 'model server (set in Settings)', origin: 'main', count: 1 },
@@ -247,6 +248,17 @@ suite('EgressGuard', () => {
 				{ type: 'allowed', dest: 'gone.corp.internal:80', kind: 'local network', reason: 'allowed by that process', origin: 'extensionHost', count: 1 },
 				{ type: 'allowed', dest: 'mcp.corp.internal:9000', kind: 'local network', reason: 'MCP server', origin: 'extensionHost', count: 3 },
 			]);
+		});
+
+		test('reportAllowed over the channel is bounded', async () => {
+			const ledger = new LedgerAggregator();
+			const guard = store.add(new EgressGuard(ledger));
+			const channel = new EgressGuardChannel(guard, { canSetSettings: true, reportOrigin: 'extensionHost' });
+			const many = Array.from({ length: 1500 }, (_, i) => ({ url: `http://127.0.0.1:${i + 1}/`, count: 1 }));
+			await channel.call('window:1', 'reportAllowed', [many]);
+			assert.strictEqual(ledger.drain().length, 1000, 'entries beyond 1000 are dropped');
+			await channel.call('window:1', 'reportAllowed', [[{ url: 'http://127.0.0.1:1/', count: Number.MAX_SAFE_INTEGER }]]);
+			assert.deepStrictEqual(ledger.drain().map(r => (r as { count: number }).count), [100_000]);
 		});
 
 		test('blocks are counted per kind', async () => {

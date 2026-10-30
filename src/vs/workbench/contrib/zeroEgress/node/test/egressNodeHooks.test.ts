@@ -696,6 +696,15 @@ suite('egressNodeHooks', () => {
 		assert.strictEqual(connections, 0);
 	});
 
+	test('kinds reach check: Electron net dials its first destination as electronNet', () => {
+		const calls: [string, EgressCheckKind][] = [];
+		const { fakeNet } = fakeElectronNet();
+		hooks = installEgressNodeHooks((url, kind) => { calls.push([url, kind]); return true; }, { global: globalThis, http, https, net, electronNet: fakeNet });
+		fakeNet.request({ url: 'http://127.0.0.1:1/x' });
+		assert.deepStrictEqual(calls.map(c => c[1]), ['electronNet', 'wrapper', 'wrapper'], 'the dialed URL, then the defense-in-depth URLs');
+		assert.strictEqual(calls[0][0], 'http://127.0.0.1:1/x');
+	});
+
 	test('loopback-only hooks report allowed socket checks only', async () => {
 		const allowed: string[] = [];
 		const blocked: string[] = [];
@@ -707,6 +716,21 @@ suite('egressNodeHooks', () => {
 		assert.strictEqual(allowed.length, 1);
 	});
 
+	test('loopback-only hooks report an allowed Electron net request once', async () => {
+		const allowed: string[] = [];
+		const { fakeNet, requests } = fakeElectronNet();
+		hooks = installLoopbackOnlyEgressHooks(() => { }, fakeNet, url => allowed.push(url));
+		fakeNet.request({ url: 'http://127.0.0.1:1/x' });
+		assert.deepStrictEqual(allowed, ['http://127.0.0.1:1/x'], 'net.request: one count');
+		const response = fakeNet.fetch('http://localhost:2/') as unknown as Promise<Response>;
+		await settle();
+		requests[1].serverResponds(200, {}, 'ok');
+		assert.strictEqual(await (await response).text(), 'ok');
+		assert.deepStrictEqual(allowed, ['http://127.0.0.1:1/x', 'http://localhost:2/'], 'net.fetch: one count (its own check is a wrapper)');
+		assert.throws(() => fakeNet.request({ url: 'https://exfil.example.com/' }));
+		assert.strictEqual(allowed.length, 2);
+	});
+
 	suite('AllowedCountBatcher', () => {
 		test('counts per URL and sends nothing when empty', () => {
 			const sent: { url: string; count: number }[][] = [];
@@ -714,8 +738,9 @@ suite('egressNodeHooks', () => {
 			batcher.flush();
 			assert.deepStrictEqual(sent, []);
 			batcher.add('http://10.0.0.5:8000/');
-			batcher.add('http://10.0.0.5:8000/');
+			batcher.add('http://10.0.0.5:8000/v1/chat?q=secret');
 			batcher.add('http://127.0.0.1:1/');
+			batcher.add('vscode-file://vscode-app/x.js');
 			batcher.flush();
 			batcher.flush();
 			assert.deepStrictEqual(sent, [[{ url: 'http://10.0.0.5:8000/', count: 2 }, { url: 'http://127.0.0.1:1/', count: 1 }]]);
@@ -724,16 +749,32 @@ suite('egressNodeHooks', () => {
 			assert.deepStrictEqual(sent[1], [{ url: 'http://127.0.0.1:1/', count: 1 }], 'dispose flushes what is left');
 		});
 
-		test('flushes on its interval; a failing send does not throw', async () => {
+		test('a failing send is logged, not thrown, and its counts are not resent', () => {
 			const sent: { url: string; count: number }[][] = [];
+			const logged: string[] = [];
 			let fail = true;
-			const batcher = new AllowedCountBatcher(counts => { if (fail) { fail = false; throw new Error('gone'); } sent.push(counts); }, 5);
+			const batcher = new AllowedCountBatcher(counts => { if (fail) { fail = false; throw new Error('gone'); } sent.push(counts); }, undefined, (m, e) => logged.push(`${m}: ${(e as Error).message}`));
 			try {
 				batcher.add('http://127.0.0.1:1/');
-				await new Promise(r => setTimeout(r, 30));
+				batcher.flush();
 				batcher.add('http://127.0.0.1:2/');
-				await new Promise(r => setTimeout(r, 30));
+				batcher.flush();
 				assert.deepStrictEqual(sent, [[{ url: 'http://127.0.0.1:2/', count: 1 }]]);
+				assert.deepStrictEqual(logged, ['ZeroEgress: could not report allowed connections: gone']);
+			} finally {
+				batcher.dispose();
+			}
+		});
+
+		test('flushes on its interval', async () => {
+			const sent: { url: string; count: number }[][] = [];
+			const batcher = new AllowedCountBatcher(counts => sent.push(counts), 5);
+			try {
+				batcher.add('http://127.0.0.1:1/');
+				for (const deadline = Date.now() + 5000; !sent.length && Date.now() < deadline;) {
+					await new Promise(r => setTimeout(r, 5));
+				}
+				assert.deepStrictEqual(sent, [[{ url: 'http://127.0.0.1:1/', count: 1 }]]);
 			} finally {
 				batcher.dispose();
 			}

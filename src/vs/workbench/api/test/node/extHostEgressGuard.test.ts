@@ -69,11 +69,12 @@ suite('ExtHostEgressGuard', () => {
 		assert.strictEqual(guard.check('http://gpubox:8000/', 'socket'), true);
 		assert.strictEqual(guard.check('http://gpubox:8000/v1', 'wrapper'), true);
 		assert.strictEqual(guard.check('dns://gpubox/', 'lookup'), true);
+		assert.strictEqual(guard.check('http://127.0.0.1:1/x', 'electronNet'), true);
 		assert.strictEqual(guard.check('http://example.com:80/', 'socket'), false);
 		assert.deepStrictEqual(allowed, [], 'nothing is sent before the interval');
 		guard.flushAllowed();
 		guard.flushAllowed();
-		assert.deepStrictEqual(allowed, [[{ url: 'http://gpubox:8000/', count: 2 }]]);
+		assert.deepStrictEqual(allowed, [[{ url: 'http://gpubox:8000/', count: 2 }, { url: 'http://127.0.0.1:1/', count: 1 }]], 'host:port only, never the path');
 		assert.deepStrictEqual(reported, ['http://example.com:80/']);
 	});
 });

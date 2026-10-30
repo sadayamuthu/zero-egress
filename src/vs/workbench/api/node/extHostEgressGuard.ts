@@ -13,7 +13,7 @@ import { EgressTargetDto, ExtHostEgressGuardShape, MainThreadEgressGuardShape } 
  * ZeroEgress: the extension host's copy of the egress allow-list, enforced by the Node hooks that
  * proxyResolver installs. The renderer's MainThreadEgressGuard relays the list from the main-process
  * guard; blocks are reported back there for the "ZeroEgress: Network" log. Until the first list
- * arrives (or if it never does), only loopback is reachable. Allowed socket checks are counted per URL
+ * arrives (or if it never does), only loopback is reachable. Allowed socket and Electron net checks are counted per URL
  * and reported every 10 s for the egress ledger. (ZeroEgress)
  */
 export class ExtHostEgressGuard extends Disposable implements ExtHostEgressGuardShape { // ZeroEgress
@@ -42,7 +42,7 @@ export class ExtHostEgressGuard extends Disposable implements ExtHostEgressGuard
 
 	readonly check = (url: string, kind?: EgressCheckKind): boolean => { // ZeroEgress
 		if (isAllowed(url, this.targets)) {
-			if (kind === 'socket') { this.allowed.add(url); } // ZeroEgress
+			if (kind === 'socket' || kind === 'electronNet') { this.allowed.add(url); } // ZeroEgress: one per connection
 			return true;
 		}
 		this.mainThread.$reportBlocked(url);
