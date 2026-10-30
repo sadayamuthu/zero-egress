@@ -22,6 +22,16 @@ export type LedgerBody =
 
 export interface LedgerRecord { seq: number; prevHash: string; body: LedgerBody }
 
+export function timeOf(body: LedgerBody): string {
+	switch (body.type) {
+		case 'heartbeat': return body.hour;
+		case 'allowed': return body.hour;
+		case 'blocked': return body.minute;
+		case 'blocked_lookup': return body.minute;
+		default: return body.time;
+	}
+}
+
 export function kindOfHost(host: string): DestinationKind {
 	return isLoopbackHost(host) ? 'this machine' : isPrivateHost(host) ? 'local network' : 'internet';
 }

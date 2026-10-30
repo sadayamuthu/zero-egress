@@ -5,19 +5,9 @@
 
 import type { Database } from '@vscode/sqlite3';
 import { GENESIS_HASH, chainHash } from '../../common/auditTypes.js';
-import { LedgerBody, LedgerRecord } from '../../common/egressLedger.js';
+import { LedgerBody, LedgerRecord, timeOf } from '../../common/egressLedger.js';
 
 export type { LedgerRecord };
-
-function timeOf(body: LedgerBody): string {
-	switch (body.type) {
-		case 'heartbeat': return body.hour;
-		case 'allowed': return body.hour;
-		case 'blocked': return body.minute;
-		case 'blocked_lookup': return body.minute;
-		default: return body.time;
-	}
-}
 
 export class LedgerStore {
 

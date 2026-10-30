@@ -124,4 +124,67 @@ suite('EgressProof', () => {
 		assert.strictEqual(p.scope, EGRESS_PROOF_SCOPE);
 		assert.ok(checkProofBody(p).every(c => c.ok));
 	});
+
+	test('edited body with the same seq fails the chain hash', () => {
+		const p = buildEgressProof(chain([allowed(1, 'a.example:443', 'main', 1), allowed(2, 'b.example:443', 'main', 1)]), input);
+		(p.ledger.records[0].body as { count: number }).count = 9;
+		const c = checkProofBody(p)[0];
+		assert.strictEqual(c.ok, false);
+		assert.ok(c.detail!.includes('Record 2'));
+	});
+
+	test('broken chain leaves a gap at the record time', () => {
+		const records = chain([allowed(1, 'a.example:443', 'main', 1), allowed(2, 'b.example:443', 'main', 1)]);
+		assert.deepStrictEqual(buildEgressProof(records, { ...input, brokenAtSeq: 2 }).coverage.gaps, [{ from: H(2), why: 'chain' }]);
+		assert.deepStrictEqual(buildEgressProof(records, { ...input, brokenAtSeq: 9 }).coverage.gaps, [{ from: H(0), why: 'chain' }]);
+	});
+
+	test('reset gap is clamped to the period end', () => {
+		const p = buildEgressProof([], { ...input, resetSince: H(20) });
+		assert.deepStrictEqual(p.coverage.gaps, [{ from: H(0), to: H(12), why: 'reset' }]);
+	});
+
+	test('crash is found when records start mid-session', () => {
+		const p = buildEgressProof(chain([
+			{ type: 'heartbeat', hour: H(1) },
+			{ type: 'heartbeat', hour: H(2) },
+			{ type: 'session_start', time: H(5), version: '1', commit: 'c' },
+		]), input);
+		assert.deepStrictEqual(p.coverage.gaps, [{ from: H(2), to: H(5), why: 'crash' }]);
+	});
+
+	test('empty records need zero seqs', () => {
+		const p = buildEgressProof([], input);
+		p.ledger.headSeq = 4;
+		assert.strictEqual(checkProofBody(p)[0].ok, false);
+	});
+
+	test('coverage check catches edited hours, a deleted crash gap and a wrong verdict', () => {
+		const crash = chain([
+			{ type: 'session_start', time: H(1), version: '1', commit: 'c' },
+			{ type: 'heartbeat', hour: H(1) },
+			{ type: 'session_start', time: H(5), version: '1', commit: 'c' },
+		]);
+		const name = 'Coverage recomputes from the records';
+		const good = buildEgressProof(crash, input);
+		const ok = checkProofBody(good);
+		assert.deepStrictEqual(ok.map(c => c.name), ['Records form an unbroken chain', 'Every row recomputes from the records', name, 'Scope statement present']);
+		assert.ok(ok.every(c => c.ok));
+
+		const hours = buildEgressProof(crash, input);
+		hours.coverage.hoursRecorded = 9;
+		assert.strictEqual(checkProofBody(hours)[2].ok, false);
+
+		const noGap = buildEgressProof(crash, input);
+		noGap.coverage.gaps = [];
+		noGap.verdict = 'ok';
+		assert.strictEqual(checkProofBody(noGap)[2].ok, false);
+
+		const verdict = buildEgressProof(crash, input);
+		verdict.verdict = 'ok';
+		assert.strictEqual(checkProofBody(verdict)[2].ok, false);
+
+		const reset = buildEgressProof(crash, { ...input, resetSince: H(3) });
+		assert.strictEqual(checkProofBody(reset)[2].ok, true);
+	});
 });

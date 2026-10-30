@@ -7,7 +7,7 @@
 // to the standalone verifier script, so every sort here is ordinal (never localeCompare).
 
 import { GENESIS_HASH, chainHash, stableStringify } from './auditTypes.js';
-import { DestinationKind, EgressOrigin, LedgerBody, LedgerRecord } from './egressLedger.js';
+import { DestinationKind, EgressOrigin, LedgerRecord, timeOf } from './egressLedger.js';
 
 export const EGRESS_PROOF_SCOPE = 'Covers connections made by ZeroEgress itself. Programs it starts (git, terminal and agent commands, language servers) are not covered.';
 export const EGRESS_PROOF_SIGNATURE_LIMIT = 'A valid signature proves this report wasn\'t changed and was made with this device\'s key. It does not prove the machine itself wasn\'t tampered with.';
@@ -49,16 +49,6 @@ const cmp = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
 
 function sortedUnique<T extends string>(values: Iterable<T>): T[] {
 	return [...new Set(values)].sort(cmp);
-}
-
-function timeOf(body: LedgerBody): string {
-	switch (body.type) {
-		case 'heartbeat': return body.hour;
-		case 'allowed': return body.hour;
-		case 'blocked': return body.minute;
-		case 'blocked_lookup': return body.minute;
-		default: return body.time;
-	}
 }
 
 interface Acc { kind?: DestinationKind; reasons: Set<string>; origins: Set<EgressOrigin>; count: number; first: string; last: string }
@@ -103,11 +93,12 @@ function computeRows(records: LedgerRecord[]): Pick<EgressProofBody, 'allowed' |
 	};
 }
 
-function computeCoverage(records: LedgerRecord[], input: EgressProofInput): EgressProofBody['coverage'] {
-	const { period, resetSince, brokenAtSeq } = input;
+/** Hours recorded and crash gaps: the parts of coverage that derive from the records and period alone. */
+function computeSessions(records: LedgerRecord[], period: { from: string; to: string }): { hoursRecorded: number; crashGaps: EgressProofGap[] } {
 	const hours = new Set<string>();
-	const gaps: EgressProofGap[] = [];
-	let openStart: string | undefined; // session_start time of a session with no session_end yet
+	const crashGaps: EgressProofGap[] = [];
+	// Records may start mid-session: then the part before the first session_start is an open session.
+	let openStart: string | undefined = records.length > 0 && records[0].body.type !== 'session_start' ? timeOf(records[0].body) : undefined;
 	let lastHeartbeat: string | undefined; // latest heartbeat in the open session
 	for (const { body } of records) {
 		if (body.type === 'heartbeat') {
@@ -115,7 +106,7 @@ function computeCoverage(records: LedgerRecord[], input: EgressProofInput): Egre
 			if (openStart !== undefined) { lastHeartbeat = body.hour; }
 		} else if (body.type === 'session_start') {
 			if (openStart !== undefined) {
-				gaps.push({ from: lastHeartbeat ?? openStart, to: body.time, why: 'crash' });
+				crashGaps.push({ from: lastHeartbeat ?? openStart, to: body.time, why: 'crash' });
 			}
 			openStart = body.time;
 			lastHeartbeat = undefined;
@@ -124,6 +115,15 @@ function computeCoverage(records: LedgerRecord[], input: EgressProofInput): Egre
 			lastHeartbeat = undefined;
 		}
 	}
+	return { hoursRecorded: hours.size, crashGaps };
+}
+
+const sortGaps = (gaps: EgressProofGap[]) => gaps.sort((a, b) => cmp(a.from, b.from) || cmp(a.why, b.why) || cmp(a.to ?? '', b.to ?? ''));
+
+function computeCoverage(records: LedgerRecord[], input: EgressProofInput): EgressProofBody['coverage'] {
+	const { period, resetSince, brokenAtSeq } = input;
+	const { hoursRecorded, crashGaps } = computeSessions(records, period);
+	const gaps = [...crashGaps];
 	if (resetSince !== undefined && resetSince > period.from) {
 		gaps.push({ from: period.from, to: resetSince < period.to ? resetSince : period.to, why: 'reset' });
 	}
@@ -131,8 +131,7 @@ function computeCoverage(records: LedgerRecord[], input: EgressProofInput): Egre
 		const rec = records.find(r => r.seq === brokenAtSeq);
 		gaps.push({ from: rec ? timeOf(rec.body) : period.from, why: 'chain' });
 	}
-	gaps.sort((a, b) => cmp(a.from, b.from) || cmp(a.why, b.why) || cmp(a.to ?? '', b.to ?? ''));
-	return { hoursRecorded: hours.size, gaps };
+	return { hoursRecorded, gaps: sortGaps(gaps) };
 }
 
 export function buildEgressProof(records: LedgerRecord[], input: EgressProofInput): EgressProofBody {
@@ -173,6 +172,9 @@ function checkChain(ledger: EgressProofBody['ledger']): ProofCheck {
 	const name = 'Records form an unbroken chain';
 	const { records } = ledger;
 	let hash = ledger.prevHashBeforeFirst;
+	if (records.length === 0 && (ledger.firstSeq !== 0 || ledger.headSeq !== 0)) {
+		return { name, ok: false, detail: 'No records, but a first or head seq is stated' };
+	}
 	if (records.length > 0 && records[0].seq !== ledger.firstSeq) {
 		return { name, ok: false, detail: `First record is seq ${records[0].seq}, expected ${ledger.firstSeq}` };
 	}
@@ -201,11 +203,38 @@ function firstMismatch<T>(stated: T[], computed: T[], keyOf: (r: T) => string): 
 function checkRows(body: EgressProofBody): ProofCheck {
 	const name = 'Every row recomputes from the records';
 	const rows = computeRows(body.ledger.records);
+	const same = stableStringify(body.allowed) === stableStringify(rows.allowed) &&
+		stableStringify(body.blocked) === stableStringify(rows.blocked) &&
+		stableStringify(body.lookupsBlocked) === stableStringify(rows.lookupsBlocked);
+	if (same) { return { name, ok: true }; }
 	const bad =
 		firstMismatch(body.allowed, rows.allowed, r => r.dest) ??
 		firstMismatch(body.blocked, rows.blocked, r => r.dest) ??
 		firstMismatch(body.lookupsBlocked, rows.lookupsBlocked, r => r.host);
-	if (bad !== undefined) { return { name, ok: false, detail: `Row for ${bad} does not match the records` }; }
+	return { name, ok: false, detail: bad !== undefined ? `Row for ${bad} does not match the records` : 'Rows are not in the expected order' };
+}
+
+const isIso = (v: unknown) => typeof v === 'string' && /^\d{4}-\d\d-\d\dT[\d:.]+Z$/.test(v) && !isNaN(Date.parse(v));
+
+function checkCoverage(body: EgressProofBody): ProofCheck {
+	const name = 'Coverage recomputes from the records';
+	const { coverage } = body;
+	const { hoursRecorded, crashGaps } = computeSessions(body.ledger.records, body.period);
+	if (coverage.hoursRecorded !== hoursRecorded) {
+		return { name, ok: false, detail: `Hours recorded is ${coverage.hoursRecorded}, the records give ${hoursRecorded}` };
+	}
+	const stated = coverage.gaps.filter(g => g.why === 'crash');
+	if (stableStringify(stated) !== stableStringify(sortGaps(crashGaps))) {
+		return { name, ok: false, detail: 'Crash gaps do not match the records' };
+	}
+	for (const g of coverage.gaps) {
+		if ((g.why !== 'crash' && g.why !== 'reset' && g.why !== 'chain') || !isIso(g.from) || (g.to !== undefined && !isIso(g.to))) {
+			return { name, ok: false, detail: 'A gap is malformed' };
+		}
+	}
+	if (body.verdict !== (coverage.gaps.length > 0 ? 'gaps' : 'ok')) {
+		return { name, ok: false, detail: 'Verdict does not match the gaps' };
+	}
 	return { name, ok: true };
 }
 
@@ -213,6 +242,7 @@ export function checkProofBody(body: EgressProofBody): ProofCheck[] {
 	return [
 		checkChain(body.ledger),
 		checkRows(body),
+		checkCoverage(body),
 		body.scope === EGRESS_PROOF_SCOPE ? { name: 'Scope statement present', ok: true } : { name: 'Scope statement present', ok: false, detail: 'Scope statement is missing or changed' },
 	];
 }
