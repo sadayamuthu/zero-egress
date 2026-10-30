@@ -1328,6 +1328,7 @@ export class CodeApplication extends Disposable {
 			getTargets: () => this.egressGuard.targets, // ZeroEgress
 			getAuditStore: () => proofAuditStore, // ZeroEgress
 			dialog: accessor.get(IDialogMainService), // ZeroEgress
+			onError: (msg, e) => this.logService.error(msg, e), // ZeroEgress
 		}); // ZeroEgress
 		mainProcessElectronServer.registerChannel(EGRESS_PROOF_CHANNEL, ProxyChannel.fromService(egressProofService, disposables)); // ZeroEgress
 

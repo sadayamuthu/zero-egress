@@ -16,7 +16,7 @@ import { EgressProofPeriod, EgressProofSummary, IEgressProofService } from '../.
 import { LocalAuditStore } from '../audit/localAuditStore.js';
 import { EgressLedgerService } from './egressLedgerService.js';
 import { EgressProofKey } from './egressProofKey.js';
-import { ON_MACHINE_CHECK, ThisMachineLedger, auditCoverage, lastAuditState, periodOf, reportBasePath, targetLabel, verifyReportText } from './egressProofReport.js';
+import { ON_MACHINE_CHECK, ThisMachineLedger, auditCoverage, lastAuditState, periodOf, reportBasePath, reportFileProblem, targetLabel, verifyReportText } from './egressProofReport.js';
 
 const AUDIT_LOOKBACK_MS = 31 * 24 * 3600_000;
 
@@ -31,6 +31,28 @@ export interface EgressProofMainServiceOptions {
 	/** The audit store once the audit pipeline is up; undefined before that or if it failed. */
 	getAuditStore(): LocalAuditStore | undefined;
 	dialog: IDialogMainService;
+	onError?: (message: string, error: unknown) => void;
+}
+
+/**
+ * Reads a renderer-supplied path for verify, bounded: it must be a regular file no bigger than the cap. Stat comes first
+ * because opening a FIFO would block; the open handle is checked again so a swapped file can't slip past.
+ */
+async function readBounded(p: string): Promise<{ data: Buffer } | { problem: string }> {
+	try {
+		const before = reportFileProblem(await fs.promises.stat(p));
+		if (before) { return { problem: before }; }
+		const handle = await fs.promises.open(p, 'r');
+		try {
+			const after = reportFileProblem(await handle.stat());
+			if (after) { return { problem: after }; }
+			return { data: await handle.readFile() };
+		} finally {
+			await handle.close();
+		}
+	} catch (e) {
+		return { problem: (e as NodeJS.ErrnoException)?.code === 'ENOENT' ? 'The file does not exist' : 'The file could not be read' };
+	}
 }
 
 function localDate(ms: number): string {
@@ -63,13 +85,19 @@ export class EgressProofMainService implements Omit<IEgressProofService, '_servi
 		const since = await store.createdAt();
 		const to = new Date().toISOString();
 		const chain = await store.verifyChain();
+		let key: EgressProofBody['key'] = { publicKey: '', fingerprint: '', storage: 'file' };
+		try {
+			key = this.keyInfo();
+		} catch (e) {
+			this.opts.onError?.('[ZeroEgress] Egress Proof signing key unavailable', e); // the summary still shows; only the fingerprint is blank
+		}
 		const body = buildEgressProof(await store.recordsBetween(since, to), {
 			createdAt: to,
 			period: { from: since, to },
 			identity: { machineId: '', user: '', version: '', commit: '', os: '', networkSettings: [] },
 			modelUsage: null,
 			brokenAtSeq: chain.ok ? undefined : chain.brokenAtSeq,
-			key: this.keyInfo(),
+			key,
 		});
 		return {
 			since,
@@ -116,24 +144,28 @@ export class EgressProofMainService implements Omit<IEgressProofService, '_servi
 		const jsonPath = `${base}.json`;
 		await fs.promises.writeFile(pdfPath, pdf, { flag: 'wx' }); // 6. never overwrite
 		body.pdfSha256 = createHash('sha256').update(pdf).digest('hex'); // 7.
-		const signature = this.key().sign(canonicalProof(body)); // 8.
-		await fs.promises.writeFile(jsonPath, JSON.stringify({ ...body, signature }, undefined, '\t'), { flag: 'wx' }); // 9.
+		try {
+			const signature = this.key().sign(canonicalProof(body)); // 8.
+			await fs.promises.writeFile(jsonPath, JSON.stringify({ ...body, signature }, undefined, '\t'), { flag: 'wx' }); // 9.
+		} catch (e) {
+			await fs.promises.unlink(pdfPath).catch(() => undefined); // no orphan PDF without its JSON
+			throw e;
+		}
 		return { jsonPath, pdfPath };
 	}
 
 	async verifyReport(jsonPath: string, pdfPath?: string): Promise<ProofCheck[]> {
-		let text: string;
-		try {
-			text = await fs.promises.readFile(jsonPath, 'utf8');
-		} catch (e) {
-			return [{ name: 'Report file is readable', ok: false, detail: e instanceof Error ? e.message : String(e) }];
+		const json = await readBounded(jsonPath);
+		if ('problem' in json) {
+			return [{ name: 'Report file is readable', ok: false, detail: json.problem }];
 		}
 		let pdf: Buffer | undefined;
 		let pdfError: string | undefined;
 		if (pdfPath) {
-			try { pdf = await fs.promises.readFile(pdfPath); } catch (e) { pdfError = e instanceof Error ? e.message : String(e); }
+			const read = await readBounded(pdfPath);
+			if ('problem' in read) { pdfError = read.problem; } else { pdf = read.data; }
 		}
-		const checks = await verifyReportText(text, pdf, await this.thisMachine());
+		const checks = await verifyReportText(json.data.toString('utf8'), pdf, await this.thisMachine());
 		if (pdfError !== undefined && !(checks.length === 1 && !checks[0].ok)) {
 			const at = checks.findIndex(c => c.name === ON_MACHINE_CHECK);
 			checks.splice(at === -1 ? checks.length : at, 0, { name: 'PDF matches JSON', ok: false, detail: `The PDF could not be read: ${pdfError}` });

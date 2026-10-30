@@ -12,7 +12,7 @@ import { GENESIS_HASH, chainHash } from '../../../common/auditTypes.js';
 import { LedgerBody, LedgerRecord } from '../../../common/egressLedger.js';
 import { buildEgressProof, canonicalProof } from '../../../common/egressProof.js';
 import { EgressProofKey } from '../egressProofKey.js';
-import { auditCoverage, periodOf, reportBasePath, targetLabel, verifyReportText } from '../egressProofReport.js';
+import { MAX_REPORT_FILE_BYTES, auditCoverage, periodOf, reportBasePath, reportFileProblem, targetLabel, verifyReportText } from '../egressProofReport.js';
 
 const H = (h: number) => new Date(Date.UTC(2026, 9, 30, h)).toISOString();
 
@@ -57,6 +57,16 @@ suite('EgressProofReport', () => {
 		assert.deepStrictEqual(auditCoverage(records, { from: H(0), to: H(10) }, false), [{ from: H(2), to: H(4) }, { from: H(6), to: H(10) }]);
 		assert.deepStrictEqual(auditCoverage(records, { from: H(0), to: H(10) }, true), [{ from: H(0), to: H(4) }, { from: H(6), to: H(10) }]);
 		assert.deepStrictEqual(auditCoverage([], { from: H(0), to: H(10) }, false), []);
+	});
+
+	test('report files must be regular and bounded', () => {
+		const file = (size: number) => ({ isFile: () => true, size });
+		assert.strictEqual(reportFileProblem(file(10)), undefined);
+		assert.strictEqual(reportFileProblem(file(MAX_REPORT_FILE_BYTES)), undefined);
+		assert.strictEqual(reportFileProblem(file(MAX_REPORT_FILE_BYTES + 1)), 'The file is larger than 64 MB');
+		assert.strictEqual(reportFileProblem({ isFile: () => false, size: 0 }), 'Not a regular file');
+		assert.strictEqual(reportFileProblem(fs.statSync(dir)), 'Not a regular file');
+		if (process.platform !== 'win32') { assert.strictEqual(reportFileProblem(fs.statSync('/dev/zero')), 'Not a regular file'); }
 	});
 
 	test('target labels', () => {
@@ -123,6 +133,7 @@ suite('EgressProofReport', () => {
 				assert.strictEqual(checks[0].ok, false);
 				assert.ok(checks[0].detail);
 			}
+			assert.strictEqual((await verifyReportText('{"secret bytes', undefined, undefined))[0].detail, 'The file is not valid JSON');
 		});
 	});
 });

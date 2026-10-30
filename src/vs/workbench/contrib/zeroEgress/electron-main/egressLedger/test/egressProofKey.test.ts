@@ -58,6 +58,11 @@ suite('EgressProofKey', () => {
 			assert.strictEqual(fs.statSync(file).mode & 0o777, 0o600);
 		}
 		assert.strictEqual(EgressProofKey.load(dir, safe).publicKey, key.publicKey);
+		if (process.platform !== 'win32') {
+			fs.chmodSync(file, 0o644);
+			EgressProofKey.load(dir, safe);
+			assert.strictEqual(fs.statSync(file).mode & 0o777, 0o600, 'a reused key file is made owner-only again');
+		}
 	});
 
 	test('sign and verify round trip; tampered data fails', () => {

@@ -60,7 +60,7 @@ function gapText(g: EgressProofGap): string {
 		case 'crash': return `${dateTime(g.from)} to ${g.to ? dateTime(g.to) : 'now'}: the app stopped without closing the ledger. Connections after its last record are unknown.`;
 		case 'reset': return `${dateTime(g.from)} to ${g.to ? dateTime(g.to) : 'now'}: the ledger was deleted or reset, so this time is not recorded.`;
 		case 'chain': return `From ${dateTime(g.from)}: the ledger's record chain is broken.`;
-		default: return esc(g.why);
+		default: return String(g.why); // escaped by the caller
 	}
 }
 

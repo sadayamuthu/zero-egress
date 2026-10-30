@@ -62,6 +62,16 @@ export function lastAuditState(records: LedgerRecord[]): boolean | undefined {
 	return undefined;
 }
 
+/** Largest report JSON or PDF that verify will read, so a huge file can't exhaust main. */
+export const MAX_REPORT_FILE_BYTES = 64 * 1024 * 1024;
+
+/** Why a file can't be read for verify (not a regular file, or too big), or undefined when it can. */
+export function reportFileProblem(stat: { isFile(): boolean; size: number }, max = MAX_REPORT_FILE_BYTES): string | undefined {
+	if (!stat.isFile()) { return 'Not a regular file'; }
+	if (stat.size > max) { return `The file is larger than ${Math.round(max / (1024 * 1024))} MB`; }
+	return undefined;
+}
+
 export function targetLabel(t: EgressTarget): string {
 	const dest = t.host.includes(':') ? `[${t.host}]:${t.port}` : `${t.host}:${t.port}`;
 	return t.reason ? `${dest} (${t.reason})` : dest;
@@ -99,8 +109,8 @@ export async function verifyReportText(jsonText: string, pdf: Uint8Array | undef
 	let parsed: any;
 	try {
 		parsed = JSON.parse(jsonText);
-	} catch (e) {
-		return [{ name: 'Report file is readable', ok: false, detail: `Not valid JSON: ${e instanceof Error ? e.message : String(e)}` }];
+	} catch {
+		return [{ name: 'Report file is readable', ok: false, detail: 'The file is not valid JSON' }];
 	}
 	const why = malformed(parsed);
 	if (why) { return [{ name: 'Report file is readable', ok: false, detail: why }]; }

@@ -39,6 +39,7 @@ export class EgressProofKey {
 			return new EgressProofKey(createPrivateKey(safe.decryptString(fs.readFileSync(encryptedPath))), 'safeStorage');
 		}
 		if (fs.existsSync(plainPath)) {
+			if (process.platform !== 'win32') { fs.chmodSync(plainPath, 0o600); } // keep it owner-only even if it was loosened
 			return new EgressProofKey(createPrivateKey(fs.readFileSync(plainPath, 'utf8')), 'file');
 		}
 		const { privateKey } = generateKeyPairSync('ed25519');
