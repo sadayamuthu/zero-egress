@@ -260,6 +260,12 @@ turned on auto-approve for terminal commands.
 - [EGRESS.md](EGRESS.md): what was removed, how the runtime guard works,
   the known limits, and how to verify a release with a firewall or a
   logging proxy.
+- Egress Proof: Settings, **Network & privacy**, **Egress Proof**, **Create
+  report…** saves a signed PDF and JSON of the destinations ZeroEgress
+  connected to, built from an always-on local ledger. Anyone can check it
+  offline with `node scripts/zero-egress/verify-egress-proof.mjs`. See
+  [Egress Proof report](EGRESS.md#egress-proof-report) for what it covers
+  and what a signature does and doesn't prove.
 - [SECURITY.md](SECURITY.md): how to report a vulnerability. Any connection
   to a host you didn't configure counts.
 - [CONTRIBUTING.md](CONTRIBUTING.md): building from source, tests and the

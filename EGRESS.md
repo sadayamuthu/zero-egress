@@ -8,6 +8,7 @@ check a release yourself without trusting any of this.
 - [What was removed](#what-was-removed)
 - [The runtime guard](#the-runtime-guard)
 - [The static gate](#the-static-gate)
+- [Egress Proof report](#egress-proof-report)
 - [Known limits](#known-limits)
 - [Verify it yourself](#verify-it-yourself)
 
@@ -142,6 +143,94 @@ The brand gate (`check-brand.sh`) also runs on each packaged app, but it
 skips `out*/` and `node_modules/`, so on a packaged app it checks little
 of the shipped code; widening it is a tracked follow-up. It is a naming
 check, not an egress check.
+
+## Egress Proof report
+
+ZeroEgress keeps a ledger of the destinations it connects to, and can turn
+it into a signed report you can hand to someone else. The ledger is always
+on. You don't have to switch anything on beforehand.
+
+**What the ledger records.** One file, `zero-egress-ledger.vscdb`, in the
+user data folder. It holds only `host:port`, counts, times, origins
+(renderer, main, extension host, shared process) and reasons. Never URL
+paths, queries, request bodies, code, prompts, answers or file names. It
+records:
+
+- `session_start` and `session_end`, and an hourly heartbeat while the app runs
+- allowed connections, counted per hour
+- blocked connections, counted per minute
+- blocked name lookups, listed separately
+- when the audit was turned on or off
+
+Main flushes to disk every 60 seconds and on shutdown. The extension host
+and the shared process report their allowed counts every 10 seconds. Rows
+older than 400 days are pruned. The hash chain survives pruning, so a
+report still verifies after old rows are gone.
+
+**What a count means.**
+
+| Where | One count is |
+|-------|--------------|
+| Windows (renderer, webviews) | One HTTP request |
+| Node code in the main process, the extension host and the shared process | One socket |
+| Extension host and shared process only | One Electron `net` request, as well |
+
+DNS lookups aren't counted. A lookup the guard blocks is listed
+separately, as a blocked name lookup.
+
+**Gaps.** The report shows a yellow verdict, with the gaps listed, when the
+ledger can't vouch for every moment. There is no red state. A gap is one of:
+
+- a crash: a session that started and never ended
+- a ledger reset: the ledger file is newer than the first-run marker
+- a chain break: the records no longer link to each other
+
+**Create a report.** Settings, **Network & privacy**, **Egress Proof**,
+**Create report…**. It saves `egress-proof-<date>.pdf` and
+`egress-proof-<date>.json`. The report is signed with an Ed25519 key that
+belongs to this device. The key is stored with the operating system's
+encryption (Electron `safeStorage`). Where the OS offers none, the key is
+a file only your account can read, and the report says so.
+
+**What the report covers.** The same sentence is in the JSON `scope` field,
+under the verdict in the PDF and under the verdict in Settings:
+
+> Covers connections made by ZeroEgress itself. Programs it starts (git, terminal and agent commands, language servers) are not covered.
+
+This is the same boundary as [Known limits](#known-limits).
+
+**Verify a report.** In Settings, **Verify a report…** runs these checks:
+
+- Signature valid
+- Records form an unbroken chain
+- Every row recomputes from the records
+- Coverage recomputes from the records
+- Scope statement present
+- PDF matches JSON
+
+On the machine that made the report it also checks that
+**This machine's ledger contains this report**.
+
+To verify without the app, on any machine with Node.js:
+
+```sh
+node scripts/zero-egress/verify-egress-proof.mjs egress-proof-<date>.json [egress-proof-<date>.pdf]
+```
+
+The script uses only `node:crypto` and `node:fs`, and makes no network
+connection. It exits 0 when every check passes, 1 when any check fails, and
+2 on bad usage. Give it the PDF as well to run the PDF matches JSON check.
+It can't run the check against this machine's ledger, because that needs
+the ledger file.
+
+**What the signature proves.**
+
+> A valid signature proves this report wasn't changed and was made with this device's key. It does not prove the machine itself wasn't tampered with.
+
+The signature has no certificate behind it: whoever holds the report
+decides whether to trust this device's key. For an independent check of
+what the machine sent, use the firewall or proxy methods in
+[Verify it yourself](#verify-it-yourself).
 
 ## Known limits
 
