@@ -1177,6 +1177,7 @@ export const ZeroEgressSwitch = ({
 	disabled?: boolean;
 	size?: 'xxs' | 'xs' | 'sm' | 'sm+' | 'md';
 }) => {
+	// theme tokens, so both states read in light and dark themes: off is an outline, on is the accent
 	return (
 		<label className="inline-flex items-center" {...props}>
 			<div
@@ -1184,7 +1185,7 @@ export const ZeroEgressSwitch = ({
 				className={`
 			cursor-pointer
 			relative inline-flex items-center rounded-full transition-colors duration-200 ease-in-out
-			${value ? 'bg-zinc-900 dark:bg-white' : 'bg-white dark:bg-zinc-600'}
+			${value ? 'bg-ze-accent' : 'bg-transparent ring-1 ring-inset ring-ze-fg-3'}
 			${disabled ? 'opacity-25' : ''}
 			${size === 'xxs' ? 'h-3 w-5' : ''}
 			${size === 'xs' ? 'h-4 w-7' : ''}
@@ -1195,7 +1196,8 @@ export const ZeroEgressSwitch = ({
 			>
 				<span
 					className={`
-			  inline-block transform rounded-full bg-white dark:bg-zinc-900 shadow transition-transform duration-200 ease-in-out
+			  inline-block transform rounded-full shadow transition-transform duration-200 ease-in-out
+			  ${value ? 'bg-ze-on-accent' : 'bg-ze-fg-3'}
 			  ${size === 'xxs' ? 'h-2 w-2' : ''}
 			  ${size === 'xs' ? 'h-2.5 w-2.5' : ''}
 			  ${size === 'sm' ? 'h-3 w-3' : ''}
