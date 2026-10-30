@@ -247,7 +247,9 @@ both pass; the fingerprint is computed from the report's public key, never
 read from the file. The script prints the fingerprint the same way, marked
 "(unverified)" unless both checks pass.
 
-To verify without the app, on any machine with Node.js:
+To verify without the app, on any machine with Node.js, use the script from
+the source tree or the `verify-egress-proof.mjs` attached to every GitHub
+Release (listed in that release's `SHA256SUMS`):
 
 ```sh
 node scripts/zero-egress/verify-egress-proof.mjs egress-proof-<date>.json [egress-proof-<date>.pdf]
