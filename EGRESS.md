@@ -40,6 +40,12 @@ connects. The allow-list is:
   you configure is allowed.
 - **Everything else:** blocked.
 
+**First-run detection** stays inside this list. It probes only
+`127.0.0.1:11434` (Ollama), `localhost:1234` (LM Studio) and
+`localhost:8000` (vLLM / oMLX), plus a URL you type under **Add URL**. A typed
+URL is leased for that one list request, the same way a configured endpoint
+is, and is not saved unless you apply it. Nothing on your network is scanned.
+
 Where it is enforced:
 
 | Process | How |
