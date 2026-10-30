@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------*/
 
 // Shows where the app may connect (Local / LAN / Internet) in the status bar and the title bar, and adds the
-// ZeroEgress mark and the Editor | Agents switch to the title bar. Every destination the egress guard allows counts (see common/localStatus.ts).
+// ZeroEgress mark and the Editor | Agents switch to the title bar. The status itself comes from ILocalStatusService.
 
 import { $, append } from '../../../../base/browser/dom.js';
 import { mainWindow } from '../../../../base/browser/window.js';
@@ -15,11 +15,9 @@ import { IWorkbenchContribution, registerWorkbenchContribution2, WorkbenchPhase 
 import { IWorkbenchLayoutService, Parts } from '../../../services/layout/browser/layoutService.js';
 import { IOutputService } from '../../../services/output/common/output.js';
 import { IStatusbarEntryAccessor, IStatusbarService, StatusbarAlignment } from '../../../services/statusbar/browser/statusbar.js';
-import { IEgressGuardService } from '../common/egressGuardService.js';
-import { formatLocalStatus, LocalStatus, localStatusOf } from '../common/localStatus.js';
-import { IZeroEgressSettingsService } from '../common/zeroEgressSettingsService.js';
 import { ZERO_EGRESS_AGENTS_VIEW_VISIBLE_KEY, ZERO_EGRESS_SHOW_AGENTS_ACTION_ID, ZERO_EGRESS_SHOW_EDITOR_ACTION_ID } from './actionIDs.js';
 import { NETWORK_OUTPUT_CHANNEL_ID } from './egressTargetsContribution.js';
+import { ILocalStatusService } from './localStatusService.js';
 
 const SHOW_NETWORK_LOG_COMMAND_ID = 'zeroEgress.showNetworkLog';
 
@@ -48,15 +46,11 @@ function createMark(): SVGElement {
 class LocalStatusContribution extends Disposable implements IWorkbenchContribution {
 	static readonly ID = 'workbench.contrib.zeroEgress.localStatus';
 
-	private status: LocalStatus | undefined;
-	private blocked = 0;
 	private entry: IStatusbarEntryAccessor | undefined;
 	private pill: HTMLElement | undefined;
-	private refreshSeq = 0;
 
 	constructor(
-		@IEgressGuardService private readonly egressGuardService: IEgressGuardService,
-		@IZeroEgressSettingsService private readonly settingsService: IZeroEgressSettingsService,
+		@ILocalStatusService private readonly localStatusService: ILocalStatusService,
 		@IStatusbarService private readonly statusbarService: IStatusbarService,
 		@IWorkbenchLayoutService private readonly layoutService: IWorkbenchLayoutService,
 		@ICommandService private readonly commandService: ICommandService,
@@ -65,37 +59,23 @@ class LocalStatusContribution extends Disposable implements IWorkbenchContributi
 		super();
 		this.addTitlebarElements();
 
-		this._register(this.egressGuardService.onDidBlock(() => { this.blocked++; this.render(); }));
-		this.egressGuardService.getRecentBlocked().then(recent => { this.blocked += recent.length; this.render(); }, () => { });
-
-		this._register(this.settingsService.onDidChangeState(() => this.refresh()));
-		this._register(this.egressGuardService.onDidChangeTargets(() => this.refresh()));
-		this.refresh();
-	}
-
-	private async refresh(): Promise<void> {
-		const seq = ++this.refreshSeq;
-		let status: LocalStatus | undefined;
-		try {
-			status = localStatusOf(await this.egressGuardService.getTargets());
-		} catch {
-			status = undefined;
-		}
-		if (seq === this.refreshSeq) {
-			this.status = status;
+		this._register(this.localStatusService.onDidChange(() => this.render()));
+		// the service may have read the guard's state already; otherwise its first change renders
+		if (this.localStatusService.status || this.localStatusService.blocked) {
 			this.render();
 		}
 	}
 
 	private render(): void {
-		const { text, tooltip } = formatLocalStatus(this.status, this.blocked);
+		const status = this.localStatusService.status;
+		const { text, tooltip } = this.localStatusService.formatted();
 		const props = {
 			name: 'ZeroEgress Local Status',
 			text,
 			tooltip,
 			ariaLabel: text.replace(/\$\([^)]*\)\s*/g, ''),
 			command: SHOW_NETWORK_LOG_COMMAND_ID,
-			kind: this.status?.kind === 'internet' ? 'warning' as const : 'standard' as const, // warning kind sets both foreground and background
+			kind: status?.kind === 'internet' ? 'warning' as const : 'standard' as const, // warning kind sets both foreground and background
 		};
 		if (this.entry) {
 			this.entry.update(props);
@@ -103,10 +83,10 @@ class LocalStatusContribution extends Disposable implements IWorkbenchContributi
 			this.entry = this._register(this.statusbarService.addEntry(props, 'zeroEgress.localStatus', StatusbarAlignment.LEFT, 10000));
 		}
 		if (this.pill) {
-			const glyph = this.status?.kind === 'internet' ? '▲' : this.status ? '●' : '?';
+			const glyph = status?.kind === 'internet' ? '▲' : status ? '●' : '?';
 			this.pill.textContent = `${glyph} ${props.ariaLabel}`;
 			this.pill.title = tooltip;
-			this.pill.dataset.kind = this.status?.kind ?? 'unknown';
+			this.pill.dataset.kind = status?.kind ?? 'unknown';
 		}
 	}
 

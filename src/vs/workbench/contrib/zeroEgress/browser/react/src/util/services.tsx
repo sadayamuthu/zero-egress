@@ -56,6 +56,7 @@ import { ISearchService } from '../../../../../../services/search/common/search.
 import { IExtensionManagementService } from '../../../../../../../platform/extensionManagement/common/extensionManagement.js'
 import { IMCPService } from '../../../../common/mcpService.js';
 import { ILocalModelDetectionService } from '../../../localModelDetectionService.js';
+import { ILocalStatusService } from '../../../localStatusService.js';
 import { IStorageService, StorageScope } from '../../../../../../../platform/storage/common/storage.js'
 import { IWorkspacesService } from '../../../../../../../platform/workspaces/common/workspaces.js'
 import { IHostService } from '../../../../../../services/host/browser/host.js'
@@ -143,7 +144,7 @@ export const _registerServices = (accessor: ServicesAccessor) => {
 	refreshModelState = refreshModelService.state
 	disposables.push(
 		refreshModelService.onDidChangeState((providerName) => {
-			refreshModelState = refreshModelService.state
+			refreshModelState = { ...refreshModelService.state } // a new object, so React re-renders (the service mutates its state)
 			refreshModelStateListeners.forEach(l => l(refreshModelState))
 			refreshModelProviderListeners.forEach(l => l(providerName, refreshModelState)) // no state
 		})
@@ -243,6 +244,7 @@ const getReactAccessor = (accessor: ServicesAccessor) => {
 		IPendingFileOpsService: accessor.get(IPendingFileOpsService),
 		IBackgroundAgentsService: accessor.get(IBackgroundAgentsService),
 		ILocalModelDetectionService: accessor.get(ILocalModelDetectionService),
+		ILocalStatusService: accessor.get(ILocalStatusService),
 
 		IStorageService: accessor.get(IStorageService),
 		IWorkspacesService: accessor.get(IWorkspacesService),
@@ -445,5 +447,33 @@ export const useBackgroundAgents = (): readonly AgentSummary[] => {
 		const d = backgroundAgentsService.onDidChange(() => { ss(backgroundAgentsService.agents) })
 		return () => { d.dispose() }
 	}, [backgroundAgentsService])
+	return s
+}
+
+// Local / LAN / Internet and the blocked count: the status bar's text, same source
+export const useLocalStatus = () => {
+	const accessor = useAccessor()
+	const localStatusService = accessor.get('ILocalStatusService')
+	const read = () => ({ ...localStatusService.formatted(), blocked: localStatusService.blocked, kind: localStatusService.status?.kind })
+	const [s, ss] = useState(read)
+	useEffect(() => {
+		const update = () => ss(read())
+		update()
+		const d = localStatusService.onDidChange(update)
+		return () => { d.dispose() }
+	}, [localStatusService])
+	return s
+}
+
+// a configuration value, kept current
+export const useConfigurationValue = <T,>(key: string): T | undefined => {
+	const accessor = useAccessor()
+	const configurationService = accessor.get('IConfigurationService')
+	const [s, ss] = useState(() => configurationService.getValue<T>(key))
+	useEffect(() => {
+		ss(configurationService.getValue<T>(key))
+		const d = configurationService.onDidChangeConfiguration(e => { if (e.affectsConfiguration(key)) { ss(configurationService.getValue<T>(key)) } })
+		return () => { d.dispose() }
+	}, [configurationService, key])
 	return s
 }

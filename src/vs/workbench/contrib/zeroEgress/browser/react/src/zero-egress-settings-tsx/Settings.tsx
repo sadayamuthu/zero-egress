@@ -22,14 +22,20 @@ import { getModelCapabilities, modelOverrideKeys, ModelOverrides } from '../../.
 import { TransferEditorType, TransferFilesInfo } from '../../../extensionTransferTypes.js';
 import { MCPServer } from '../../../../common/mcpServiceTypes.js';
 import { useMCPServiceState } from '../util/services.js';
+import { ProviderStatus, UseForModels } from './sections/ModelsSection.js';
+import { MaxConcurrentAgentsSetting, SetupCommandSetting } from './sections/AgentsSection.js';
+import { NetworkSection } from './sections/NetworkSection.js';
+import { AppearanceSection } from './sections/AppearanceSection.js';
+import { KeyboardSection } from './sections/KeyboardSection.js';
 
 type Tab =
 	| 'models'
-	| 'localProviders'
-	| 'featureOptions'
-	| 'mcp'
-	| 'general'
-	| 'all';
+	| 'agents'
+	| 'network'
+	| 'editor'
+	| 'appearance'
+	| 'keyboard'
+	| 'mcp';
 
 
 const ButtonLeftTextRightOption = ({ text, leftButton }: { text: string, leftButton?: React.ReactNode }) => {
@@ -777,11 +783,15 @@ const ParallelRequestsSetting = ({ providerName }: { providerName: ProviderName 
 	</ErrorBoundary>
 }
 
-export const ZeroEgressProviderSettings = ({ providerNames }: { providerNames: ProviderName[] }) => {
+export const ZeroEgressProviderSettings = ({ providerNames }: { providerNames: RefreshableProviderName[] }) => {
 	return <>
 		{providerNames.map(providerName =>
-			<div key={providerName}>
-				<SettingsForProvider providerName={providerName} showProviderTitle={true} showProviderSuggestions={true} />
+			<div key={providerName} className='mb-4'>
+				<div className='flex items-baseline gap-3'>
+					<h3 className='text-xl truncate'>{displayInfoOfProviderName(providerName).title}</h3>
+					<ProviderStatus providerName={providerName} />
+				</div>
+				<SettingsForProvider providerName={providerName} showProviderTitle={false} showProviderSuggestions={true} />
 				<ParallelRequestsSetting providerName={providerName} />
 			</div>
 		)}
@@ -879,7 +889,7 @@ const RedoOnboardingButton = ({ className }: { className?: string }) => {
 		className={`text-ze-fg-4 flex flex-nowrap text-nowrap items-center hover:brightness-110 cursor-pointer ${className}`}
 		onClick={() => { zeroEgressSettingsService.setGlobalSetting('isOnboardingComplete', false) }}
 	>
-		See onboarding screen?
+		Redo onboarding
 	</div>
 
 }
@@ -1082,17 +1092,16 @@ export const Settings = () => {
 
 	const navItems: { tab: Tab; label: string }[] = [
 		{ tab: 'models', label: 'Models' },
-		{ tab: 'localProviders', label: 'Local Providers' },
-		{ tab: 'featureOptions', label: 'Feature Options' },
-		{ tab: 'general', label: 'General' },
-		{ tab: 'mcp', label: 'MCP' },
-		{ tab: 'all', label: 'All Settings' },
+		{ tab: 'agents', label: 'Agents' },
+		{ tab: 'network', label: 'Network & privacy' },
+		{ tab: 'editor', label: 'Editor' },
+		{ tab: 'appearance', label: 'Appearance' },
+		{ tab: 'keyboard', label: 'Keyboard' },
+		{ tab: 'mcp', label: 'MCP tools' },
 	];
-	const shouldShowTab = (tab: Tab) => selectedSection === 'all' || selectedSection === tab;
+	const shouldShowTab = (tab: Tab) => selectedSection === tab;
 	const accessor = useAccessor()
 	const commandService = accessor.get('ICommandService')
-	const environmentService = accessor.get('IEnvironmentService')
-	const nativeHostService = accessor.get('INativeHostService')
 	const settingsState = useSettingsState()
 	const zeroEgressSettingsService = accessor.get('IZeroEgressSettingsService')
 	const chatThreadsService = accessor.get('IChatThreadService')
@@ -1174,14 +1183,7 @@ export const Settings = () => {
 						{navItems.map(({ tab, label }) => (
 							<button
 								key={tab}
-								onClick={() => {
-									if (tab === 'all') {
-										setSelectedSection('all');
-										window.scrollTo({ top: 0, behavior: 'smooth' });
-									} else {
-										setSelectedSection(tab);
-									}
-								}}
+								onClick={() => { setSelectedSection(tab); }}
 								className={`
           py-2 px-4 rounded-md text-left transition-all duration-200
           ${selectedSection === tab
@@ -1193,6 +1195,14 @@ export const Settings = () => {
 							</button>
 						))}
 					</div>
+
+					{/* replaces the old All Settings tab and Built-in Settings block */}
+					<button
+						className='mt-6 px-4 text-left text-sm text-ze-link-color hover:underline'
+						onClick={() => { commandService.executeCommand('workbench.action.openSettings') }}
+					>
+						Open all VS Code settings
+					</button>
 				</aside>
 
 				{/* ───────────── MAIN PANE ───────────── */}
@@ -1204,225 +1214,225 @@ export const Settings = () => {
 
 						<h1 className='text-2xl w-full'>{`ZeroEgress Settings`}</h1>
 
-						<div className='w-full h-[1px] my-2' />
-
-						{/* Models section (formerly FeaturesTab) */}
-						<ErrorBoundary>
-							<RedoOnboardingButton />
-						</ErrorBoundary>
-
 						<div className='w-full h-[1px] my-4' />
 
 						{/* All sections in flex container with gap-12 */}
 						<div className='flex flex-col gap-12'>
-							{/* Models section (formerly FeaturesTab) */}
-							<div className={shouldShowTab('models') ? `` : 'hidden'}>
+							{/* Models: providers with their live status, the model list, which model each feature uses */}
+							<div className={shouldShowTab('models') ? `flex flex-col gap-8` : 'hidden'}>
+								<div>
+									<ErrorBoundary>
+										<h2 className={`text-3xl mb-2`}>Models</h2>
+										<h3 className={`text-ze-fg-3 mb-4`}>{`ZeroEgress can access any model that you host locally. We automatically detect your local models by default.`}</h3>
+
+										<ZeroEgressProviderSettings providerNames={localProviderNames} />
+
+										<div className='opacity-80 mt-2'>
+											<OllamaSetupInstructions sayWeAutoDetect={true} />
+										</div>
+									</ErrorBoundary>
+								</div>
+
+								<UseForModels />
+
+								<div>
+									<ErrorBoundary>
+										<h3 className='text-xl mb-1'>All models</h3>
+										<ModelDump />
+										<div className='w-full h-[1px] my-4' />
+										<AutoDetectLocalModelsToggle />
+										<RefreshableModels />
+									</ErrorBoundary>
+								</div>
+
 								<ErrorBoundary>
-									<h2 className={`text-3xl mb-2`}>Models</h2>
-									<ModelDump />
-									<div className='w-full h-[1px] my-4' />
-									<AutoDetectLocalModelsToggle />
-									<RefreshableModels />
+									<RedoOnboardingButton />
 								</ErrorBoundary>
 							</div>
 
-							{/* Local Providers section */}
-							<div className={shouldShowTab('localProviders') ? `` : 'hidden'}>
-								<ErrorBoundary>
-									<h2 className={`text-3xl mb-2`}>Local Providers</h2>
-									<h3 className={`text-ze-fg-3 mb-2`}>{`ZeroEgress can access any model that you host locally. We automatically detect your local models by default.`}</h3>
+							{/* Agents */}
+							<div className={shouldShowTab('agents') ? `flex flex-col gap-8` : 'hidden'}>
+								<div>
+									<h2 className={`text-3xl mb-2`}>Agents</h2>
+									{/* Tools Section */}
+									<h4 className={`text-base`}>Tools</h4>
+									<div className='text-sm text-ze-fg-3 mt-1'>{`Tools are functions that LLMs can call. Some tools require user approval.`}</div>
 
-									<div className='opacity-80 mb-4'>
-										<OllamaSetupInstructions sayWeAutoDetect={true} />
-									</div>
-
-									<ZeroEgressProviderSettings providerNames={localProviderNames} />
-								</ErrorBoundary>
-							</div>
-
-							{/* Feature Options section */}
-							<div className={shouldShowTab('featureOptions') ? `` : 'hidden'}>
-								<ErrorBoundary>
-									<h2 className={`text-3xl mb-2`}>Feature Options</h2>
-
-									<div className='flex flex-col gap-y-8 my-4'>
+									<div className='my-2'>
+										{/* Auto Accept Switch */}
 										<ErrorBoundary>
-											{/* FIM */}
-											<div>
-												<h4 className={`text-base`}>{displayInfoOfFeatureName('Autocomplete')}</h4>
-												<div className='text-sm text-ze-fg-3 mt-1'>
-													<span>
-														Experimental.{' '}
-													</span>
-													<span
-														className='hover:brightness-110'
-														data-tooltip-id='ze-tooltip'
-														data-tooltip-content='We recommend using the largest qwen2.5-coder model you can with Ollama (try qwen2.5-coder:3b).'
-														data-tooltip-class-name='ze-max-w-[20px]'
-													>
-														Only works with FIM models.*
-													</span>
+											{[...toolApprovalTypes].map((approvalType) => {
+												return <div key={approvalType} className="flex items-center gap-x-2 my-2">
+													<ToolApprovalTypeSwitch size='xs' approvalType={approvalType} desc={`Auto-approve ${approvalType}`} />
 												</div>
+											})}
 
+										</ErrorBoundary>
+									</div>
+								</div>
+
+								<div>
+									<h4 className={`text-base`}>Background agents</h4>
+									<MaxConcurrentAgentsSetting />
+									<SetupCommandSetting />
+								</div>
+
+								{/* AI Instructions section */}
+								<div className='max-w-[600px]'>
+									<h4 className={`text-base`}>AI Instructions</h4>
+									<div className={`text-sm text-ze-fg-3 mb-4`}>
+										<ChatMarkdownRender inPTag={true} string={`
+System instructions to include with all AI requests.
+Alternatively, place a \`.zeroegressrules\` file in the root of your workspace.
+								`} chatMessageLocation={undefined} />
+									</div>
+									<ErrorBoundary>
+										<AIInstructionsBox />
+									</ErrorBoundary>
+									{/* --- Disable System Message Toggle --- */}
+									<div className='my-4'>
+										<ErrorBoundary>
+											<div className='flex items-center gap-x-2'>
+												<ZeroEgressSwitch
+													size='xs'
+													value={!!settingsState.globalSettings.disableSystemMessage}
+													onChange={(newValue) => {
+														zeroEgressSettingsService.setGlobalSetting('disableSystemMessage', newValue);
+													}}
+												/>
+												<span className='text-ze-fg-3 text-xs pointer-events-none'>
+													{'Disable system message'}
+												</span>
+											</div>
+										</ErrorBoundary>
+										<div className='text-ze-fg-3 text-xs mt-1'>
+											{`When disabled, ZeroEgress will not include anything in the system message except for content you specified above.`}
+										</div>
+									</div>
+								</div>
+							</div>
+
+							{/* Network & privacy */}
+							<div className={shouldShowTab('network') ? `` : 'hidden'}>
+								<h2 className={`text-3xl mb-4`}>Network & privacy</h2>
+								<NetworkSection />
+							</div>
+
+							{/* Editor: the feature options, One-Click Switch, Import/Export */}
+							<div className={`${shouldShowTab('editor') ? `` : 'hidden'} flex flex-col gap-12`}>
+								<div>
+									<ErrorBoundary>
+										<h2 className={`text-3xl mb-2`}>Editor</h2>
+
+										<div className='flex flex-col gap-y-8 my-4'>
+											<ErrorBoundary>
+												{/* FIM */}
+												<div>
+													<h4 className={`text-base`}>{displayInfoOfFeatureName('Autocomplete')}</h4>
+													<div className='text-sm text-ze-fg-3 mt-1'>
+														<span>
+															Experimental.{' '}
+														</span>
+														<span
+															className='hover:brightness-110'
+															data-tooltip-id='ze-tooltip'
+															data-tooltip-content='We recommend using the largest qwen2.5-coder model you can with Ollama (try qwen2.5-coder:3b).'
+															data-tooltip-class-name='ze-max-w-[20px]'
+														>
+															Only works with FIM models.*
+														</span>
+														<span>{' '}Pick its model under Models.</span>
+													</div>
+
+													<div className='my-2'>
+														{/* Enable Switch */}
+														<ErrorBoundary>
+															<div className='flex items-center gap-x-2 my-2'>
+																<ZeroEgressSwitch
+																	size='xs'
+																	value={settingsState.globalSettings.enableAutocomplete}
+																	onChange={(newVal) => zeroEgressSettingsService.setGlobalSetting('enableAutocomplete', newVal)}
+																/>
+																<span className='text-ze-fg-3 text-xs pointer-events-none'>{settingsState.globalSettings.enableAutocomplete ? 'Enabled' : 'Disabled'}</span>
+															</div>
+														</ErrorBoundary>
+													</div>
+
+												</div>
+											</ErrorBoundary>
+
+											{/* Apply */}
+											<ErrorBoundary>
+
+												<div className='w-full'>
+													<h4 className={`text-base`}>{displayInfoOfFeatureName('Apply')}</h4>
+													<div className='text-sm text-ze-fg-3 mt-1'>Settings that control the behavior of the Apply button.</div>
+
+													<div className='my-2'>
+														{/* Fast Apply Method Dropdown */}
+														<div className='flex items-center gap-x-2 my-2'>
+															<FastApplyMethodDropdown />
+														</div>
+													</div>
+
+												</div>
+											</ErrorBoundary>
+
+											{/* Agent edits */}
+											<div>
+												<h4 className={`text-base`}>Changes</h4>
 												<div className='my-2'>
-													{/* Enable Switch */}
+													{/* Tool Lint Errors Switch */}
+													<ErrorBoundary>
+
+														<div className='flex items-center gap-x-2 my-2'>
+															<ZeroEgressSwitch
+																size='xs'
+																value={settingsState.globalSettings.includeToolLintErrors}
+																onChange={(newVal) => zeroEgressSettingsService.setGlobalSetting('includeToolLintErrors', newVal)}
+															/>
+															<span className='text-ze-fg-3 text-xs pointer-events-none'>{settingsState.globalSettings.includeToolLintErrors ? 'Fix lint errors' : `Fix lint errors`}</span>
+														</div>
+													</ErrorBoundary>
+
+													{/* Auto Accept LLM Changes Switch */}
 													<ErrorBoundary>
 														<div className='flex items-center gap-x-2 my-2'>
 															<ZeroEgressSwitch
 																size='xs'
-																value={settingsState.globalSettings.enableAutocomplete}
-																onChange={(newVal) => zeroEgressSettingsService.setGlobalSetting('enableAutocomplete', newVal)}
+																value={settingsState.globalSettings.autoAcceptLLMChanges}
+																onChange={(newVal) => zeroEgressSettingsService.setGlobalSetting('autoAcceptLLMChanges', newVal)}
 															/>
-															<span className='text-ze-fg-3 text-xs pointer-events-none'>{settingsState.globalSettings.enableAutocomplete ? 'Enabled' : 'Disabled'}</span>
+															<span className='text-ze-fg-3 text-xs pointer-events-none'>Auto-accept LLM changes</span>
 														</div>
 													</ErrorBoundary>
+												</div>
+											</div>
 
-													{/* Model Dropdown */}
+
+
+											<div className='w-full'>
+												<h4 className={`text-base`}>Suggestions</h4>
+												<div className='text-sm text-ze-fg-3 mt-1'>{`Settings that control the visibility of ZeroEgress suggestions in the code editor.`}</div>
+
+												<div className='my-2'>
+													{/* Auto Accept Switch */}
 													<ErrorBoundary>
-														<div className={`my-2 ${!settingsState.globalSettings.enableAutocomplete ? 'hidden' : ''}`}>
-															<ModelDropdown featureName={'Autocomplete'} className='text-xs text-ze-fg-3 bg-ze-bg-1 border border-ze-border-1 rounded p-0.5 px-1' />
+														<div className='flex items-center gap-x-2 my-2'>
+															<ZeroEgressSwitch
+																size='xs'
+																value={settingsState.globalSettings.showInlineSuggestions}
+																onChange={(newVal) => zeroEgressSettingsService.setGlobalSetting('showInlineSuggestions', newVal)}
+															/>
+															<span className='text-ze-fg-3 text-xs pointer-events-none'>{settingsState.globalSettings.showInlineSuggestions ? 'Show suggestions on select' : 'Show suggestions on select'}</span>
 														</div>
 													</ErrorBoundary>
-
 												</div>
-
-											</div>
-										</ErrorBoundary>
-
-										{/* Apply */}
-										<ErrorBoundary>
-
-											<div className='w-full'>
-												<h4 className={`text-base`}>{displayInfoOfFeatureName('Apply')}</h4>
-												<div className='text-sm text-ze-fg-3 mt-1'>Settings that control the behavior of the Apply button.</div>
-
-												<div className='my-2'>
-													{/* Sync to Chat Switch */}
-													<div className='flex items-center gap-x-2 my-2'>
-														<ZeroEgressSwitch
-															size='xs'
-															value={settingsState.globalSettings.syncApplyToChat}
-															onChange={(newVal) => zeroEgressSettingsService.setGlobalSetting('syncApplyToChat', newVal)}
-														/>
-														<span className='text-ze-fg-3 text-xs pointer-events-none'>{settingsState.globalSettings.syncApplyToChat ? 'Same as Chat model' : 'Different model'}</span>
-													</div>
-
-													{/* Model Dropdown */}
-													<div className={`my-2 ${settingsState.globalSettings.syncApplyToChat ? 'hidden' : ''}`}>
-														<ModelDropdown featureName={'Apply'} className='text-xs text-ze-fg-3 bg-ze-bg-1 border border-ze-border-1 rounded p-0.5 px-1' />
-													</div>
-												</div>
-
-
-												<div className='my-2'>
-													{/* Fast Apply Method Dropdown */}
-													<div className='flex items-center gap-x-2 my-2'>
-														<FastApplyMethodDropdown />
-													</div>
-												</div>
-
-											</div>
-										</ErrorBoundary>
-
-
-
-
-										{/* Tools Section */}
-										<div>
-											<h4 className={`text-base`}>Tools</h4>
-											<div className='text-sm text-ze-fg-3 mt-1'>{`Tools are functions that LLMs can call. Some tools require user approval.`}</div>
-
-											<div className='my-2'>
-												{/* Auto Accept Switch */}
-												<ErrorBoundary>
-													{[...toolApprovalTypes].map((approvalType) => {
-														return <div key={approvalType} className="flex items-center gap-x-2 my-2">
-															<ToolApprovalTypeSwitch size='xs' approvalType={approvalType} desc={`Auto-approve ${approvalType}`} />
-														</div>
-													})}
-
-												</ErrorBoundary>
-
-												{/* Tool Lint Errors Switch */}
-												<ErrorBoundary>
-
-													<div className='flex items-center gap-x-2 my-2'>
-														<ZeroEgressSwitch
-															size='xs'
-															value={settingsState.globalSettings.includeToolLintErrors}
-															onChange={(newVal) => zeroEgressSettingsService.setGlobalSetting('includeToolLintErrors', newVal)}
-														/>
-														<span className='text-ze-fg-3 text-xs pointer-events-none'>{settingsState.globalSettings.includeToolLintErrors ? 'Fix lint errors' : `Fix lint errors`}</span>
-													</div>
-												</ErrorBoundary>
-
-												{/* Auto Accept LLM Changes Switch */}
-												<ErrorBoundary>
-													<div className='flex items-center gap-x-2 my-2'>
-														<ZeroEgressSwitch
-															size='xs'
-															value={settingsState.globalSettings.autoAcceptLLMChanges}
-															onChange={(newVal) => zeroEgressSettingsService.setGlobalSetting('autoAcceptLLMChanges', newVal)}
-														/>
-														<span className='text-ze-fg-3 text-xs pointer-events-none'>Auto-accept LLM changes</span>
-													</div>
-												</ErrorBoundary>
 											</div>
 										</div>
+									</ErrorBoundary>
+								</div>
 
-
-
-										<div className='w-full'>
-											<h4 className={`text-base`}>Editor</h4>
-											<div className='text-sm text-ze-fg-3 mt-1'>{`Settings that control the visibility of ZeroEgress suggestions in the code editor.`}</div>
-
-											<div className='my-2'>
-												{/* Auto Accept Switch */}
-												<ErrorBoundary>
-													<div className='flex items-center gap-x-2 my-2'>
-														<ZeroEgressSwitch
-															size='xs'
-															value={settingsState.globalSettings.showInlineSuggestions}
-															onChange={(newVal) => zeroEgressSettingsService.setGlobalSetting('showInlineSuggestions', newVal)}
-														/>
-														<span className='text-ze-fg-3 text-xs pointer-events-none'>{settingsState.globalSettings.showInlineSuggestions ? 'Show suggestions on select' : 'Show suggestions on select'}</span>
-													</div>
-												</ErrorBoundary>
-											</div>
-										</div>
-
-										{/* SCM */}
-										<ErrorBoundary>
-
-											<div className='w-full'>
-												<h4 className={`text-base`}>{displayInfoOfFeatureName('SCM')}</h4>
-												<div className='text-sm text-ze-fg-3 mt-1'>Settings that control the behavior of the commit message generator.</div>
-
-												<div className='my-2'>
-													{/* Sync to Chat Switch */}
-													<div className='flex items-center gap-x-2 my-2'>
-														<ZeroEgressSwitch
-															size='xs'
-															value={settingsState.globalSettings.syncSCMToChat}
-															onChange={(newVal) => zeroEgressSettingsService.setGlobalSetting('syncSCMToChat', newVal)}
-														/>
-														<span className='text-ze-fg-3 text-xs pointer-events-none'>{settingsState.globalSettings.syncSCMToChat ? 'Same as Chat model' : 'Different model'}</span>
-													</div>
-
-													{/* Model Dropdown */}
-													<div className={`my-2 ${settingsState.globalSettings.syncSCMToChat ? 'hidden' : ''}`}>
-														<ModelDropdown featureName={'SCM'} className='text-xs text-ze-fg-3 bg-ze-bg-1 border border-ze-border-1 rounded p-0.5 px-1' />
-													</div>
-												</div>
-
-											</div>
-										</ErrorBoundary>
-									</div>
-								</ErrorBoundary>
-							</div>
-
-							{/* General section */}
-							<div className={`${shouldShowTab('general') ? `` : 'hidden'} flex flex-col gap-12`}>
 								{/* One-Click Switch section */}
 								<div>
 									<ErrorBoundary>
@@ -1431,7 +1441,6 @@ export const Settings = () => {
 
 										<div className='flex flex-col gap-2'>
 											<OneClickSwitchButton className='w-48' fromEditor="VS Code" />
-											<OneClickSwitchButton className='w-48' fromEditor="Cursor" />
 											<OneClickSwitchButton className='w-48' fromEditor="Windsurf" />
 										</div>
 									</ErrorBoundary>
@@ -1471,75 +1480,24 @@ export const Settings = () => {
 										</div>
 									</div>
 								</div>
-
-
-
-								{/* Built-in Settings section */}
-								<div>
-									<h2 className={`text-3xl mb-2`}>Built-in Settings</h2>
-									<h4 className={`text-ze-fg-3 mb-4`}>{`IDE settings, keyboard settings, and theme customization.`}</h4>
-
-									<ErrorBoundary>
-										<div className='flex flex-col gap-2 justify-center max-w-48 w-full'>
-											<ZeroEgressButtonBgDarken className='px-4 py-1' onClick={() => { commandService.executeCommand('workbench.action.openSettings') }}>
-												General Settings
-											</ZeroEgressButtonBgDarken>
-											<ZeroEgressButtonBgDarken className='px-4 py-1' onClick={() => { commandService.executeCommand('workbench.action.openGlobalKeybindings') }}>
-												Keyboard Settings
-											</ZeroEgressButtonBgDarken>
-											<ZeroEgressButtonBgDarken className='px-4 py-1' onClick={() => { commandService.executeCommand('workbench.action.selectTheme') }}>
-												Theme Settings
-											</ZeroEgressButtonBgDarken>
-											<ZeroEgressButtonBgDarken className='px-4 py-1' onClick={() => { nativeHostService.showItemInFolder(environmentService.logsHome.fsPath) }}>
-												Open Logs
-											</ZeroEgressButtonBgDarken>
-										</div>
-									</ErrorBoundary>
-								</div>
-
-
-								{/* AI Instructions section */}
-								<div className='max-w-[600px]'>
-									<h2 className={`text-3xl mb-2`}>AI Instructions</h2>
-									<h4 className={`text-ze-fg-3 mb-4`}>
-										<ChatMarkdownRender inPTag={true} string={`
-System instructions to include with all AI requests.
-Alternatively, place a \`.zeroegressrules\` file in the root of your workspace.
-								`} chatMessageLocation={undefined} />
-									</h4>
-									<ErrorBoundary>
-										<AIInstructionsBox />
-									</ErrorBoundary>
-									{/* --- Disable System Message Toggle --- */}
-									<div className='my-4'>
-										<ErrorBoundary>
-											<div className='flex items-center gap-x-2'>
-												<ZeroEgressSwitch
-													size='xs'
-													value={!!settingsState.globalSettings.disableSystemMessage}
-													onChange={(newValue) => {
-														zeroEgressSettingsService.setGlobalSetting('disableSystemMessage', newValue);
-													}}
-												/>
-												<span className='text-ze-fg-3 text-xs pointer-events-none'>
-													{'Disable system message'}
-												</span>
-											</div>
-										</ErrorBoundary>
-										<div className='text-ze-fg-3 text-xs mt-1'>
-											{`When disabled, ZeroEgress will not include anything in the system message except for content you specified above.`}
-										</div>
-									</div>
-								</div>
-
 							</div>
 
+							{/* Appearance */}
+							<div className={shouldShowTab('appearance') ? `` : 'hidden'}>
+								<h2 className={`text-3xl mb-4`}>Appearance</h2>
+								<AppearanceSection />
+							</div>
 
+							{/* Keyboard */}
+							<div className={shouldShowTab('keyboard') ? `` : 'hidden'}>
+								<h2 className={`text-3xl mb-4`}>Keyboard</h2>
+								<KeyboardSection />
+							</div>
 
 							{/* MCP section */}
 							<div className={shouldShowTab('mcp') ? `` : 'hidden'}>
 								<ErrorBoundary>
-									<h2 className='text-3xl mb-2'>MCP</h2>
+									<h2 className='text-3xl mb-2'>MCP tools</h2>
 									<h4 className={`text-ze-fg-3 mb-4`}>
 										<ChatMarkdownRender inPTag={true} string={`
 Use Model Context Protocol to provide Agent mode with more tools.
@@ -1556,10 +1514,6 @@ Use Model Context Protocol to provide Agent mode with more tools.
 									</ErrorBoundary>
 								</ErrorBoundary>
 							</div>
-
-
-
-
 
 						</div>
 

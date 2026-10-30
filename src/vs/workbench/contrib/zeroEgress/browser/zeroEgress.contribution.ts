@@ -68,6 +68,7 @@ import './backgroundAgentsService.js'
 import './pendingDeleteDecorations.js'
 import './pendingChangeContextKeys.js'
 import './egressTargetsContribution.js'
+import './localStatusService.js'
 import './localStatusContribution.js'
 import './agentsViewContribution.js'
 
