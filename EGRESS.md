@@ -156,7 +156,7 @@ user data folder. It holds only `host:port`, counts, times, origins
 paths, queries, request bodies, code, prompts, answers or file names. It
 records:
 
-- `session_start` and `session_end`, and an hourly heartbeat while the app runs
+- `session_start` and `session_end`, and a heartbeat row on every flush (about every 60 seconds), stamped with the current hour
 - allowed connections, counted per hour
 - blocked connections, counted per minute
 - blocked name lookups, listed separately
@@ -164,7 +164,7 @@ records:
 
 Main flushes to disk every 60 seconds and on shutdown. The extension host
 and the shared process report their allowed counts every 10 seconds. Rows
-older than 400 days are pruned. The hash chain survives pruning, so a
+older than 400 days are pruned when the ledger opens at startup. The hash chain survives pruning, so a
 report still verifies after old rows are gone.
 
 **What a count means.**
@@ -172,8 +172,9 @@ report still verifies after old rows are gone.
 | Where | One count is |
 |-------|--------------|
 | Windows (renderer, webviews) | One HTTP request |
+| Electron `net` requests in the main process | One request, counted through `webRequest` |
 | Node code in the main process, the extension host and the shared process | One socket |
-| Extension host and shared process only | One Electron `net` request, as well |
+| Extension host and shared process only | One Electron `net` request, as well (counted in the Node hooks) |
 
 DNS lookups aren't counted. A lookup the guard blocks is listed
 separately, as a blocked name lookup.
@@ -217,9 +218,11 @@ To verify without the app, on any machine with Node.js:
 node scripts/zero-egress/verify-egress-proof.mjs egress-proof-<date>.json [egress-proof-<date>.pdf]
 ```
 
-The script uses only `node:crypto` and `node:fs`, and makes no network
+The script uses only Node built-ins, and makes no network
 connection. It exits 0 when every check passes, 1 when any check fails, and
 2 on bad usage. Give it the PDF as well to run the PDF matches JSON check.
+If the report file can't be read, **Report file is readable** appears as a
+failed check, in the app and in the script.
 It can't run the check against this machine's ledger, because that needs
 the ledger file.
 
