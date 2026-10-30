@@ -141,7 +141,7 @@ import { WorktreeMainService } from '../../workbench/contrib/zeroEgress/electron
 import { IZeroEgressWorktreeService, WORKTREE_CHANNEL } from '../../workbench/contrib/zeroEgress/common/worktreeTypes.js'; // ZeroEgress
 import { MCPChannel } from '../../workbench/contrib/zeroEgress/electron-main/mcpChannel.js';
 import { EgressGuard, EgressGuardChannel } from '../../workbench/contrib/zeroEgress/electron-main/egressGuard.js';
-import { LedgerAggregator } from '../../workbench/contrib/zeroEgress/common/egressLedger.js'; // ZeroEgress
+import { EgressLedgerService } from '../../workbench/contrib/zeroEgress/electron-main/egressLedger/egressLedgerService.js'; // ZeroEgress
 import { EGRESS_GUARD_CHANNEL } from '../../workbench/contrib/zeroEgress/common/egressGuardService.js';
 import { describeDestination, endpointWarning, targetFromUrl } from '../../workbench/contrib/zeroEgress/common/egressPolicy.js';
 /**
@@ -161,6 +161,7 @@ export class CodeApplication extends Disposable {
 
 	// ZeroEgress: the runtime egress guard. Created first so nothing can reach the network before it is in place.
 	private readonly egressGuard: EgressGuard;
+	private readonly egressLedger: EgressLedgerService; // ZeroEgress
 
 	constructor(
 		private readonly mainProcessNodeIpcServer: NodeIPCServer,
@@ -178,7 +179,20 @@ export class CodeApplication extends Disposable {
 	) {
 		super();
 
-		this.egressGuard = this._register(new EgressGuard(new LedgerAggregator())); // ZeroEgress: the ledger service (Task 5) will own the aggregator
+		// ZeroEgress: the ledger service owns the aggregator; its store opens asynchronously (see openEgressLedger)
+		const ledgerAuditEnabled = this.configurationService.getValue<unknown>(AUDIT_ENABLED_SETTING); // ZeroEgress
+		this.egressLedger = new EgressLedgerService({ // ZeroEgress
+			dbPath: join(this.environmentMainService.userDataPath, 'zero-egress-ledger.vscdb'), // ZeroEgress
+			version: this.productService.version ?? '', // ZeroEgress
+			commit: this.productService.commit ?? '', // ZeroEgress
+			auditEnabled: resolveAuditConfig({ product: (this.productService as any).auditPipeline, user: typeof ledgerAuditEnabled === 'boolean' ? { enabled: ledgerAuditEnabled } : {} }).enabled, // ZeroEgress
+			expectedSince: { // ZeroEgress
+				get: () => this.stateService.getItem<string | undefined>('zeroEgress.ledger.expectedSince'), // ZeroEgress
+				set: iso => this.stateService.setItem('zeroEgress.ledger.expectedSince', iso), // ZeroEgress
+			}, // ZeroEgress
+			onError: (msg, e) => this.logService.error(msg, e), // ZeroEgress
+		}); // ZeroEgress
+		this.egressGuard = this._register(new EgressGuard(this.egressLedger.aggregator)); // ZeroEgress
 		this._register(this.egressGuard.installNodeHooks());
 		this._register(this.egressGuard.onDidBlock(e => this.logService.warn(`[ZeroEgress] blocked connection to ${describeDestination(e.url)} from ${e.origin}`)));
 
@@ -404,10 +418,25 @@ export class CodeApplication extends Disposable {
 		//#endregion
 	}
 
+	// ZeroEgress: a failed open is logged; the app runs on with the ledger unrecorded.
+	private openEgressLedger(): void { // ZeroEgress
+		this.egressLedger.open().catch(e => this.logService.error('[ZeroEgress] ledger failed to open', e)); // ZeroEgress
+		this._register(this.configurationService.onDidChangeConfiguration(e => { // ZeroEgress
+			if (e.affectsConfiguration(AUDIT_ENABLED_SETTING)) { // ZeroEgress
+				const userEnabled = this.configurationService.getValue<unknown>(AUDIT_ENABLED_SETTING); // ZeroEgress
+				this.egressLedger.setAuditEnabled(resolveAuditConfig({ product: (this.productService as any).auditPipeline, user: typeof userEnabled === 'boolean' ? { enabled: userEnabled } : {} }).enabled); // ZeroEgress
+			} // ZeroEgress
+		})); // ZeroEgress
+		Event.once(this.lifecycleMainService.onWillShutdown)(e => e.join('zeroEgress.ledger', this.egressLedger.dispose())); // ZeroEgress
+	} // ZeroEgress
+
 	private registerListeners(): void {
 
 		// Dispose on shutdown
 		Event.once(this.lifecycleMainService.onWillShutdown)(() => this.dispose());
+
+		// ZeroEgress: open the ledger, follow the audit setting, and flush and close it before the app exits
+		this.openEgressLedger(); // ZeroEgress
 
 		// Contextmenu via IPC support
 		registerContextMenuListener();
