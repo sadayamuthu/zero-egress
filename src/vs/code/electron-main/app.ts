@@ -162,6 +162,7 @@ export class CodeApplication extends Disposable {
 	// ZeroEgress: the runtime egress guard. Created first so nothing can reach the network before it is in place.
 	private readonly egressGuard: EgressGuard;
 	private readonly egressLedger: EgressLedgerService; // ZeroEgress
+	private readonly resolveLedgerAuditEnabled: () => boolean; // ZeroEgress
 
 	constructor(
 		private readonly mainProcessNodeIpcServer: NodeIPCServer,
@@ -180,12 +181,16 @@ export class CodeApplication extends Disposable {
 		super();
 
 		// ZeroEgress: the ledger service owns the aggregator; its store opens asynchronously (see openEgressLedger)
-		const ledgerAuditEnabled = this.configurationService.getValue<unknown>(AUDIT_ENABLED_SETTING); // ZeroEgress
+		const resolveLedgerAuditEnabled = () => { // ZeroEgress
+			const userEnabled = this.configurationService.getValue<unknown>(AUDIT_ENABLED_SETTING); // ZeroEgress
+			return resolveAuditConfig({ product: (this.productService as any).auditPipeline, user: typeof userEnabled === 'boolean' ? { enabled: userEnabled } : {} }).enabled; // ZeroEgress
+		}; // ZeroEgress
+		this.resolveLedgerAuditEnabled = resolveLedgerAuditEnabled; // ZeroEgress
 		this.egressLedger = new EgressLedgerService({ // ZeroEgress
 			dbPath: join(this.environmentMainService.userDataPath, 'zero-egress-ledger.vscdb'), // ZeroEgress
 			version: this.productService.version ?? '', // ZeroEgress
 			commit: this.productService.commit ?? '', // ZeroEgress
-			auditEnabled: resolveAuditConfig({ product: (this.productService as any).auditPipeline, user: typeof ledgerAuditEnabled === 'boolean' ? { enabled: ledgerAuditEnabled } : {} }).enabled, // ZeroEgress
+			auditEnabled: resolveLedgerAuditEnabled(), // ZeroEgress
 			expectedSince: { // ZeroEgress
 				get: () => this.stateService.getItem<string | undefined>('zeroEgress.ledger.expectedSince'), // ZeroEgress
 				set: iso => this.stateService.setItem('zeroEgress.ledger.expectedSince', iso), // ZeroEgress
@@ -423,8 +428,7 @@ export class CodeApplication extends Disposable {
 		this.egressLedger.open().catch(e => this.logService.error('[ZeroEgress] ledger failed to open', e)); // ZeroEgress
 		this._register(this.configurationService.onDidChangeConfiguration(e => { // ZeroEgress
 			if (e.affectsConfiguration(AUDIT_ENABLED_SETTING)) { // ZeroEgress
-				const userEnabled = this.configurationService.getValue<unknown>(AUDIT_ENABLED_SETTING); // ZeroEgress
-				this.egressLedger.setAuditEnabled(resolveAuditConfig({ product: (this.productService as any).auditPipeline, user: typeof userEnabled === 'boolean' ? { enabled: userEnabled } : {} }).enabled); // ZeroEgress
+				this.egressLedger.setAuditEnabled(this.resolveLedgerAuditEnabled()); // ZeroEgress
 			} // ZeroEgress
 		})); // ZeroEgress
 		Event.once(this.lifecycleMainService.onWillShutdown)(e => e.join('zeroEgress.ledger', this.egressLedger.dispose())); // ZeroEgress

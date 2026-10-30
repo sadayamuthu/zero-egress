@@ -115,4 +115,40 @@ suite('EgressLedgerService', () => {
 		const dests = (await bodies()).filter(x => x.type === 'allowed').map(x => (x as { dest: string }).dest);
 		assert.deepStrictEqual(dests, ['b.example.com:443']);
 	});
+
+	test('dispose called before open resolves still writes session_end and closes', async () => {
+		const svc = new EgressLedgerService({ dbPath, version: '1', commit: 'c', auditEnabled: true, expectedSince, now: () => clock, flushMs: 3_600_000 });
+		const opening = svc.open();
+		await svc.dispose();
+		await opening;
+		await svc.flush(); // no-op after dispose
+		service = await create();
+		const types = (await bodies()).map(x => x.type);
+		assert.deepStrictEqual(types.slice(0, 3), ['session_start', 'audit_state', 'session_end']);
+	});
+
+	test('counts added before open resolves are written after session_start', async () => {
+		const svc = new EgressLedgerService({ dbPath, version: '1', commit: 'c', auditEnabled: true, expectedSince, now: () => clock, flushMs: 3_600_000 });
+		svc.aggregator.addAllowed('https://early.example.com/', 'model server (set in Settings)', 'main', clock);
+		await svc.open();
+		await svc.flush();
+		service = svc;
+		const types = (await bodies()).map(x => x.type);
+		assert.strictEqual(types[0], 'session_start');
+		assert.ok(types.includes('allowed'));
+	});
+
+	test('audit_state survives a failed flush', async () => {
+		service = await create(true, () => { });
+		const store = service.store;
+		const original = store.append.bind(store);
+		let fail = true;
+		store.append = async (b: LedgerBody[]) => { if (fail) { throw new Error('x'); } return original(b); };
+		service.setAuditEnabled(false);
+		await service.flush();
+		fail = false;
+		await service.flush();
+		const states = (await bodies()).filter(x => x.type === 'audit_state').map(x => (x as { enabled: boolean }).enabled);
+		assert.deepStrictEqual(states, [true, false]);
+	});
 });
