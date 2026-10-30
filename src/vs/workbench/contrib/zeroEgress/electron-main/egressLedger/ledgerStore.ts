@@ -88,7 +88,11 @@ export class LedgerStore {
 	}
 
 	/** Contiguous seq range: min seq with t >= from through max seq with t <= to, whatever each record's own t. */
-	async recordsBetween(fromIso: string, toIso: string): Promise<LedgerRecord[]> {
+	recordsBetween(fromIso: string, toIso: string): Promise<LedgerRecord[]> {
+		return this.serialized(() => this._recordsBetween(fromIso, toIso));
+	}
+
+	private async _recordsBetween(fromIso: string, toIso: string): Promise<LedgerRecord[]> {
 		const lo = await this.get<{ s: number | null }>(`SELECT MIN(seq) AS s FROM ledger_records WHERE t >= ?`, [fromIso]);
 		const hi = await this.get<{ s: number | null }>(`SELECT MAX(seq) AS s FROM ledger_records WHERE t <= ?`, [toIso]);
 		if (lo?.s === null || lo?.s === undefined || hi?.s === null || hi?.s === undefined || lo.s > hi.s) { return []; }
@@ -97,7 +101,11 @@ export class LedgerStore {
 		return rows.map(r => ({ seq: r.seq, prevHash: r.prevHash, body: JSON.parse(r.json) as LedgerBody }));
 	}
 
-	async head(): Promise<{ seq: number; hash: string }> {
+	head(): Promise<{ seq: number; hash: string }> {
+		return this.serialized(() => this._head());
+	}
+
+	private async _head(): Promise<{ seq: number; hash: string }> {
 		const meta = await this.get<{ last_seq: number; last_hash: string }>(`SELECT last_seq, last_hash FROM ledger_meta WHERE id = 0`, []);
 		return { seq: meta?.last_seq ?? 0, hash: meta?.last_hash ?? GENESIS_HASH };
 	}
@@ -109,14 +117,22 @@ export class LedgerStore {
 	}
 
 	/** The record hash for `seq`: the next record's prevHash, or the meta head hash for the last one. Undefined if unknown. */
-	async hashAt(seq: number): Promise<string | undefined> {
+	hashAt(seq: number): Promise<string | undefined> {
+		return this.serialized(() => this._hashAt(seq));
+	}
+
+	private async _hashAt(seq: number): Promise<string | undefined> {
 		const next = await this.get<{ prevHash: string }>(`SELECT prevHash FROM ledger_records WHERE seq = ?`, [seq + 1]);
 		if (next) { return next.prevHash; }
 		const meta = await this.get<{ last_seq: number; last_hash: string }>(`SELECT last_seq, last_hash FROM ledger_meta WHERE id = 0`, []);
 		return meta && seq >= 1 && meta.last_seq === seq ? meta.last_hash : undefined;
 	}
 
-	async verifyChain(): Promise<{ ok: true } | { ok: false; brokenAtSeq: number }> {
+	verifyChain(): Promise<{ ok: true } | { ok: false; brokenAtSeq: number }> {
+		return this.serialized(() => this._verifyChain());
+	}
+
+	private async _verifyChain(): Promise<{ ok: true } | { ok: false; brokenAtSeq: number }> {
 		const rows = await this.all<{ seq: number; prevHash: string; json: string }>(
 			`SELECT seq, prevHash, json FROM ledger_records ORDER BY seq ASC`, []);
 		const meta = await this.get<{ last_seq: number; last_hash: string }>(`SELECT last_seq, last_hash FROM ledger_meta WHERE id = 0`, []);
@@ -127,17 +143,30 @@ export class LedgerStore {
 			const hash = chainHash(row.prevHash, { seq: row.seq, body: JSON.parse(row.json) });
 			const next = rows[i + 1];
 			if (next) {
+				if (next.seq !== row.seq + 1) { return { ok: false, brokenAtSeq: row.seq + 1 }; } // a record in the middle is missing
 				if (next.prevHash !== hash) { return { ok: false, brokenAtSeq: row.seq }; }
-			} else if (meta && meta.last_seq === row.seq && meta.last_hash !== hash) {
-				return { ok: false, brokenAtSeq: row.seq };
+			} else if (meta && meta.last_seq > 0) {
+				// Last surviving row: it must be the head, otherwise the tail was truncated.
+				if (meta.last_seq !== row.seq) { return { ok: false, brokenAtSeq: row.seq + 1 }; }
+				if (meta.last_hash !== hash) { return { ok: false, brokenAtSeq: row.seq }; }
 			}
 		}
 		return { ok: true };
 	}
 
-	/** Deletes records whose time is before `iso`. The meta row is untouched, so the chain continues. */
+	/**
+	 * Deletes the contiguous seq prefix that precedes the first record whose time is >= `iso`
+	 * (all records if none is). Bucket times are not monotonic in seq, so a time-only delete could leave
+	 * holes. The meta row is untouched, so the chain continues.
+	 */
 	async pruneOlderThan(iso: string): Promise<number> {
-		return this.serialized(async () => (await this.run(`DELETE FROM ledger_records WHERE t < ?`, [iso])).changes);
+		return this.serialized(async () => {
+			const first = await this.get<{ s: number | null }>(`SELECT MIN(seq) AS s FROM ledger_records WHERE t >= ?`, [iso]);
+			if (first?.s === null || first?.s === undefined) {
+				return (await this.run(`DELETE FROM ledger_records`, [])).changes;
+			}
+			return (await this.run(`DELETE FROM ledger_records WHERE seq < ?`, [first.s])).changes;
+		});
 	}
 
 	close(): Promise<void> {

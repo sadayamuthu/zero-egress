@@ -86,6 +86,32 @@ suite('LedgerStore', () => {
 		assert.deepStrictEqual(await store.verifyChain(), { ok: true });
 	});
 
+	test('prune of an out-of-order ledger deletes a contiguous prefix and still verifies', async () => {
+		await store.append([
+			allowed('2026-07-12T05:00:00.000Z'),
+			allowed('2026-07-10T01:00:00.000Z'), // older than the cutoff but after a newer record
+			allowed('2026-07-12T06:00:00.000Z'),
+		]);
+		const removed = await store.pruneOlderThan('2026-07-11T00:00:00.000Z');
+		assert.strictEqual(removed, 0);
+		assert.deepStrictEqual(await store.verifyChain(), { ok: true });
+		await store.append([allowed('2026-07-01T00:00:00.000Z')]);
+		assert.strictEqual(await store.pruneOlderThan('2026-07-12T05:30:00.000Z'), 2);
+		assert.deepStrictEqual(await store.verifyChain(), { ok: true });
+	});
+
+	test('tail truncation breaks the chain', async () => {
+		await store.append([allowed('2026-07-12T01:00:00.000Z'), allowed('2026-07-12T02:00:00.000Z'), allowed('2026-07-12T03:00:00.000Z')]);
+		await rawUpdate(`DELETE FROM ledger_records WHERE seq = 3`, []);
+		assert.deepStrictEqual(await store.verifyChain(), { ok: false, brokenAtSeq: 3 });
+	});
+
+	test('a deleted middle row breaks the chain at that seq', async () => {
+		await store.append([allowed('2026-07-12T01:00:00.000Z'), allowed('2026-07-12T02:00:00.000Z'), allowed('2026-07-12T03:00:00.000Z')]);
+		await rawUpdate(`DELETE FROM ledger_records WHERE seq = 2`, []);
+		assert.deepStrictEqual(await store.verifyChain(), { ok: false, brokenAtSeq: 2 });
+	});
+
 	test('recordsBetween filters by bucket time', async () => {
 		await store.append([
 			allowed('2026-07-12T01:00:00.000Z'),
