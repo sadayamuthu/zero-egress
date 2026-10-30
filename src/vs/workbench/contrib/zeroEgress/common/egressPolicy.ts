@@ -117,7 +117,7 @@ export function isPrivateHost(host: string): boolean {
  * The name a DNS query is for, normalized like a URL host. The Node hooks describe a name lookup (dns.lookup,
  * dns.resolve*, ...) as `dns://<name>/`. Undefined for any other URL.
  */
-function dnsQueryHost(url: string): string | undefined {
+export function dnsQueryHost(url: string): string | undefined {
 	let u: URL;
 	try { u = new URL(url); } catch { return undefined; }
 	if (u.protocol !== 'dns:' || !u.hostname || u.port || u.username || u.password) { return undefined; }
