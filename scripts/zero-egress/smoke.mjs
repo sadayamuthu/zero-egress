@@ -56,6 +56,10 @@ const args = [
 	`--remote-debugging-port=${cdpPort}`,
 	`--proxy-server=${proxyUrl}`, '--proxy-bypass-list=<-loopback>',
 	'--skip-welcome', '--skip-release-notes', '--disable-workspace-trust', '--disable-gpu',
+	// The throwaway HOME below has no login keychain: secret storage's startup check (and Chromium's cookie
+	// encryption) would ask macOS for one, which shows a modal and blocks the main process until answered.
+	'--use-inmemory-secretstorage',
+	...(process.platform === 'darwin' ? ['--use-mock-keychain'] : []),
 	...(process.platform === 'linux' ? ['--no-sandbox'] : []),
 ];
 console.log(`launching ${app} ${args.join(' ')}`);
