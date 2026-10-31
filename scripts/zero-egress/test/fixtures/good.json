@@ -1,0 +1,221 @@
+{
+	"schemaVersion": 1,
+	"createdAt": "2026-10-01T13:00:00.000Z",
+	"period": {
+		"from": "2026-10-01T00:00:00.000Z",
+		"to": "2026-10-02T00:00:00.000Z"
+	},
+	"identity": {
+		"machineId": "fixture-machine",
+		"user": "fixture-user",
+		"version": "1.0.0",
+		"commit": "abc1234",
+		"os": "fixture-os",
+		"networkSettings": []
+	},
+	"scope": "Covers connections made by ZeroEgress itself. Programs it starts (git, terminal and agent commands, language servers) are not covered.",
+	"verdict": "gaps",
+	"coverage": {
+		"hoursRecorded": 3,
+		"gaps": [
+			{
+				"from": "2026-10-01T09:00:00.000Z",
+				"to": "2026-10-01T11:30:00.000Z",
+				"why": "crash"
+			}
+		],
+		"recordingSince": "2026-10-01T08:00:00.000Z"
+	},
+	"allowed": [
+		{
+			"dest": "127.0.0.1:11434",
+			"kind": "this machine",
+			"reasons": [
+				"this machine"
+			],
+			"origins": [
+				"main"
+			],
+			"count": 17,
+			"first": "2026-10-01T08:00:00.000Z",
+			"last": "2026-10-01T09:00:00.000Z"
+		},
+		{
+			"dest": "192.168.1.20:8080",
+			"kind": "local network",
+			"reasons": [
+				"model server (set in Settings)"
+			],
+			"origins": [
+				"renderer"
+			],
+			"count": 3,
+			"first": "2026-10-01T08:00:00.000Z",
+			"last": "2026-10-01T08:00:00.000Z"
+		}
+	],
+	"blocked": [
+		{
+			"dest": "telemetry.example.com:443",
+			"origins": [
+				"extensionHost",
+				"renderer"
+			],
+			"count": 5,
+			"first": "2026-10-01T08:05:00.000Z",
+			"last": "2026-10-01T09:10:00.000Z"
+		}
+	],
+	"lookupsBlocked": [
+		{
+			"host": "tracker.example.net",
+			"origins": [
+				"sharedProcess"
+			],
+			"count": 2,
+			"first": "2026-10-01T08:06:00.000Z",
+			"last": "2026-10-01T08:06:00.000Z"
+		}
+	],
+	"modelUsage": null,
+	"policy": null,
+	"ledger": {
+		"firstSeq": 1,
+		"headSeq": 12,
+		"headHash": "db8705a583472ef066e4a16e56297b622cb807c707b1e1434e200aac8d411e69",
+		"prevHashBeforeFirst": "0000000000000000000000000000000000000000000000000000000000000000",
+		"records": [
+			{
+				"seq": 1,
+				"prevHash": "0000000000000000000000000000000000000000000000000000000000000000",
+				"body": {
+					"type": "session_start",
+					"time": "2026-10-01T08:00:00.000Z",
+					"version": "1.0.0",
+					"commit": "abc1234"
+				}
+			},
+			{
+				"seq": 2,
+				"prevHash": "1898b0508f65f2f10725ee58f315c3b4303ed7c7d1f6e6e2cf02859e35c8c48b",
+				"body": {
+					"type": "heartbeat",
+					"hour": "2026-10-01T08:00:00.000Z"
+				}
+			},
+			{
+				"seq": 3,
+				"prevHash": "300de0371bf8753cb789976f9e72792f0dece7484bb14a1e10bdac451c3c1d82",
+				"body": {
+					"type": "allowed",
+					"hour": "2026-10-01T08:00:00.000Z",
+					"dest": "127.0.0.1:11434",
+					"kind": "this machine",
+					"reason": "this machine",
+					"origin": "main",
+					"count": 12
+				}
+			},
+			{
+				"seq": 4,
+				"prevHash": "55f981bdb58e3deb417165755d5a4050de965d0239fc45d30b7b656d6c425e76",
+				"body": {
+					"type": "allowed",
+					"hour": "2026-10-01T08:00:00.000Z",
+					"dest": "192.168.1.20:8080",
+					"kind": "local network",
+					"reason": "model server (set in Settings)",
+					"origin": "renderer",
+					"count": 3
+				}
+			},
+			{
+				"seq": 5,
+				"prevHash": "eb75250d9044328445d0d38c86387c18ce09a52e35b0d8b03d0010c1402948be",
+				"body": {
+					"type": "blocked",
+					"minute": "2026-10-01T08:05:00.000Z",
+					"dest": "telemetry.example.com:443",
+					"origin": "extensionHost",
+					"count": 4
+				}
+			},
+			{
+				"seq": 6,
+				"prevHash": "46941885fe58186f7e640f4b72467cb24b112f626021879f5368855070891b0e",
+				"body": {
+					"type": "blocked_lookup",
+					"minute": "2026-10-01T08:06:00.000Z",
+					"host": "tracker.example.net",
+					"origin": "sharedProcess",
+					"count": 2
+				}
+			},
+			{
+				"seq": 7,
+				"prevHash": "490cc97633109f5e0a2b1cbe1c01f27bf7c5a85932fae10f59ef43e5b00e9350",
+				"body": {
+					"type": "heartbeat",
+					"hour": "2026-10-01T09:00:00.000Z"
+				}
+			},
+			{
+				"seq": 8,
+				"prevHash": "244b8164cc2331bfd49fe7a16a8d01b32552cebd5bbca361dd4c75f7047bfaee",
+				"body": {
+					"type": "allowed",
+					"hour": "2026-10-01T09:00:00.000Z",
+					"dest": "127.0.0.1:11434",
+					"kind": "this machine",
+					"reason": "this machine",
+					"origin": "main",
+					"count": 5
+				}
+			},
+			{
+				"seq": 9,
+				"prevHash": "550140d96a1a5c673c34509395b61bfc304deac6025212066496685601524ee7",
+				"body": {
+					"type": "blocked",
+					"minute": "2026-10-01T09:10:00.000Z",
+					"dest": "telemetry.example.com:443",
+					"origin": "renderer",
+					"count": 1
+				}
+			},
+			{
+				"seq": 10,
+				"prevHash": "9ca6c761963ec9f5ffda7ac77e6d0c63a29801a02b4bbef9dd77bff42c0c89fd",
+				"body": {
+					"type": "session_start",
+					"time": "2026-10-01T11:30:00.000Z",
+					"version": "1.0.0",
+					"commit": "abc1234"
+				}
+			},
+			{
+				"seq": 11,
+				"prevHash": "4430b37b34c45256178e4512b61b8a659041f85c98c9f33609016c09fc04e92c",
+				"body": {
+					"type": "heartbeat",
+					"hour": "2026-10-01T11:00:00.000Z"
+				}
+			},
+			{
+				"seq": 12,
+				"prevHash": "8799f9dcc133ac07bdc64e43576ec87a1aef64c70f5279e59768e760d9d8f696",
+				"body": {
+					"type": "session_end",
+					"time": "2026-10-01T12:00:00.000Z"
+				}
+			}
+		]
+	},
+	"key": {
+		"publicKey": "CAQ5ss1/fyzWHcVjWJ6+f75PRS3msPwZhRu6reI9BnA=",
+		"fingerprint": "8a3e-b320-aa4b-5efc-fd1a-134c-9cde-8ec4",
+		"storage": "file"
+	},
+	"pdfSha256": "5fb9c338125c8bc8d53b23f0a0afc92b7463dd98e8c2eb5561aff528b5708593",
+	"signature": "t4H0zLyZ84wlqC4qfpRXnVWz39yvbdVobWrfGyuoIXjY8N8a0844ksoy4D03TkIeqmd7fjprvXe6wyaGAihUBQ=="
+}

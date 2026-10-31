@@ -1219,7 +1219,7 @@ export const ZeroEgressSwitch = ({
 
 
 
-export const ZeroEgressCheckBox = ({ label, value, onClick, className }: { label: string, value: boolean, onClick: (checked: boolean) => void, className?: string }) => {
+export const ZeroEgressCheckBox = ({ label, value, onClick, className, disabled }: { label: string, value: boolean, onClick: (checked: boolean) => void, className?: string, disabled?: boolean }) => {
 	const divRef = useRef<HTMLDivElement | null>(null)
 	const instanceRef = useRef<Checkbox | null>(null)
 
@@ -1239,9 +1239,10 @@ export const ZeroEgressCheckBox = ({ label, value, onClick, className }: { label
 		onCreateInstance={useCallback((instance: Checkbox) => {
 			instanceRef.current = instance;
 			divRef.current?.append(instance.domNode)
+			if (disabled) { instance.disable() }
 			const d = instance.onChange(() => onClick(instance.checked))
 			return [d]
-		}, [onClick])}
+		}, [onClick, disabled])}
 		dispose={useCallback((instance: Checkbox) => {
 			instance.dispose()
 			instance.domNode.remove()

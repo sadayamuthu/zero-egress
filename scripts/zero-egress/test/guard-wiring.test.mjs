@@ -35,8 +35,8 @@ function expectBefore(rel, what, first, second) {
 // Main process: the guard exists, its Node hooks are installed in the constructor, and the session filter
 // (renderer, webviews, Electron net) consults it.
 const app = 'src/vs/code/electron-main/app.ts';
-expectBefore(app, 'EgressGuard is created and its Node hooks installed in the CodeApplication constructor',
-	/this\.egressGuard\s*=\s*this\._register\(new EgressGuard\(\)\);\s*this\._register\(this\.egressGuard\.installNodeHooks\(\)\);/,
+expectBefore(app, 'EgressGuard is created (counting into the Egress Proof ledger) and its Node hooks installed in the CodeApplication constructor',
+	/this\.egressGuard\s*=\s*this\._register\(new EgressGuard\(this\.egressLedger\.aggregator\)\);(?:\s*\/\/ ZeroEgress)?\s*this\._register\(this\.egressGuard\.installNodeHooks\(\)\);/,
 	/session\.defaultSession\.webRequest\.onBeforeRequest/);
 expect(app, 'the webRequest filter cancels what the guard refuses',
 	/webRequest\.onBeforeRequest\(\(details, callback\) => \{\s*if \(!this\.egressGuard\.check\(details\.url,[^)]*\)\)\s*\{\s*return callback\(\{ cancel: true \}\);/);
@@ -49,7 +49,7 @@ expect(app, 'a closed window drops its settings targets', /onDidRemoveConnection
 
 const guard = 'src/vs/workbench/contrib/zeroEgress/electron-main/egressGuard.ts';
 expect(guard, 'installNodeHooks hooks http, https, net, dgram and dns',
-	/installNodeHooks\(\): IDisposable \{\s*return installEgressNodeHooks\(url => this\.check\(url, 'main'\), \{\s*global: globalThis,\s*http: require\('http'\),\s*https: require\('https'\),\s*net: require\('net'\),\s*dgram: require\('dgram'\),\s*dns: require\('dns'\),\s*\}\);/);
+	/installNodeHooks\(\): IDisposable \{\s*return installEgressNodeHooks\(\(url, kind\) => this\.check\(url, 'main', kind\), \{\s*global: globalThis,\s*http: require\('http'\),\s*https: require\('https'\),\s*net: require\('net'\),\s*dgram: require\('dgram'\),\s*dns: require\('dns'\),\s*\}\);/);
 
 const mcp = 'src/vs/workbench/contrib/zeroEgress/electron-main/mcpChannel.ts';
 expect(mcp, 'the MCP config sets the mcp target', /this\.egressGuard\.setTargets\('mcp',/);

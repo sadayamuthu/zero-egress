@@ -96,5 +96,8 @@ import '../common/metricsService.js'
 // updates
 import '../common/zeroEgressUpdateService.js'
 
+// egress proof report
+import '../common/egressProofService.js'
+
 // model service
 import '../common/zeroEgressModelService.js'

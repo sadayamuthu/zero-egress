@@ -729,12 +729,14 @@ export interface MainThreadTelemetryShape extends IDisposable {
 
 // ZeroEgress: the extension host enforces the egress allow-list itself (see api/node/extHostEgressGuard.ts).
 /** Same shape as contrib/zeroEgress/common/egressPolicy EgressTarget (declared here to keep api/common free of contrib). */
-export interface EgressTargetDto { readonly host: string; readonly port: number }
+export interface EgressTargetDto { readonly host: string; readonly port: number; readonly reason?: string } // ZeroEgress
 
 export interface MainThreadEgressGuardShape extends IDisposable {
 	/** Current allow-list; after the first call, changes are pushed with ExtHostEgressGuardShape.$setTargets. */
 	$getTargets(): Promise<EgressTargetDto[]>;
 	$reportBlocked(url: string): void;
+	/** Allowed connection counts per URL (host:port only), batched by the extension host. */ // ZeroEgress
+	$reportAllowed(counts: { url: string; count: number }[]): void; // ZeroEgress
 }
 
 export interface ExtHostEgressGuardShape {

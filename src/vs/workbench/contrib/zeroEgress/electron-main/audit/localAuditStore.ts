@@ -116,6 +116,15 @@ export class LocalAuditStore {
 		return res.changes;
 	}
 
+	/** Request counts per provider and model with `fromIso <= timestamp < toIso`, for the Egress Proof report. Counts only, no content. */
+	async countByModel(fromIso: string, toIso: string): Promise<{ provider: string; model: string; requests: number }[]> {
+		const rows = await this.all<{ provider: string | null; model: string | null; requests: number }>(
+			`SELECT json_extract(json, '$.provider') AS provider, json_extract(json, '$.modelName') AS model, COUNT(*) AS requests
+			FROM audit_records WHERE timestamp >= ? AND timestamp < ?
+			GROUP BY provider, model ORDER BY provider, model`, [fromIso, toIso]);
+		return rows.map(r => ({ provider: r.provider ?? '', model: r.model ?? '', requests: r.requests }));
+	}
+
 	async verifyChain(): Promise<{ ok: true } | { ok: false; brokenAtSeq: number }> {
 		const rows = await this.all<{ seq: number; prevHash: string; json: string }>(
 			`SELECT seq, prevHash, json FROM audit_records ORDER BY seq ASC`, []);

@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------*/
 
 // Node-side egress enforcement, shared by electron-main (EgressGuard), the extension host (proxyResolver)
-// and the shared process. `check(url)` decides and is responsible for recording a block.
+// and the shared process. `check(url, kind)` decides and is responsible for recording (and counting) it.
 //
 // Enforcement point: net.Socket.prototype.connect. Every TCP connection in Node reaches it: net.connect,
 // net.createConnection (including the reference http.Agent captured at startup), tls.connect (TLSSocket
@@ -35,7 +35,8 @@ import * as nodeUrl from 'url';
 import { isIP } from 'net';
 import { Readable, Writable } from 'stream';
 import { createRequire, syncBuiltinESMExports } from 'node:module';
-import { IDisposable, toDisposable } from '../../../../base/common/lifecycle.js';
+import { Disposable, IDisposable, toDisposable } from '../../../../base/common/lifecycle.js';
+import { destinationOf } from '../common/egressLedger.js';
 import { describeDestination, isAllowed, isLoopbackHost, targetFromUrl } from '../common/egressPolicy.js';
 
 export interface EgressHookTargets {
@@ -50,6 +51,18 @@ export interface EgressHookTargets {
 	/** Name lookups and DNS queries (callback and promise APIs, module functions and Resolver). */
 	readonly dns?: typeof dns;
 }
+
+/**
+ * What a check is for, so the caller can count it once: 'socket' is a connection (net.Socket connect, dgram send
+ * or connect), 'lookup' a name query (or a lookup result refused for a loopback name), 'wrapper' the early check of
+ * fetch, http(s).request or a redirect hop, whose connection (if any) is checked again as a socket.
+ * 'electronNet' is the destination Electron's net.request (or a net.fetch without one) dials: Chromium makes that
+ * connection, so no socket check follows, and outside main no session webRequest filter sees it either. It is the
+ * only check of such a request a process other than main can count; main counts the request in webRequest instead.
+ */
+export type EgressCheckKind = 'socket' | 'lookup' | 'wrapper' | 'electronNet';
+
+export type EgressCheck = (url: string, kind: EgressCheckKind) => boolean;
 
 export function egressBlockedError(url: string): Error {
 	return new Error(`ZeroEgress blocked connection to ${describeDestination(url)} (not a configured server)`);
@@ -309,7 +322,7 @@ function electronFetch(request: Function, input: string | Request, init: Request
 	});
 }
 
-export function installEgressNodeHooks(check: (url: string) => boolean, t: EgressHookTargets): IDisposable {
+export function installEgressNodeHooks(check: EgressCheck, t: EgressHookTargets): IDisposable {
 	const restore: (() => void)[] = [];
 	const patch = <O extends object, K extends keyof O>(obj: O, key: K, wrap: (original: O[K]) => O[K]) => {
 		const original = obj[key];
@@ -322,7 +335,7 @@ export function installEgressNodeHooks(check: (url: string) => boolean, t: Egres
 		const [options, listener] = connectArgs(args);
 		if (options.path) { return (original as Function).call(this, options, listener); }
 		const url = destinationUrl(options.host, options.port);
-		if (!check(url)) {
+		if (!check(url, 'socket')) {
 			// Look like a connect in progress (as the real connect does synchronously) so early writes are
 			// buffered rather than failing with 'Socket is closed'; then fail with our error. setImmediate, not
 			// nextTick: an http ClientRequest attaches its socket 'error' listener on a later tick.
@@ -347,7 +360,7 @@ export function installEgressNodeHooks(check: (url: string) => boolean, t: Egres
 					if (bad === undefined) { return cb!(err, address, family); }
 					const badUrl = destinationUrl(bad, options.port);
 					// record the block; a configured address reached through a loopback name is still refused
-					if (check(badUrl)) { check(`invalid-lookup://${encodeURIComponent(bad)}`); }
+					if (check(badUrl, 'lookup')) { check(`invalid-lookup://${encodeURIComponent(bad)}`, 'lookup'); }
 					return cb!(egressBlockedError(badUrl));
 				});
 			};
@@ -358,7 +371,7 @@ export function installEgressNodeHooks(check: (url: string) => boolean, t: Egres
 
 	patch(t.global, 'fetch', original => async function (input: string | URL | Request, init?: RequestInit) {
 		const { url, input: checked } = fetchInput(input);
-		if (!check(url)) { throw egressBlockedError(url); }
+		if (!check(url, 'wrapper')) { throw egressBlockedError(url); }
 		return original.call(globalThis, checked, init);
 	} as typeof fetch);
 
@@ -366,7 +379,7 @@ export function installEgressNodeHooks(check: (url: string) => boolean, t: Egres
 		for (const key of ['request', 'get'] as const) {
 			patch(mod, key, original => function (this: unknown, ...args: unknown[]) {
 				const { url, options, callback } = requestOptions(args, defaultPort);
-				if (url === undefined || check(url)) { return (original as Function).call(this, options, callback); }
+				if (url === undefined || check(url, 'wrapper')) { return (original as Function).call(this, options, callback); }
 				const err = egressBlockedError(url);
 				// A bare ClientRequest whose connection fails with our error: callers see the normal 'error' event.
 				const req = new t.http.ClientRequest({
@@ -401,7 +414,7 @@ export function installEgressNodeHooks(check: (url: string) => boolean, t: Egres
 		let refusal: Error | undefined;
 		const allowed = (h: { url: string; allowed?: boolean }): boolean => {
 			if (h.allowed === undefined) {
-				h.allowed = check(h.url);
+				h.allowed = check(h.url, 'wrapper');
 				if (!h.allowed) { refusal = egressBlockedError(h.url); }
 			}
 			return h.allowed;
@@ -449,7 +462,8 @@ export function installEgressNodeHooks(check: (url: string) => boolean, t: Egres
 		// Electron stringifies a truthy `url` of any type; do it once here so it and we see the same string.
 		const snapshot = typeof options === 'string' ? options : snapshotOptions(options);
 		if (typeof snapshot !== 'string' && snapshot.url) { snapshot.url = String(snapshot.url); }
-		const denied = electronRequestUrls(snapshot).find(url => !check(url));
+		// the first URL is the one Electron dials (one 'electronNet' check per request); the rest are defense in depth
+		const denied = electronRequestUrls(snapshot).find((url, i) => !check(url, i === 0 ? 'electronNet' : 'wrapper'));
 		if (denied !== undefined) { throw egressBlockedError(denied); }
 		// Electron follows redirects by default and only the first URL was checked above. 'error' (and any value
 		// Electron rejects) can pass as is; 'follow' and 'manual' run as 'manual' behind guardRedirects. A string
@@ -468,13 +482,13 @@ export function installEgressNodeHooks(check: (url: string) => boolean, t: Egres
 		const request = guardedRequest(originalRequest);
 		tryPatch('fetch', () => function (this: unknown, input: unknown, init?: RequestInit) {
 			const { url, input: checked } = fetchInput(input);
-			if (!check(url)) { return Promise.reject(egressBlockedError(url)); }
+			if (!check(url, 'wrapper')) { return Promise.reject(egressBlockedError(url)); }
 			return electronFetch(request, checked, init);
 		});
 	} else {
 		tryPatch('fetch', original => async function (this: unknown, input: unknown, ...rest: unknown[]) {
 			const { url, input: checked } = fetchInput(input);
-			if (!check(url)) { throw egressBlockedError(url); }
+			if (!check(url, 'electronNet')) { throw egressBlockedError(url); } // no guarded net.request below to count it
 			return original.call(this, checked, ...rest);
 		});
 	}
@@ -510,21 +524,21 @@ function isConnected(socket: dgramType.Socket): boolean {
  * (an omitted address is Node's loopback default). A connected socket's sends go where its checked connect
  * went. Node accepts only a number or string port and a string address, so nothing can answer differently later.
  */
-function patchDgram(dgram: typeof dgramType, check: (url: string) => boolean, patch: Patch): void {
+function patchDgram(dgram: typeof dgramType, check: EgressCheck, patch: Patch): void {
 	patch(dgram.Socket.prototype, 'send', original => function (this: dgramType.Socket, ...args: unknown[]) {
 		if (!isConnected(this)) {
 			// Node's argument shuffle: send(msg, offset, length, port, address, cb) or send(msg, port, address, cb)
 			let [port, address, callback] = args[4] || (args[3] && typeof args[3] !== 'function') ? [args[3], args[4], args[5]] : [args[1], args[2], args[3]];
 			if (typeof address === 'function') { callback = address; address = undefined; }
 			const url = destinationUrl(address, port);
-			if (!check(url)) { return failDgram(this, egressBlockedError(url), callback); }
+			if (!check(url, 'socket')) { return failDgram(this, egressBlockedError(url), callback); }
 		}
 		return (original as Function).apply(this, args);
 	} as typeof original);
 	patch(dgram.Socket.prototype, 'connect', original => function (this: dgramType.Socket, ...args: unknown[]) {
 		const [port, address, callback] = typeof args[1] === 'function' ? [args[0], undefined, args[1]] : args;
 		const url = destinationUrl(address, port);
-		if (!check(url)) { return failDgram(this, egressBlockedError(url), callback); }
+		if (!check(url, 'socket')) { return failDgram(this, egressBlockedError(url), callback); }
 		return (original as Function).apply(this, args);
 	} as typeof original);
 }
@@ -546,7 +560,7 @@ function dnsQueryUrl(name: unknown): string {
  * the error passed to the callback or the promise rejected; it is never sent. The name is a primitive string
  * (Node rejects anything else), so it cannot answer differently later.
  */
-function patchDns(dns: typeof import('dns'), check: (url: string) => boolean, patch: Patch): void {
+function patchDns(dns: typeof import('dns'), check: EgressCheck, patch: Patch): void {
 	// lookup() of an IP literal answers locally (getaddrinfo with a numeric host; dgram's bind and send call it
 	// for every address), so it is not a query. resolve*() and reverse() of an IP do send one.
 	const guardCallback = (obj: any) => {
@@ -554,7 +568,7 @@ function patchDns(dns: typeof import('dns'), check: (url: string) => boolean, pa
 			if (typeof obj[key] !== 'function') { continue; }
 			patch(obj, key, (original: Function) => function (this: unknown, name: unknown, ...rest: unknown[]) {
 				const url = dnsQueryUrl(name);
-				if (typeof name !== 'string' || (key === 'lookup' && isIP(name) !== 0) || check(url)) { return original.call(this, name, ...rest); }
+				if (typeof name !== 'string' || (key === 'lookup' && isIP(name) !== 0) || check(url, 'lookup')) { return original.call(this, name, ...rest); }
 				const callback = rest[rest.length - 1];
 				const err = Object.assign(egressBlockedError(url), { code: 'ENOTFOUND', hostname: name });
 				if (typeof callback === 'function') { process.nextTick(callback, err); return undefined; }
@@ -567,7 +581,7 @@ function patchDns(dns: typeof import('dns'), check: (url: string) => boolean, pa
 			if (typeof obj[key] !== 'function') { continue; }
 			patch(obj, key, (original: Function) => function (this: unknown, name: unknown, ...rest: unknown[]) {
 				const url = dnsQueryUrl(name);
-				if (typeof name !== 'string' || (key === 'lookup' && isIP(name) !== 0) || check(url)) { return original.call(this, name, ...rest); }
+				if (typeof name !== 'string' || (key === 'lookup' && isIP(name) !== 0) || check(url, 'lookup')) { return original.call(this, name, ...rest); }
 				return Promise.reject(Object.assign(egressBlockedError(url), { code: 'ENOTFOUND', hostname: name }));
 			});
 		}
@@ -582,14 +596,63 @@ function patchDns(dns: typeof import('dns'), check: (url: string) => boolean, pa
 
 /**
  * For processes that never need more than loopback (the shared process): installs the hooks on this
- * process's own modules with an empty allow-list, plus Electron `net` when given. `onBlocked` records.
+ * process's own modules with an empty allow-list, plus Electron `net` when given. `onBlocked` records;
+ * `onAllowed` hears each allowed 'socket' and 'electronNet' check (one per connection, the ledger's counting unit).
  */
-export function installLoopbackOnlyEgressHooks(onBlocked: (url: string) => void, electronNet?: EgressHookTargets['electronNet']): IDisposable {
+export function installLoopbackOnlyEgressHooks(onBlocked: (url: string) => void, electronNet?: EgressHookTargets['electronNet'], onAllowed?: (url: string) => void): IDisposable {
 	const require = createRequire(import.meta.url);
-	const check = (url: string) => {
-		if (isAllowed(url, [])) { return true; }
+	const check: EgressCheck = (url, kind) => {
+		if (isAllowed(url, [])) {
+			if (kind === 'socket' || kind === 'electronNet') { onAllowed?.(url); }
+			return true;
+		}
 		onBlocked(url);
 		return false;
 	};
 	return installEgressNodeHooks(check, { global: globalThis, http: require('http'), https: require('https'), net: require('net'), dgram: require('dgram'), dns: require('dns'), electronNet });
+}
+
+/** How often the extension host and the shared process report their allowed counts to main. */
+export const ALLOWED_REPORT_INTERVAL_MS = 10_000;
+
+/**
+ * Counts allowed checks per destination in a process other than main and hands them over every interval (and on
+ * dispose); an empty interval sends nothing. Only `http://host:port/` leaves the process, never a path or query;
+ * non-network URLs are not counted (the ledger would drop them). The timer never keeps the process alive, and a failing `send`
+ * is logged, never thrown into a socket hook or the timer.
+ */
+export class AllowedCountBatcher extends Disposable {
+	private readonly counts = new Map<string, number>();
+
+	constructor(
+		private readonly send: (counts: { url: string; count: number }[]) => void,
+		intervalMs = ALLOWED_REPORT_INTERVAL_MS,
+		private readonly logError: (message: string, error: unknown) => void = (message, error) => console.error(message, error),
+	) {
+		super();
+		const timer = setInterval(() => this.flush(), intervalMs);
+		(timer as { unref?: () => void }).unref?.();
+		this._register(toDisposable(() => {
+			clearInterval(timer);
+			this.flush();
+		}));
+	}
+
+	add(url: string): void {
+		const d = destinationOf(url);
+		if (!d) { return; }
+		const key = `http://${d.dest}/`;
+		this.counts.set(key, (this.counts.get(key) ?? 0) + 1);
+	}
+
+	flush(): void {
+		if (!this.counts.size) { return; }
+		const counts = [...this.counts].map(([url, count]) => ({ url, count }));
+		this.counts.clear();
+		try {
+			this.send(counts);
+		} catch (e) {
+			this.logError('ZeroEgress: could not report allowed connections', e);
+		}
+	}
 }

@@ -5,7 +5,7 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { collectEgressTargets, describeDestination, endpointWarning, isAllowed, isLoopbackHost, isNetworkUrl, isPrivateHost, targetFromUrl } from '../egressPolicy.js';
+import { allowedBy, collectEgressTargets, describeDestination, endpointWarning, isAllowed, isLoopbackHost, isNetworkUrl, isPrivateHost, targetFromUrl } from '../egressPolicy.js';
 
 suite('egressPolicy', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
@@ -85,7 +85,7 @@ suite('egressPolicy', () => {
 
 	test('collect dedupes and includes audit collector', () => {
 		const t = collectEgressTargets({ providerEndpoints: ['http://a.lan:1/x', 'HTTP://A.LAN:1/'], mcpServerUrls: ['http://a.lan:1'], auditCollectorUrl: 'https://audit.lan:9443/ingest' });
-		assert.deepStrictEqual(t, [{ host: 'a.lan', port: 1 }, { host: 'audit.lan', port: 9443 }]);
+		assert.deepStrictEqual(t, [{ host: 'a.lan', port: 1, reason: 'model server (set in Settings)' }, { host: 'audit.lan', port: 9443, reason: 'audit collector' }]);
 	});
 
 	test('control characters cannot hide a network scheme', () => {
@@ -132,5 +132,28 @@ suite('egressPolicy', () => {
 		for (const u of ['http://127.0.0.1:11434', 'http://gpubox:11434', 'http://192.168.1.9:8000', '', 'localhost:11434']) {
 			assert.strictEqual(endpointWarning(u), undefined, JSON.stringify(u));
 		}
+	});
+
+	test('allowedBy names the reason', () => {
+		const t = collectEgressTargets({ providerEndpoints: ['http://gpubox:8000/v1'], mcpServerUrls: ['https://mcp.lan/sse'], auditCollectorUrl: 'https://audit.lan:9443/ingest' });
+		assert.strictEqual(allowedBy('http://127.0.0.1:11434/api', t), 'this machine');
+		assert.strictEqual(allowedBy('dns://localhost/', t), 'this machine');
+		assert.strictEqual(allowedBy('http://gpubox:8000/x', t), 'model server (set in Settings)');
+		assert.strictEqual(allowedBy('dns://gpubox/', t), 'model server (set in Settings)');
+		assert.strictEqual(allowedBy('https://mcp.lan/sse', t), 'MCP server');
+		assert.strictEqual(allowedBy('https://audit.lan:9443/x', t), 'audit collector');
+		assert.strictEqual(allowedBy('https://example.com/', t), undefined);
+		assert.strictEqual(allowedBy('http://gpubox:8001/', t), undefined);
+		const first = collectEgressTargets({ providerEndpoints: ['http://a.lan:1'], mcpServerUrls: ['http://a.lan:1'], auditCollectorUrl: undefined });
+		assert.strictEqual(allowedBy('http://a.lan:1/', first), 'model server (set in Settings)');
+	});
+
+	test('isAllowed unchanged', () => {
+		const t = collectEgressTargets({ providerEndpoints: ['http://10.0.0.5:8000/v1'], mcpServerUrls: ['https://mcp.lan/sse'], auditCollectorUrl: undefined });
+		for (const u of ['http://10.0.0.5:8000/x', 'https://mcp.lan/sse', 'http://10.0.0.5:8001/', 'https://api.github.com/', 'http://127.0.0.1:1/', 'vscode-file://x/y', 'file:///x', 'dns://10.0.0.5/', 'dns://example.com/', 'ftp://x/', '', 'http://']) {
+			assert.strictEqual(isAllowed(u, t), allowedBy(u, t) !== undefined, u);
+		}
+		// A target without a reason (e.g. from an older caller) is still allowed.
+		assert.strictEqual(isAllowed('http://h.lan:1/', [{ host: 'h.lan', port: 1 }]), true);
 	});
 });

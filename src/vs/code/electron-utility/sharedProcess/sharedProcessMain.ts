@@ -126,7 +126,7 @@ import { ISharedWebContentExtractorService } from '../../../platform/webContentE
 import { SharedWebContentExtractorService } from '../../../platform/webContentExtractor/node/sharedWebContentExtractorService.js';
 import { net as electronNet } from 'electron';
 import { EGRESS_GUARD_CHANNEL, IEgressGuardService } from '../../../workbench/contrib/zeroEgress/common/egressGuardService.js';
-import { installLoopbackOnlyEgressHooks } from '../../../workbench/contrib/zeroEgress/node/egressNodeHooks.js';
+import { AllowedCountBatcher, installLoopbackOnlyEgressHooks } from '../../../workbench/contrib/zeroEgress/node/egressNodeHooks.js'; // ZeroEgress
 
 class SharedProcessMain extends Disposable implements IClientConnectionFilter {
 
@@ -211,7 +211,9 @@ class SharedProcessMain extends Disposable implements IClientConnectionFilter {
 		// ZeroEgress: this process needs nothing beyond loopback. Police its Node sockets and Electron net
 		// requests before any service can make one; blocks go to main's network log (origin sharedProcess).
 		const egressGuard = ProxyChannel.toService<IEgressGuardService>(mainProcessService.getChannel(EGRESS_GUARD_CHANNEL));
-		this._register(installLoopbackOnlyEgressHooks(url => egressGuard.reportBlocked(url).catch(e => console.error('ZeroEgress: could not report blocked connection', e)), electronNet));
+		// Allowed socket checks are counted here and reported every 10 s for the egress ledger. // ZeroEgress
+		const allowedCounts = this._register(new AllowedCountBatcher(counts => egressGuard.reportAllowed(counts).catch(e => console.error('ZeroEgress: could not report allowed connections', e)))); // ZeroEgress
+		this._register(installLoopbackOnlyEgressHooks(url => egressGuard.reportBlocked(url).catch(e => console.error('ZeroEgress: could not report blocked connection', e)), electronNet, url => allowedCounts.add(url))); // ZeroEgress
 
 		// Policies
 		const policyService = this.configuration.policiesData ? new PolicyChannelClient(this.configuration.policiesData, mainProcessService.getChannel('policy')) : new NullPolicyService();

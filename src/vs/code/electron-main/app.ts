@@ -141,6 +141,10 @@ import { WorktreeMainService } from '../../workbench/contrib/zeroEgress/electron
 import { IZeroEgressWorktreeService, WORKTREE_CHANNEL } from '../../workbench/contrib/zeroEgress/common/worktreeTypes.js'; // ZeroEgress
 import { MCPChannel } from '../../workbench/contrib/zeroEgress/electron-main/mcpChannel.js';
 import { EgressGuard, EgressGuardChannel } from '../../workbench/contrib/zeroEgress/electron-main/egressGuard.js';
+import { EgressLedgerService } from '../../workbench/contrib/zeroEgress/electron-main/egressLedger/egressLedgerService.js'; // ZeroEgress
+import { EgressProofMainService } from '../../workbench/contrib/zeroEgress/electron-main/egressLedger/egressProofMainService.js'; // ZeroEgress
+import { EgressProofChannel } from '../../workbench/contrib/zeroEgress/electron-main/egressLedger/egressProofChannel.js'; // ZeroEgress
+import { EGRESS_PROOF_CHANNEL } from '../../workbench/contrib/zeroEgress/common/egressProofService.js'; // ZeroEgress
 import { EGRESS_GUARD_CHANNEL } from '../../workbench/contrib/zeroEgress/common/egressGuardService.js';
 import { describeDestination, endpointWarning, targetFromUrl } from '../../workbench/contrib/zeroEgress/common/egressPolicy.js';
 /**
@@ -160,6 +164,9 @@ export class CodeApplication extends Disposable {
 
 	// ZeroEgress: the runtime egress guard. Created first so nothing can reach the network before it is in place.
 	private readonly egressGuard: EgressGuard;
+	private readonly egressLedger: EgressLedgerService; // ZeroEgress
+	private readonly resolveLedgerAuditEnabled: () => boolean; // ZeroEgress
+	private zeroEgressMachineId = 'unknown'; // ZeroEgress: for the Egress Proof report identity
 
 	constructor(
 		private readonly mainProcessNodeIpcServer: NodeIPCServer,
@@ -177,7 +184,24 @@ export class CodeApplication extends Disposable {
 	) {
 		super();
 
-		this.egressGuard = this._register(new EgressGuard());
+		// ZeroEgress: the ledger service owns the aggregator; its store opens asynchronously (see openEgressLedger)
+		const resolveLedgerAuditEnabled = () => { // ZeroEgress
+			const userEnabled = this.configurationService.getValue<unknown>(AUDIT_ENABLED_SETTING); // ZeroEgress
+			return resolveAuditConfig({ product: (this.productService as any).auditPipeline, user: typeof userEnabled === 'boolean' ? { enabled: userEnabled } : {} }).enabled; // ZeroEgress
+		}; // ZeroEgress
+		this.resolveLedgerAuditEnabled = resolveLedgerAuditEnabled; // ZeroEgress
+		this.egressLedger = new EgressLedgerService({ // ZeroEgress
+			dbPath: join(this.environmentMainService.userDataPath, 'zero-egress-ledger.vscdb'), // ZeroEgress
+			version: (this.productService as any).zeroEgressVersion || (this.productService.version ?? ''), // ZeroEgress: same version as the report identity
+			commit: this.productService.commit ?? '', // ZeroEgress
+			auditEnabled: resolveLedgerAuditEnabled(), // ZeroEgress
+			expectedSince: { // ZeroEgress
+				get: () => this.stateService.getItem<string | undefined>('zeroEgress.ledger.expectedSince'), // ZeroEgress
+				set: iso => this.stateService.setItem('zeroEgress.ledger.expectedSince', iso), // ZeroEgress
+			}, // ZeroEgress
+			onError: (msg, e) => this.logService.error(msg, e), // ZeroEgress
+		}); // ZeroEgress
+		this.egressGuard = this._register(new EgressGuard(this.egressLedger.aggregator)); // ZeroEgress
 		this._register(this.egressGuard.installNodeHooks());
 		this._register(this.egressGuard.onDidBlock(e => this.logService.warn(`[ZeroEgress] blocked connection to ${describeDestination(e.url)} from ${e.origin}`)));
 
@@ -403,10 +427,24 @@ export class CodeApplication extends Disposable {
 		//#endregion
 	}
 
+	// ZeroEgress: a failed open is logged; the app runs on with the ledger unrecorded.
+	private openEgressLedger(): void { // ZeroEgress
+		this.egressLedger.open().catch(e => this.logService.error('[ZeroEgress] ledger failed to open', e)); // ZeroEgress
+		this._register(this.configurationService.onDidChangeConfiguration(e => { // ZeroEgress
+			if (e.affectsConfiguration(AUDIT_ENABLED_SETTING)) { // ZeroEgress
+				this.egressLedger.setAuditEnabled(this.resolveLedgerAuditEnabled()); // ZeroEgress
+			} // ZeroEgress
+		})); // ZeroEgress
+		Event.once(this.lifecycleMainService.onWillShutdown)(e => e.join('zeroEgress.ledger', this.egressLedger.dispose())); // ZeroEgress
+	} // ZeroEgress
+
 	private registerListeners(): void {
 
 		// Dispose on shutdown
 		Event.once(this.lifecycleMainService.onWillShutdown)(() => this.dispose());
+
+		// ZeroEgress: open the ledger, follow the audit setting, and flush and close it before the app exits
+		this.openEgressLedger(); // ZeroEgress
 
 		// Contextmenu via IPC support
 		registerContextMenuListener();
@@ -600,6 +638,7 @@ export class CodeApplication extends Disposable {
 			resolvedevDeviceId(this.stateService, this.logService)
 		]);
 		this.logService.trace(`Resolved machine identifier: ${machineId}`);
+		this.zeroEgressMachineId = machineId; // ZeroEgress
 
 		// Shared process
 		const { sharedProcessReady, sharedProcessClient } = this.setupSharedProcess(machineId, sqmId, devDeviceId);
@@ -1279,6 +1318,21 @@ export class CodeApplication extends Disposable {
 		const sendLLMMessageChannel = new LLMMessageChannel(metricsService, createDisabledAuditService(), disabledIdentity, this.egressGuard);
 		mainProcessElectronServer.registerChannel('zero-egress-channel-llmMessage', sendLLMMessageChannel);
 
+		// ZeroEgress: Egress Proof reports, built from the ledger (and the audit store's model counts once it is up)
+		let proofAuditStore: LocalAuditStore | undefined; // ZeroEgress
+		const egressProofService = new EgressProofMainService({ // ZeroEgress
+			ledger: this.egressLedger, // ZeroEgress
+			keyDir: this.environmentMainService.userDataPath, // ZeroEgress
+			machineId: this.zeroEgressMachineId, // ZeroEgress
+			version: (this.productService as any).zeroEgressVersion || (this.productService.version ?? ''), // ZeroEgress
+			commit: this.productService.commit ?? '', // ZeroEgress
+			getTargets: () => this.egressGuard.targets, // ZeroEgress
+			getAuditStore: () => proofAuditStore, // ZeroEgress
+			dialog: accessor.get(IDialogMainService), // ZeroEgress
+			onError: (msg, e) => this.logService.error(msg, e), // ZeroEgress
+		}); // ZeroEgress
+		mainProcessElectronServer.registerChannel(EGRESS_PROOF_CHANNEL, new EgressProofChannel(egressProofService)); // ZeroEgress: only the interface methods
+
 		// Build the real audit pipeline asynchronously and hot-swap it in when ready.
 		void (async () => {
 			try {
@@ -1303,6 +1357,7 @@ export class CodeApplication extends Disposable {
 				this.egressGuard.setTargets('audit', auditConfig.enabled && auditConfig.endpointUrl ? [auditConfig.endpointUrl] : []);
 				const auditDbPath = join(this.environmentMainService.userDataPath, 'zero-egress-audit.vscdb');
 				const auditStore = await LocalAuditStore.create(auditDbPath);
+				proofAuditStore = auditStore; // ZeroEgress
 				const auditForwarder = new HttpAuditForwarder({ endpointUrl: auditConfig.endpointUrl, authHeader: auditConfig.authHeader });
 				const auditService: IAuditMainService = new AuditMainService(auditConfig, auditStore, auditForwarder, (msg, e) => this.logService.error(`[audit] ${msg}`, e));
 				let identity = disabledIdentity;

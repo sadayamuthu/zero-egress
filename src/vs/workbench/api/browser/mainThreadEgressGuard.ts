@@ -9,7 +9,7 @@ import { IEgressGuardService } from '../../contrib/zeroEgress/common/egressGuard
 import { extHostNamedCustomer, IExtHostContext } from '../../services/extensions/common/extHostCustomers.js';
 import { EgressTargetDto, ExtHostEgressGuardContext, ExtHostEgressGuardShape, MainContext, MainThreadEgressGuardShape } from '../common/extHost.protocol.js';
 
-// ZeroEgress: relays the main-process egress allow-list to the extension host, and its blocks back.
+// ZeroEgress: relays the main-process egress allow-list to the extension host, and its blocks and allowed counts back.
 @extHostNamedCustomer(MainContext.MainThreadEgressGuard)
 export class MainThreadEgressGuard extends Disposable implements MainThreadEgressGuardShape {
 
@@ -36,4 +36,8 @@ export class MainThreadEgressGuard extends Disposable implements MainThreadEgres
 	$reportBlocked(url: string): void {
 		this.egressGuardService.reportBlocked(url).catch(onUnexpectedError);
 	}
+
+	$reportAllowed(counts: { url: string; count: number }[]): void { // ZeroEgress
+		this.egressGuardService.reportAllowed(counts).catch(onUnexpectedError); // ZeroEgress
+	} // ZeroEgress
 }

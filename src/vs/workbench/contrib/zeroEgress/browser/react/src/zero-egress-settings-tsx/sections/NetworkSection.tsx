@@ -10,6 +10,7 @@ import React from 'react'
 import ErrorBoundary from '../../sidebar-tsx/ErrorBoundary.js'
 import { ZeroEgressButtonBgDarken } from '../../util/inputs.js'
 import { useAccessor, useLocalStatus } from '../../util/services.js'
+import { EgressProofCard } from './EgressProofCard.js'
 
 const SHOW_NETWORK_LOG_COMMAND_ID = 'zeroEgress.showNetworkLog'
 const CLICK_HINT = 'Click to open the network log.' // the status bar's hint; here the button below does that
@@ -33,6 +34,8 @@ export const NetworkSection = () => {
 				</div>
 				{lines.map((line, i) => <div key={i} className='text-sm text-ze-fg-3 mt-1'>{line}</div>)}
 			</div>
+
+			<EgressProofCard />
 
 			<div className='text-sm mt-4'>{`${blocked} blocked ${blocked === 1 ? 'connection' : 'connections'} this session`}</div>
 

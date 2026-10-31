@@ -25,7 +25,7 @@ name: Release
 #   ZeroEgress-<v>-x64-setup.exe (all users), ZeroEgress-<v>-x64-user-setup.exe
 #   zero-egress_<v>_amd64.deb, zero-egress-<v>-1.x86_64.rpm,
 #   ZeroEgress-<v>-x86_64.AppImage, zero-egress-<v>-linux-x64.tar.gz
-#   SHA256SUMS, zero-egress-<v>.cdx.json
+#   SHA256SUMS, zero-egress-<v>.cdx.json, verify-egress-proof.mjs
 #
 # Secrets. All are optional; without them the builds are unsigned.
 #   macOS signing and notarization (all six together):
@@ -566,10 +566,19 @@ jobs:
           npx --yes @cyclonedx/cyclonedx-npm@6.0.1 --omit dev --package-lock-only \
             --output-format JSON --output-file "dist/zero-egress-${V}.cdx.json"
           node -e "const b=require('./dist/zero-egress-${V}.cdx.json'); console.log(b.bomFormat, b.specVersion, (b.components||[]).length + ' components')"
+      # The standalone Egress Proof checker (Node built-ins only), so a
+      # reviewer can verify a report without the source tree.
+      - name: Egress Proof verify script
+        run: |
+          set -euo pipefail
+          cp scripts/zero-egress/verify-egress-proof.mjs dist/
+          # With no arguments it must load and exit 2 (usage).
+          status=0; node dist/verify-egress-proof.mjs >/dev/null 2>&1 || status=$?
+          [ "$status" -eq 2 ]
       - name: Checksums
         run: |
           cd dist
-          # Covers the installers and the SBOM.
+          # Covers the installers, the SBOM and the verify script.
           sha256sum * > SHA256SUMS
           cat SHA256SUMS
       - name: Render the Homebrew cask
@@ -592,6 +601,7 @@ jobs:
           path: |
             dist/SHA256SUMS
             dist/zero-egress-*.cdx.json
+            dist/verify-egress-proof.mjs
             cask/zero-egress.rb
           if-no-files-found: error
           retention-days: 7

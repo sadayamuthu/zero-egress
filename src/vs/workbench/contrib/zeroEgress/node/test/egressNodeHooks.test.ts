@@ -15,13 +15,14 @@ import * as proxyAgent from '@vscode/proxy-agent';
 import { IDisposable } from '../../../../../base/common/lifecycle.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { isAllowed } from '../../common/egressPolicy.js';
-import { installEgressNodeHooks } from '../egressNodeHooks.js';
+import { AllowedCountBatcher, EgressCheckKind, installEgressNodeHooks, installLoopbackOnlyEgressHooks } from '../egressNodeHooks.js';
 
 const require = createRequire(import.meta.url);
 const http: typeof httpType = require('http');
 const https: typeof httpType = require('https');
 const net: typeof netType = require('net');
 const tls: typeof tlsType = require('tls');
+const dns: typeof import('dns') = require('dns');
 
 const blockedMessage = (hostPort: string) => `ZeroEgress blocked connection to ${hostPort} (not a configured server)`;
 
@@ -679,6 +680,105 @@ suite('egressNodeHooks', () => {
 		await assert.rejects(c.response, (e: Error) => e.name === 'AbortError');
 		c.req.serverRedirects('http://localhost:2/');
 		assert.deepStrictEqual(c.req.followed, [], 'aborted request cancelled');
+	});
+
+	test('kinds reach check', async () => {
+		const calls: [string, EgressCheckKind][] = [];
+		hooks = installEgressNodeHooks((url, kind) => { calls.push([url, kind]); return false; }, { global: globalThis, http, https, net, dns });
+		assert.strictEqual(await outcome(net.connect({ host: '127.0.0.1', port })), blockedMessage(`127.0.0.1:${port}`));
+		assert.deepStrictEqual(calls, [[`http://127.0.0.1:${port}/`, 'socket']]);
+		calls.length = 0;
+		await new Promise<void>(r => dns.lookup('exfil.example.com', () => r()));
+		assert.deepStrictEqual(calls, [['dns://exfil.example.com/', 'lookup']]);
+		calls.length = 0;
+		await assert.rejects(fetch('https://exfil.example.com/x'));
+		assert.deepStrictEqual(calls, [['https://exfil.example.com/x', 'wrapper']], 'a blocked fetch is one wrapper check and nothing else');
+		assert.strictEqual(connections, 0);
+	});
+
+	test('kinds reach check: Electron net dials its first destination as electronNet', () => {
+		const calls: [string, EgressCheckKind][] = [];
+		const { fakeNet } = fakeElectronNet();
+		hooks = installEgressNodeHooks((url, kind) => { calls.push([url, kind]); return true; }, { global: globalThis, http, https, net, electronNet: fakeNet });
+		fakeNet.request({ url: 'http://127.0.0.1:1/x' });
+		assert.deepStrictEqual(calls.map(c => c[1]), ['electronNet', 'wrapper', 'wrapper'], 'the dialed URL, then the defense-in-depth URLs');
+		assert.strictEqual(calls[0][0], 'http://127.0.0.1:1/x');
+	});
+
+	test('loopback-only hooks report allowed socket checks only', async () => {
+		const allowed: string[] = [];
+		const blocked: string[] = [];
+		hooks = installLoopbackOnlyEgressHooks(url => blocked.push(url), undefined, url => allowed.push(url));
+		assert.strictEqual(await (await fetch(`http://127.0.0.1:${port}/a?q=1`)).text(), 'reached');
+		assert.deepStrictEqual(allowed, [`http://127.0.0.1:${port}/`], 'the fetch wrapper check is not reported; its socket is');
+		await assert.rejects(fetch('https://exfil.example.com/'));
+		assert.deepStrictEqual(blocked, ['https://exfil.example.com/']);
+		assert.strictEqual(allowed.length, 1);
+	});
+
+	test('loopback-only hooks report an allowed Electron net request once', async () => {
+		const allowed: string[] = [];
+		const { fakeNet, requests } = fakeElectronNet();
+		hooks = installLoopbackOnlyEgressHooks(() => { }, fakeNet, url => allowed.push(url));
+		fakeNet.request({ url: 'http://127.0.0.1:1/x' });
+		assert.deepStrictEqual(allowed, ['http://127.0.0.1:1/x'], 'net.request: one count');
+		const response = fakeNet.fetch('http://localhost:2/') as unknown as Promise<Response>;
+		await settle();
+		requests[1].serverResponds(200, {}, 'ok');
+		assert.strictEqual(await (await response).text(), 'ok');
+		assert.deepStrictEqual(allowed, ['http://127.0.0.1:1/x', 'http://localhost:2/'], 'net.fetch: one count (its own check is a wrapper)');
+		assert.throws(() => fakeNet.request({ url: 'https://exfil.example.com/' }));
+		assert.strictEqual(allowed.length, 2);
+	});
+
+	suite('AllowedCountBatcher', () => {
+		test('counts per URL and sends nothing when empty', () => {
+			const sent: { url: string; count: number }[][] = [];
+			const batcher = new AllowedCountBatcher(counts => sent.push(counts));
+			batcher.flush();
+			assert.deepStrictEqual(sent, []);
+			batcher.add('http://10.0.0.5:8000/');
+			batcher.add('http://10.0.0.5:8000/v1/chat?q=secret');
+			batcher.add('http://127.0.0.1:1/');
+			batcher.add('vscode-file://vscode-app/x.js');
+			batcher.flush();
+			batcher.flush();
+			assert.deepStrictEqual(sent, [[{ url: 'http://10.0.0.5:8000/', count: 2 }, { url: 'http://127.0.0.1:1/', count: 1 }]]);
+			batcher.add('http://127.0.0.1:1/');
+			batcher.dispose();
+			assert.deepStrictEqual(sent[1], [{ url: 'http://127.0.0.1:1/', count: 1 }], 'dispose flushes what is left');
+		});
+
+		test('a failing send is logged, not thrown, and its counts are not resent', () => {
+			const sent: { url: string; count: number }[][] = [];
+			const logged: string[] = [];
+			let fail = true;
+			const batcher = new AllowedCountBatcher(counts => { if (fail) { fail = false; throw new Error('gone'); } sent.push(counts); }, undefined, (m, e) => logged.push(`${m}: ${(e as Error).message}`));
+			try {
+				batcher.add('http://127.0.0.1:1/');
+				batcher.flush();
+				batcher.add('http://127.0.0.1:2/');
+				batcher.flush();
+				assert.deepStrictEqual(sent, [[{ url: 'http://127.0.0.1:2/', count: 1 }]]);
+				assert.deepStrictEqual(logged, ['ZeroEgress: could not report allowed connections: gone']);
+			} finally {
+				batcher.dispose();
+			}
+		});
+
+		test('flushes on its interval', async () => {
+			const sent: { url: string; count: number }[][] = [];
+			const batcher = new AllowedCountBatcher(counts => sent.push(counts), 5);
+			try {
+				batcher.add('http://127.0.0.1:1/');
+				for (const deadline = Date.now() + 5000; !sent.length && Date.now() < deadline;) {
+					await new Promise(r => setTimeout(r, 5));
+				}
+				assert.deepStrictEqual(sent, [[{ url: 'http://127.0.0.1:1/', count: 1 }]]);
+			} finally {
+				batcher.dispose();
+			}
+		});
 	});
 
 	test('dispose restores every original', () => {
