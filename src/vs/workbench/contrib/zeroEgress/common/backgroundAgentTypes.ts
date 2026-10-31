@@ -23,6 +23,6 @@ export interface BackgroundAgentInfo {
 
 export const agentRootOf = (a: BackgroundAgentInfo) => a.subdir ? join(a.worktreePath, a.subdir) : a.worktreePath
 
-export type ToolRunContext = { kind: 'docked' } | { kind: 'background'; agent: BackgroundAgentInfo }
+export type ToolRunContext = { kind: 'docked'; threadId?: string } | { kind: 'background'; agent: BackgroundAgentInfo }
 
 export const AGENT_WORKTREE_REMOVED_MESSAGE = `This agent's worktree was removed.`

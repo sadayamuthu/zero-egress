@@ -7,6 +7,7 @@ import { IWorkspaceContextService } from '../../../../platform/workspace/common/
 import { QueryBuilder } from '../../../services/search/common/queryBuilder.js'
 import { ISearchService } from '../../../services/search/common/search.js'
 import { IPendingFileOpsService } from './pendingFileOpsService.js';
+import { IChangeOwnersService, OwnershipConflictError } from './changeOwnersService.js';
 import { IEditCodeService } from './editCodeServiceInterface.js'
 import { ITerminalToolService } from './terminalToolService.js'
 import { LintErrorItem, BuiltinToolCallParams, BuiltinToolResultType, BuiltinToolName, CallBuiltinTool } from '../common/toolsServiceTypes.js'
@@ -170,6 +171,7 @@ export class ToolsService implements IToolsService {
 		@IZeroEgressSettingsService private readonly zeroEgressSettingsService: IZeroEgressSettingsService,
 		@IPendingFileOpsService pendingFileOpsService: IPendingFileOpsService,
 		@IMainProcessService mainProcessService: IMainProcessService,
+		@IChangeOwnersService changeOwners: IChangeOwnersService,
 	) {
 		const queryBuilder = instantiationService.createInstance(QueryBuilder);
 		const worktreeService = ProxyChannel.toService<IZeroEgressWorktreeService>(mainProcessService.getChannel(WORKTREE_CHANNEL))
@@ -191,6 +193,22 @@ export class ToolsService implements IToolsService {
 		const writeDiskText = async (uri: URI, text: string, crlf: boolean) => {
 			await fileService.writeFile(uri, VSBuffer.fromString(crlf ? text.replace(/\r?\n/g, '\r\n') : text))
 		}
+		// a docked chat claims a file before changing it. Another chat's unreviewed changes there stop it
+		// (OwnershipConflictError); a stale owner with nothing pending just hands the file over
+		const claimForDocked = (uri: URI, ctx: ToolRunContext) => {
+			if (ctx.kind !== 'docked' || !ctx.threadId) return
+			const c = changeOwners.claim(uri, ctx.threadId)
+			if (c.ok) return
+			if (changeOwners.hasPending(uri)) throw new OwnershipConflictError(uri, c.owner)
+			changeOwners.transfer(uri, ctx.threadId)
+		}
+		// claims again once the change is pending: a release sweep (any file's diff-zone or pending-op event) that ran
+		// while the write was awaiting saw nothing pending yet here, and may have dropped the first claim
+		const reclaimForDocked = (uri: URI, ctx: ToolRunContext) => {
+			if (ctx.kind === 'docked' && ctx.threadId && changeOwners.hasPending(uri)) changeOwners.claim(uri, ctx.threadId)
+		}
+		const dockedThreadIdOf = (ctx: ToolRunContext) => ctx.kind === 'docked' ? ctx.threadId : undefined
+
 		const searchFoldersOf = (ctx: ToolRunContext) => {
 			const root = backgroundRootOf(ctx)
 			return root !== undefined ? [URI.file(root)] : workspaceContextService.getWorkspace().folders.map(f => f.uri)
@@ -472,7 +490,9 @@ export class ToolsService implements IToolsService {
 					else await fileService.createFile(uri)
 					return { result: {} }
 				}
-				await pendingFileOpsService.create(uri, isFolder)
+				claimForDocked(uri, ctx)
+				await pendingFileOpsService.create(uri, isFolder, dockedThreadIdOf(ctx))
+				reclaimForDocked(uri, ctx)
 				return { result: {} }
 			},
 
@@ -493,7 +513,9 @@ export class ToolsService implements IToolsService {
 					await fileService.del(uri, { recursive: !!isRecursive, useTrash: false })
 					return { result: {} }
 				}
-				await pendingFileOpsService.markDeleted(uri, !!isRecursive)
+				claimForDocked(uri, ctx)
+				await pendingFileOpsService.markDeleted(uri, !!isRecursive, dockedThreadIdOf(ctx))
+				reclaimForDocked(uri, ctx)
 				return { result: {} }
 			},
 
@@ -504,12 +526,14 @@ export class ToolsService implements IToolsService {
 					await writeDiskText(uri, newContent, disk?.crlf ?? false)
 					return { result: Promise.resolve({ lintErrors: null }) }
 				}
+				claimForDocked(uri, ctx)
 				await zeroEgressModelService.initializeModel(uri)
 				if (this.commandBarService.getStreamState(uri) === 'streaming') {
 					throw new Error(`Another LLM is currently making changes to this file. Please stop streaming for now and ask the user to resume later.`)
 				}
 				await editCodeService.callBeforeApplyOrEdit(uri)
 				editCodeService.instantlyRewriteFile({ uri, newContent })
+				reclaimForDocked(uri, ctx)
 				// at end, get lint errors
 				const lintErrorsPromise = Promise.resolve().then(async () => {
 					await timeout(2000)
@@ -534,12 +558,14 @@ export class ToolsService implements IToolsService {
 					await writeDiskText(uri, newText, disk?.crlf ?? false)
 					return { result: Promise.resolve({ lintErrors: null }) }
 				}
+				claimForDocked(uri, ctx)
 				await zeroEgressModelService.initializeModel(uri)
 				if (this.commandBarService.getStreamState(uri) === 'streaming') {
 					throw new Error(`Another LLM is currently making changes to this file. Please stop streaming for now and ask the user to resume later.`)
 				}
 				await editCodeService.callBeforeApplyOrEdit(uri)
 				editCodeService.instantlyApplySearchReplaceBlocks({ uri, searchReplaceBlocks })
+				reclaimForDocked(uri, ctx)
 
 				// at end, get lint errors
 				const lintErrorsPromise = Promise.resolve().then(async () => {

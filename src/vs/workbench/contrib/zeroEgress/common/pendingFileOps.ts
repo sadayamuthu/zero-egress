@@ -17,6 +17,8 @@ export interface PendingFileOp {
 	readonly path: string;
 	readonly isFolder: boolean;
 	readonly recursive: boolean;
+	/** the docked chat whose tool call recorded it; unset for ops from before a reload */
+	readonly ownerThreadId?: string;
 }
 
 /** Work the caller must do on disk. */
@@ -39,7 +41,7 @@ export class PendingFileOps {
 	}
 
 	/** Called after the file or folder was created on disk. */
-	recordCreate(path: string, isFolder: boolean): DiskAction[] {
+	recordCreate(path: string, isFolder: boolean, ownerThreadId?: string): DiskAction[] {
 		const p = normalize(path);
 		const existing = this.opFor(p);
 		if (existing?.kind === 'delete') {
@@ -48,13 +50,13 @@ export class PendingFileOps {
 			return [];
 		}
 		if (!existing) {
-			this._ops = [...this._ops, { id: this._nextId++, kind: 'create', path: p, isFolder, recursive: isFolder }];
+			this._ops = [...this._ops, { id: this._nextId++, kind: 'create', path: p, isFolder, recursive: isFolder, ownerThreadId }];
 		}
 		return [];
 	}
 
 	/** Records a delete; nothing is removed until it is accepted. */
-	recordDelete(path: string, recursive: boolean, isFolder: boolean = recursive): DiskAction[] {
+	recordDelete(path: string, recursive: boolean, isFolder: boolean = recursive, ownerThreadId?: string): DiskAction[] {
 		const p = normalize(path);
 		const existing = this.opFor(p);
 		if (existing?.kind === 'create') {
@@ -64,7 +66,7 @@ export class PendingFileOps {
 			return [{ type: 'delete', path: p, recursive: existing.recursive || recursive }];
 		}
 		if (!existing) {
-			this._ops = [...this._ops, { id: this._nextId++, kind: 'delete', path: p, isFolder, recursive }];
+			this._ops = [...this._ops, { id: this._nextId++, kind: 'delete', path: p, isFolder, recursive, ownerThreadId }];
 		}
 		return [];
 	}

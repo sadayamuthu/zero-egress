@@ -25,9 +25,9 @@ export interface IPendingFileOpsService {
 	readonly ops: readonly PendingFileOp[];
 	readonly onDidChange: Event<void>;
 	/** Creates the file or folder on disk, then records it for review. Refuses a path that already exists. */
-	create(uri: URI, isFolder: boolean): Promise<void>;
+	create(uri: URI, isFolder: boolean, ownerThreadId?: string): Promise<void>;
 	/** Records a delete for review; the file stays on disk until accepted. Refuses a missing path. */
-	markDeleted(uri: URI, recursive: boolean): Promise<void>;
+	markDeleted(uri: URI, recursive: boolean, ownerThreadId?: string): Promise<void>;
 	resolve(id: number, behavior: 'accept' | 'reject'): Promise<void>;
 	/** Resolves every pending op, or only those at or under `uri`. */
 	resolveAll(behavior: 'accept' | 'reject', uri?: URI): Promise<void>;
@@ -57,7 +57,7 @@ export class PendingFileOpsService extends Disposable implements IPendingFileOps
 		return this._state.ops;
 	}
 
-	async create(uri: URI, isFolder: boolean): Promise<void> {
+	async create(uri: URI, isFolder: boolean, ownerThreadId?: string): Promise<void> {
 		const key = uri.toString();
 		if (this._state.opFor(key)?.kind === 'delete') {
 			// the file is still on disk (its delete was only pending): keep it, and drop the delete
@@ -73,10 +73,10 @@ export class PendingFileOpsService extends Disposable implements IPendingFileOps
 		} else {
 			await this._fileService.createFile(uri);
 		}
-		await this._apply(() => this._state.recordCreate(key, isFolder));
+		await this._apply(() => this._state.recordCreate(key, isFolder, ownerThreadId));
 	}
 
-	async markDeleted(uri: URI, recursive: boolean): Promise<void> {
+	async markDeleted(uri: URI, recursive: boolean, ownerThreadId?: string): Promise<void> {
 		const key = uri.toString();
 		if (this._state.opFor(key)?.kind === 'create') {
 			await this._apply(() => this._state.recordDelete(key, recursive));
@@ -89,7 +89,7 @@ export class PendingFileOpsService extends Disposable implements IPendingFileOps
 		if (stat.isDirectory && !recursive && (await this._fileService.resolve(uri)).children?.length) {
 			throw new Error(`${uri.fsPath} is a folder that is not empty. Set is_recursive to delete it with its contents.`);
 		}
-		await this._apply(() => this._state.recordDelete(key, recursive, stat.isDirectory));
+		await this._apply(() => this._state.recordDelete(key, recursive, stat.isDirectory, ownerThreadId));
 	}
 
 	resolve(id: number, behavior: 'accept' | 'reject'): Promise<void> {

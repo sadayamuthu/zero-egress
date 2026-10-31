@@ -18,6 +18,7 @@ import { FeatureName, ModelSelection, ModelSelectionOptions } from '../common/ze
 import { IZeroEgressSettingsService } from '../common/zeroEgressSettingsService.js';
 import { approvalTypeOfBuiltinToolName, BuiltinToolCallParams, ToolCallParams, ToolName, ToolResult } from '../common/toolsServiceTypes.js';
 import { IToolsService } from './toolsService.js';
+import { IChangeOwnersService } from './changeOwnersService.js';
 import { CancellationToken } from '../../../../base/common/cancellation.js';
 import { ILanguageFeaturesService } from '../../../../editor/common/services/languageFeatures.js';
 import { ChatMessage, CheckpointEntry, CodespanLocationLink, StagingSelectionItem, ToolMessage } from '../common/chatThreadServiceTypes.js';
@@ -355,6 +356,7 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 		@IMCPService private readonly _mcpService: IMCPService,
 		@ITerminalToolService private readonly _terminalToolService: ITerminalToolService,
 		@IConfigurationService private readonly _configurationService: IConfigurationService,
+		@IChangeOwnersService private readonly _changeOwnersService: IChangeOwnersService,
 	) {
 		super()
 		this.state = { allThreads: {}, currentThreadId: null as unknown as string } // default state
@@ -635,7 +637,7 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 	/** whose files this thread's tools work on */
 	private _toolContextOf(threadId: string): ToolRunContext {
 		const agent = this.state.allThreads[threadId]?.agent
-		return agent ? { kind: 'background', agent } : { kind: 'docked' }
+		return agent ? { kind: 'background', agent } : { kind: 'docked', threadId }
 	}
 
 	/** maps every path param into the agent's root, or throws (`Path is outside this agent's worktree: ...`) */
@@ -1806,6 +1808,9 @@ We only need to do it for files that were edited since `from`, ie files between 
 		// store the updated threads
 		this._storeAllThreads(newThreads);
 		this._setState({ ...this.state, allThreads: newThreads })
+
+		// its unreviewed changes stay, now owned by no chat (every tab shows them as from other chats)
+		this._changeOwnersService.releaseThread(threadId)
 	}
 
 	startBackgroundThread(agent: BackgroundAgentInfo, messages: ChatMessage[], prompt: string): string {
