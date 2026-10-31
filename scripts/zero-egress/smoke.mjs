@@ -31,6 +31,9 @@ if (!existsSync(app)) { console.error(`app not found: ${app}`); process.exit(2);
 
 const BLOCKED = { host: '10.255.255.2', port: 1234 };
 const CONTROL = { host: '127.0.0.1', port: 19999 };
+// The probe fetches give up after FETCH_TIMEOUT_MS (the outcome is the proxy log, not the fetch's result).
+const FETCH_TIMEOUT_MS = 15000;
+const EVAL_TIMEOUT_MS = 60000;
 const results = [];
 const step = (name, ok, detail = '') => { results.push({ name, ok }); console.log(`${ok ? 'PASS' : 'FAIL'}: ${name}${detail ? ` (${detail})` : ''}`); };
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -91,9 +94,11 @@ try {
 	let nextId = 1;
 	const pending = new Map();
 	ws.onmessage = m => { const msg = JSON.parse(m.data); pending.get(msg.id)?.(msg); pending.delete(msg.id); };
+	// Bounded: a page promise that never settles must fail this session, not hang the job until its timeout.
 	const evaluate = expression => new Promise((res, rej) => {
 		const id = nextId++;
-		pending.set(id, msg => msg.error || msg.result?.exceptionDetails ? rej(new Error(JSON.stringify(msg.error ?? msg.result.exceptionDetails))) : res(msg.result.result.value));
+		const timer = setTimeout(() => { pending.delete(id); rej(new Error(`no answer from the page in ${EVAL_TIMEOUT_MS / 1000} s: ${expression.slice(0, 80)}`)); }, EVAL_TIMEOUT_MS);
+		pending.set(id, msg => { clearTimeout(timer); msg.error || msg.result?.exceptionDetails ? rej(new Error(JSON.stringify(msg.error ?? msg.result.exceptionDetails))) : res(msg.result.result.value); });
 		ws.send(JSON.stringify({ id, method: 'Runtime.evaluate', params: { expression, awaitPromise: true, returnByValue: true } }));
 	});
 
@@ -107,9 +112,9 @@ try {
 	const title = await evaluate('document.title').catch(() => '');
 	console.log(`window title: ${title}`);
 
-	const blocked = await evaluate(`fetch('https://${BLOCKED.host}:${BLOCKED.port}/').then(() => 'reached', e => 'rejected: ' + e.message)`);
+	const blocked = await evaluate(`fetch('https://${BLOCKED.host}:${BLOCKED.port}/', { signal: AbortSignal.timeout(${FETCH_TIMEOUT_MS}) }).then(() => 'reached', e => 'rejected: ' + e.message)`);
 	step('an unconfigured address is refused in the renderer', blocked.startsWith('rejected'), blocked);
-	const control = await evaluate(`fetch('https://${CONTROL.host}:${CONTROL.port}/').then(() => 'reached', e => 'rejected: ' + e.message)`);
+	const control = await evaluate(`fetch('https://${CONTROL.host}:${CONTROL.port}/', { signal: AbortSignal.timeout(${FETCH_TIMEOUT_MS}) }).then(() => 'reached', e => 'rejected: ' + e.message)`);
 	console.log(`positive control fetch: ${control}`);
 
 	// The guard's log line (main.log; the same event feeds the "ZeroEgress: Network" channel).

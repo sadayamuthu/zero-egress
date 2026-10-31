@@ -482,12 +482,16 @@ jobs:
         run: |
           set -euo pipefail
           snapshot() { ls -la /etc/apt/sources.list.d /etc/apt/trusted.gpg.d /usr/share/keyrings 2>/dev/null | grep -v ' \.\.\?$' || true; }
+          # The runner image ships its own packages.microsoft.com sources; only one the .deb adds is a failure.
+          ms_sources() { grep -rhs 'packages.microsoft.com' /etc/apt/sources.list /etc/apt/sources.list.d | sort -u || true; }
           snapshot > "$RUNNER_TEMP/apt-before.txt"
+          ms_sources > "$RUNNER_TEMP/ms-before.txt"
           sudo apt-get update
           sudo apt-get install -y xvfb rpm "./dist/zero-egress_${V}_amd64.deb"
           snapshot > "$RUNNER_TEMP/apt-after.txt"
           diff "$RUNNER_TEMP/apt-before.txt" "$RUNNER_TEMP/apt-after.txt" || { echo "::error::installing the .deb changed apt's sources or keys"; exit 1; }
-          if grep -rqs 'packages.microsoft.com' /etc/apt/sources.list /etc/apt/sources.list.d; then echo "::error::an apt source points at packages.microsoft.com"; exit 1; fi
+          ms_sources > "$RUNNER_TEMP/ms-after.txt"
+          if comm -13 "$RUNNER_TEMP/ms-before.txt" "$RUNNER_TEMP/ms-after.txt" | grep -q .; then echo "::error::installing the .deb added an apt source at packages.microsoft.com"; exit 1; fi
           dpkg-query -W -f='${Version}\n${Maintainer}\n${Homepage}\n' zero-egress | tee "$RUNNER_TEMP/deb-fields.txt"
           case "$(sed -n 1p "$RUNNER_TEMP/deb-fields.txt")" in "1:${V}-"*) ;; *) echo "::error::.deb version is not 1:${V}-<rev>"; exit 1;; esac
           grep -qx 'ZeroEgress <4604648+sadayamuthu@users.noreply.github.com>' "$RUNNER_TEMP/deb-fields.txt" || { echo "::error::.deb Maintainer is not ZeroEgress"; exit 1; }
