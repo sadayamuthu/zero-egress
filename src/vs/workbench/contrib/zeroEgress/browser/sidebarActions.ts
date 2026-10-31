@@ -212,7 +212,7 @@ registerAction2(class extends Action2 {
 			id: 'zeroEgress.historyAction',
 			title: 'View Past Chats',
 			icon: { id: 'history' },
-			menu: [{ id: MenuId.ViewTitle, group: 'navigation', when: ContextKeyExpr.equals('view', ZERO_EGRESS_VIEW_ID), }]
+			// no view-title button: past chats are in the chat tabs' history menu (⏱), and this only opens a new chat
 		});
 	}
 	async run(accessor: ServicesAccessor): Promise<void> {

@@ -15,7 +15,6 @@ import { IDisposable } from '../../../../../../../base/common/lifecycle.js';
 import { ErrorDisplay } from './ErrorDisplay.js';
 import { BlockCode, TextAreaFns, ZeroEgressCustomDropdownBox, ZeroEgressInputBox2, ZeroEgressSlider, ZeroEgressSwitch, ZeroEgressDiffEditor } from '../util/inputs.js';
 import { ModelDropdown, } from '../zero-egress-settings-tsx/ModelDropdown.js';
-import { PastThreadsList } from './SidebarThreadSelector.js';
 import { ZERO_EGRESS_CTRL_L_ACTION_ID } from '../../../actionIDs.js';
 import { ZERO_EGRESS_OPEN_SETTINGS_ACTION_ID } from '../../../zeroEgressSettingsPane.js';
 import { ChatMode, displayInfoOfProviderName, FeatureName, isFeatureNameDisabled } from '../../../../../../../workbench/contrib/zeroEgress/common/zeroEgressSettingsTypes.js';
@@ -33,6 +32,7 @@ import { RawToolCallObj } from '../../../../common/sendLLMMessageTypes.js';
 import ErrorBoundary from './ErrorBoundary.js';
 import { ConflictCard } from './chat/ConflictCard.js';
 import { ReviewBar } from './chat/ReviewBar.js';
+import { ChatTabs } from './chat/ChatTabs.js';
 import { useThreadReview } from './useThreadReview.js';
 import { ToolApprovalTypeSwitch } from '../zero-egress-settings-tsx/Settings.js';
 
@@ -2634,7 +2634,15 @@ const EditToolSoFar = ({ toolCallSoFar, }: { toolCallSoFar: RawToolCallObj }) =>
 
 export const SidebarChat = () => {
 	const chatThreadsState = useChatThreadsState()
-	return <ChatThreadView threadId={chatThreadsState.currentThreadId} variant='docked' />
+	// the docked panel's header is its tabs; the Agents view renders ChatThreadView under its own header
+	return <div className='w-full h-full flex flex-col overflow-hidden'>
+		<ErrorBoundary>
+			<ChatTabs />
+		</ErrorBoundary>
+		<div className='flex-1 min-h-0'>
+			<ChatThreadView threadId={chatThreadsState.currentThreadId} variant='docked' />
+		</div>
+	</div>
 }
 
 /** `inputDisabledReason`: shown instead of the input box (e.g. a background agent whose worktree was removed takes no follow-ups) */
@@ -2953,12 +2961,7 @@ const ChatThreadViewInner = ({ threadId, variant, inputDisabledReason }: { threa
 			{landingPageInput}
 		</ErrorBoundary>
 
-		{variant === 'agents' ? null : Object.values(chatThreadsState.allThreads).filter(t => t && !t.agent).length > 1 ? // show if there are threads (background agents live in the Agents view)
-			<ErrorBoundary>
-				<div className='pt-8 mb-2 text-ze-fg-3 text-root select-none pointer-events-none'>Previous Threads</div>
-				<PastThreadsList />
-			</ErrorBoundary>
-			:
+		{variant === 'agents' ? null : // past chats are in the tabs' history menu
 			<ErrorBoundary>
 				<div className='pt-8 mb-2 text-ze-fg-3 text-root select-none pointer-events-none'>Suggestions</div>
 				{initiallySuggestedPromptsHTML}

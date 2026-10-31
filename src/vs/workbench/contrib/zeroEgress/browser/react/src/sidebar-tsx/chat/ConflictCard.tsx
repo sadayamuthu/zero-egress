@@ -11,20 +11,10 @@ import { AlertTriangle } from 'lucide-react';
 import { ToolMessage } from '../../../../../common/chatThreadServiceTypes.js';
 import { ToolName } from '../../../../../common/toolsServiceTypes.js';
 import { useAccessor, useChatThreadsState } from '../../util/services.js';
-
-const TITLE_MAX = 40;
-
 // no runtime imports from vs/ here: the bundle flattens this folder, so a relative path one level deeper breaks
-const basenameOf = (path: string) => path.split('/').filter(Boolean).pop() ?? path;
+import { threadTitleOf } from '../chatTitle.js';
 
-// TODO(Task 6): use threadTitleOf
-const titleOfThread = (thread: { messages: readonly { role: string; displayContent?: string }[] } | undefined): string => {
-	const first = thread?.messages.find(m => m.role === 'user')?.displayContent?.trim();
-	if (!first) {
-		return 'New chat';
-	}
-	return first.length > TITLE_MAX ? `${first.slice(0, TITLE_MAX)}…` : first;
-};
+const basenameOf = (path: string) => path.split('/').filter(Boolean).pop() ?? path;
 
 export const ConflictCard = ({ threadId, toolMessage }: { threadId: string; toolMessage: ToolMessage<ToolName> & { type: 'tool_request' } }) => {
 	const accessor = useAccessor();
@@ -53,7 +43,8 @@ export const ConflictCard = ({ threadId, toolMessage }: { threadId: string; tool
 		return null;
 	}
 	const file = basenameOf(conflict.uri.path);
-	const otherTitle = titleOfThread(chatThreadsState.allThreads[conflict.ownerThreadId]);
+	const otherThread = chatThreadsState.allThreads[conflict.ownerThreadId];
+	const otherTitle = otherThread ? threadTitleOf(otherThread) : 'New chat';
 
 	const primary = `px-2 py-1 rounded text-sm font-medium bg-[var(--vscode-button-background)] text-[var(--vscode-button-foreground)] hover:bg-[var(--vscode-button-hoverBackground)] disabled:opacity-50`;
 	const secondary = `px-2 py-1 rounded text-sm font-medium bg-[var(--vscode-button-secondaryBackground)] text-[var(--vscode-button-secondaryForeground)] hover:bg-[var(--vscode-button-secondaryHoverBackground)] disabled:opacity-50`;

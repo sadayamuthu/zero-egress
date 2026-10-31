@@ -35,7 +35,8 @@ import { IEditCodeService } from './editCodeServiceInterface.js';
 import { ZeroEgressFileSnapshot } from '../common/editCodeServiceTypes.js';
 import { INotificationService, Severity } from '../../../../platform/notification/common/notification.js';
 import { truncate } from '../../../../base/common/strings.js';
-import { THREAD_STORAGE_KEY } from '../common/storageKeys.js';
+import { CHAT_OPEN_TABS_STORAGE_KEY, THREAD_STORAGE_KEY } from '../common/storageKeys.js';
+import { closeTab as closeTabOf, openTab } from '../common/chatTabs.js';
 import { IConvertToLLMMessageService } from './convertToLLMMessageService.js';
 import { timeout } from '../../../../base/common/async.js';
 import { deepClone } from '../../../../base/common/objects.js';
@@ -133,6 +134,9 @@ export type ThreadType = {
 	createdAt: string; // ISO string
 	lastModified: string; // ISO string
 
+	/** set by the user (rename); otherwise the title comes from the first message (threadTitleOf) */
+	title?: string;
+
 	messages: ChatMessage[];
 	filesWithUserChanges: Set<string>;
 
@@ -171,6 +175,8 @@ type ChatThreads = {
 export type ThreadsState = {
 	allThreads: ChatThreads;
 	currentThreadId: string; // intended for internal use only
+	/** the docked panel's tabs, left to right (persisted); background-agent threads never get one */
+	openTabIds: string[];
 }
 
 // 'LLM' | 'tool' | 'awaiting_user' | 'idle' | 'waiting_for_model' | undefined (see RunPhase)
@@ -263,7 +269,11 @@ export interface IChatThreadService {
 	openNewThread(): void;
 	switchToThread(threadId: string): void;
 
-	// thread selector
+	// tabs and history
+	/** an empty or blank title clears it, so the thread falls back to its first message */
+	renameThread(threadId: string, title: string): void;
+	/** closes the tab only: the thread stays in history and keeps its changes */
+	closeTab(threadId: string): void;
 	deleteThread(threadId: string): void;
 	duplicateThread(threadId: string): void;
 
@@ -370,7 +380,7 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 		@IPendingFileOpsService private readonly _pendingFileOpsService: IPendingFileOpsService,
 	) {
 		super()
-		this.state = { allThreads: {}, currentThreadId: null as unknown as string } // default state
+		this.state = { allThreads: {}, currentThreadId: null as unknown as string, openTabIds: [] } // default state
 
 		const readThreads = this._readAllThreads() || {}
 
@@ -378,6 +388,7 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 		this.state = {
 			allThreads: allThreads,
 			currentThreadId: null as unknown as string, // gets set in startNewThread()
+			openTabIds: this._readOpenTabs(allThreads),
 		}
 
 		// always be in a thread
@@ -426,7 +437,7 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 		this._onDidChangeCurrentThread.fire()
 	}
 	resetState = () => {
-		this.state = { allThreads: {}, currentThreadId: null as unknown as string } // see constructor
+		this.state = { allThreads: {}, currentThreadId: null as unknown as string, openTabIds: [] } // see constructor
 		this.openNewThread()
 		this._onDidChangeCurrentThread.fire()
 	}
@@ -463,6 +474,37 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 	}
 
 
+	/** stored tab ids, minus threads that no longer exist and background agents */
+	private _readOpenTabs(threads: ChatThreads): string[] {
+		const str = this._storageService.get(CHAT_OPEN_TABS_STORAGE_KEY, StorageScope.APPLICATION);
+		if (!str) {
+			return []
+		}
+		try {
+			const ids: unknown = JSON.parse(str)
+			if (!Array.isArray(ids)) return []
+			const seen = new Set<string>()
+			return ids.filter((id): id is string => {
+				if (typeof id !== 'string' || seen.has(id)) return false
+				seen.add(id)
+				const t = threads[id]
+				return !!t && !t.agent
+			})
+		} catch {
+			return []
+		}
+	}
+
+	private _storeOpenTabs(tabs: string[]) {
+		this._storageService.store(CHAT_OPEN_TABS_STORAGE_KEY, JSON.stringify(tabs), StorageScope.APPLICATION, StorageTarget.USER)
+	}
+
+	/** the tabs with `threadId` added (the cap drops the oldest idle tab); background agents get none */
+	private _tabsWith(threadId: string, threads: ChatThreads = this.state.allThreads): string[] {
+		if (!threads[threadId] || threads[threadId]?.agent) return this.state.openTabIds
+		return openTab(this.state.openTabIds, threadId, id => !!this.streamState[id]?.isRunning)
+	}
+
 	// this should be the only place this.state = ... appears besides constructor
 	private _setState(state: Partial<ThreadsState>, doNotRefreshMountInfo?: boolean) {
 		const newState = {
@@ -470,7 +512,9 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 			...state
 		}
 
+		const tabsChanged = newState.openTabIds !== this.state.openTabIds
 		this.state = newState
+		if (tabsChanged) this._storeOpenTabs(newState.openTabIds)
 
 		this._onDidChangeCurrentThread.fire()
 
@@ -1870,7 +1914,7 @@ We only need to do it for files that were edited since `from`, ie files between 
 
 	switchToThread(threadId: string) {
 		if (this.state.allThreads[threadId]?.agent) return // background agents are never the docked thread
-		this._setState({ currentThreadId: threadId })
+		this._setState({ currentThreadId: threadId, openTabIds: this._tabsWith(threadId) })
 	}
 
 
@@ -1893,7 +1937,30 @@ We only need to do it for files that were edited since `from`, ie files between 
 			[newThread.id]: newThread
 		}
 		this._storeAllThreads(newThreads)
-		this._setState({ allThreads: newThreads, currentThreadId: newThread.id })
+		this._setState({ allThreads: newThreads, currentThreadId: newThread.id, openTabIds: this._tabsWith(newThread.id, newThreads) })
+	}
+
+
+	renameThread(threadId: string, title: string): void {
+		const thread = this.state.allThreads[threadId]
+		if (!thread) return
+		const trimmed = title.trim()
+		const { title: _previous, ...rest } = thread
+		const newThread: ThreadType = trimmed ? { ...rest, title: trimmed } : rest
+		const newThreads: ChatThreads = { ...this.state.allThreads, [threadId]: newThread }
+		this._storeAllThreads(newThreads)
+		this._setState({ allThreads: newThreads })
+	}
+
+
+	closeTab(threadId: string): void {
+		const { tabs, next } = closeTabOf(this.state.openTabIds, threadId, this.state.currentThreadId)
+		this._setState({ openTabIds: tabs })
+		if (next === undefined) {
+			this.openNewThread()
+		} else if (next !== this.state.currentThreadId) {
+			this.switchToThread(next)
+		}
 	}
 
 
@@ -1904,12 +1971,19 @@ We only need to do it for files that were edited since `from`, ie files between 
 		const newThreads = { ...currentThreads };
 		delete newThreads[threadId];
 
-		// store the updated threads
+		// its tab goes too; if it was the docked thread, move to a neighbouring tab (or a new chat)
+		const { tabs, next } = closeTabOf(this.state.openTabIds, threadId, this.state.currentThreadId)
+
+		// store the updated threads (moving straight to the neighbour, so the docked thread is never a deleted one)
 		this._storeAllThreads(newThreads);
-		this._setState({ ...this.state, allThreads: newThreads })
+		this._setState({ ...this.state, allThreads: newThreads, openTabIds: tabs, ...next !== undefined ? { currentThreadId: next } : {} })
 
 		// its unreviewed changes stay, now owned by no chat (every tab shows them as from other chats)
 		this._changeOwnersService.releaseThread(threadId)
+
+		if (next === undefined) {
+			this.openNewThread()
+		}
 	}
 
 	startBackgroundThread(agent: BackgroundAgentInfo, messages: ChatMessage[], prompt: string): string {
@@ -1954,6 +2028,7 @@ We only need to do it for files that were edited since `from`, ie files between 
 		}
 		this._storeAllThreads(newThreads)
 		this._setState({ allThreads: newThreads })
+		this.switchToThread(newThread.id) // the copy opens in its own tab
 	}
 
 
