@@ -114,7 +114,7 @@ jobs:
             case "$want" in mac-arm64|mac-x64|win|linux) ;; *) echo "::error::Unknown platform '$want'"; exit 1;; esac
           done
           mac='[]'
-          has mac-arm64 && mac=$(jq -c '. + [{"arch":"arm64","runner":"macos-14","watcher":"darwin-arm64"}]' <<<"$mac")
+          has mac-arm64 && mac=$(jq -c '. + [{"arch":"arm64","runner":"macos-15","watcher":"darwin-arm64"}]' <<<"$mac")
           has mac-x64 && mac=$(jq -c '. + [{"arch":"x64","runner":"macos-15-intel","watcher":"darwin-x64"}]' <<<"$mac")
           echo "mac=${mac}" >> "$GITHUB_OUTPUT"
           has win && echo "win=true" >> "$GITHUB_OUTPUT" || echo "win=false" >> "$GITHUB_OUTPUT"
