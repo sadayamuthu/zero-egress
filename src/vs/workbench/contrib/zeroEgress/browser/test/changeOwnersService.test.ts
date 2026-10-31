@@ -178,4 +178,50 @@ suite('ChangeOwnersService', () => {
 		assert.strictEqual(service.changesBlocking(a, 't3'), undefined); // its own changes
 		assert.strictEqual(service.changesBlocking(URI.parse('file:///w/c.ts'), 't2'), undefined);
 	});
+	test('a path under another chat\'s pending folder create conflicts', async () => {
+		const folder = URI.parse('file:///w/d');
+		const inner = URI.parse('file:///w/d/x.ts');
+		const write = service.beginWrite(folder, 't1', 'create');
+		assert.throws(() => service.beginWrite(inner, 't3', 'create'), conflictWith('t1', folder)); // in flight
+		await pendingFileOps.create(folder, true, 't1');
+		write.dispose();
+		assert.strictEqual(service.ownerOf(folder), 't1');
+		assert.throws(() => service.beginWrite(inner, 't3', 'create'), conflictWith('t1', folder)); // pending
+		assert.deepStrictEqual(service.conflictFor(inner, 't3'), { owner: 't1' });
+		service.beginWrite(inner, 't1', 'create').dispose(); // its own folder is no conflict
+	});
+
+	test('changesBlocking never selects a third chat\'s changes: it reports that chat instead', async () => {
+		const folder = URI.parse('file:///w/d');
+		const inner = URI.parse('file:///w/d/x.ts');
+		const loose = URI.parse('file:///w/d/z.ts');
+		const write = service.beginWrite(folder, 't1', 'create');
+		await pendingFileOps.create(folder, true, 't1');
+		write.dispose();
+		// leftover state: t3 has a pending edit inside t1's pending folder (claim does not check conflicts)
+		service.claim(inner, 't3');
+		diffAreasOfURI[inner.fsPath] = new Set(['1']);
+		diffAreasOfURI[loose.fsPath] = new Set(['1']); // unowned: may go with t1's folder
+		const shape = (b: ReturnType<typeof service.changesBlocking>) => b && { owner: b.owner, uris: b.uris.map(u => u.toString()), opIds: b.opIds };
+
+		// resolving t1's folder would take t3's file with it, so t3 is the blocker, with only its own changes
+		assert.deepStrictEqual(shape(service.changesBlocking(folder, 't2', 't1')), { owner: 't3', uris: [inner.toString()], opIds: [] });
+		assert.deepStrictEqual(shape(service.changesBlocking(folder, 't2')), { owner: 't3', uris: [inner.toString()], opIds: [] });
+
+		// once t3's changes are gone, t1's folder can be resolved
+		delete diffAreasOfURI[inner.fsPath];
+		diffZonesChanged.fire({ uri: inner });
+		assert.strictEqual(service.ownerOf(inner), undefined);
+		assert.deepStrictEqual(shape(service.changesBlocking(folder, 't2', 't1')), { owner: 't1', uris: [folder.toString()], opIds: [] });
+	});
+
+	test('changesBlocking includes the owner\'s folder create above the path', async () => {
+		const folder = URI.parse('file:///w/d');
+		const inner = URI.parse('file:///w/d/x.ts');
+		const write = service.beginWrite(folder, 't1', 'create');
+		await pendingFileOps.create(folder, true, 't1');
+		write.dispose();
+		const b = service.changesBlocking(inner, 't2');
+		assert.deepStrictEqual(b && { owner: b.owner, uris: b.uris, opIds: b.opIds }, { owner: 't1', uris: [], opIds: [pendingFileOps.ops[0].id] });
+	});
 });

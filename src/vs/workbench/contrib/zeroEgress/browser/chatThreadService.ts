@@ -573,10 +573,15 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 		if (!thread) return
 		const lastMsg = thread.messages[thread.messages.length - 1]
 		if (!(lastMsg?.role === 'tool' && lastMsg.type === 'tool_request' && lastMsg.conflict)) return
-		const { uri } = lastMsg.conflict
+		const { uri, ownerThreadId } = lastMsg.conflict
 
-		// only the conflicting chat's changes that block this path: its files at or under it, and its folder deletes above it
-		const blocking = this._changeOwnersService.changesBlocking(uri, threadId)
+		// only the named chat's changes that block this path: its files at or under it, and its folder ops above it.
+		// If resolving them would also touch a third chat's changes, the card names that chat instead and nothing is resolved
+		const blocking = this._changeOwnersService.changesBlocking(uri, threadId, ownerThreadId)
+		if (blocking && blocking.owner !== ownerThreadId) {
+			this._updateLatestTool(threadId, { ...lastMsg, conflict: { uri, ownerThreadId: blocking.owner } })
+			return
+		}
 		if (blocking) {
 			for (const owned of blocking.uris) {
 				this._editCodeService.acceptOrRejectAllDiffAreas({ uri: owned, behavior: choice, removeCtrlKs: false })
@@ -758,7 +763,7 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 
 			// another docked chat has unreviewed changes there: ask with the conflict card, even when edits are auto-approved
 			const conflictUri = toolCtx.kind === 'docked' ? this._writeTargetOf(toolName, toolParams) : undefined
-			const conflict = conflictUri && this._changeOwnersService.conflictFor(conflictUri, threadId)
+			const conflict = conflictUri && this._changeOwnersService.changesBlocking(conflictUri, threadId)
 			if (conflictUri && conflict) {
 				this._addMessageToThread(threadId, { role: 'tool', type: 'tool_request', content: '(Awaiting user permission...)', result: null, name: toolName, params: toolParams, id: toolId, rawParams: opts.unvalidatedToolParams, mcpServerName, conflict: { uri: conflictUri, ownerThreadId: conflict.owner } })
 				return { awaitingUserApproval: true }
@@ -831,7 +836,7 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 			// race guard: another chat claimed the path after the check above (or while this call awaited approval)
 			const conflictUri = error instanceof OwnershipConflictError && toolCtx.kind === 'docked' ? this._writeTargetOf(toolName, toolParams) : undefined
 			if (conflictUri && error instanceof OwnershipConflictError) {
-				this._updateLatestTool(threadId, { role: 'tool', type: 'tool_request', content: '(Awaiting user permission...)', result: null, name: toolName, params: toolParams, id: toolId, rawParams: opts.unvalidatedToolParams, mcpServerName, conflict: { uri: conflictUri, ownerThreadId: error.owner } })
+				this._updateLatestTool(threadId, { role: 'tool', type: 'tool_request', content: '(Awaiting user permission...)', result: null, name: toolName, params: toolParams, id: toolId, rawParams: opts.unvalidatedToolParams, mcpServerName, conflict: { uri: conflictUri, ownerThreadId: this._changeOwnersService.changesBlocking(conflictUri, threadId)?.owner ?? error.owner } })
 				return { awaitingUserApproval: true }
 			}
 
