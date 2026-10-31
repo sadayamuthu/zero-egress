@@ -1,6 +1,6 @@
 # Weekly update pull requests for workflow actions, grouped in one pull
-# request. npm is left out on purpose: updates to a VS Code fork's
-# dependencies would flood pull requests and could pull in code that
+# request. npm version updates are left out on purpose: updates to a VS Code
+# fork's dependencies would flood pull requests and could pull in code that
 # talks to the network.
 version: 2
 updates:
@@ -13,3 +13,23 @@ updates:
         patterns: ['*']
     commit-message:
       prefix: ci
+
+  # npm: security updates only (open-pull-requests-limit: 0 turns off version
+  # updates; security updates still open). Electron stays on the major version
+  # VS Code 1.99 is built for: a new major needs its own review of the egress
+  # guard and Node hooks, not a bot pull request.
+  - package-ecosystem: npm
+    directories:
+      - /
+      - /remote
+      - /test/automation
+      - /test/integration/browser
+      - /test/smoke
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+    ignore:
+      - dependency-name: electron
+        update-types: ['version-update:semver-major']
+    commit-message:
+      prefix: deps
