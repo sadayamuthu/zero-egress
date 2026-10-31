@@ -15,3 +15,7 @@ export type { ModelOption } from '../../../../common/zeroEgressSettingsService.j
 export { getIsReasoningEnabledState, getModelCapabilities } from '../../../../common/modelCapabilities.js';
 export { promptWithContext } from '../../../../common/promptContext.js';
 export type { PromptContextItem } from '../../../../common/promptContext.js';
+export { terminalAutoRunOf, settingsForTerminalAutoRun } from '../../../../common/commandAllowList.js';
+export type { TerminalAutoRun } from '../../../../common/commandAllowList.js';
+// the id of zeroEgressSettingsPane's open-settings action (that module registers actions, so only the id is copied)
+export const ZERO_EGRESS_OPEN_SETTINGS_ACTION_ID = 'workbench.action.openZeroEgressSettings';

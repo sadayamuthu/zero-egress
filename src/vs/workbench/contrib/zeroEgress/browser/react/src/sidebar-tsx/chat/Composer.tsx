@@ -9,7 +9,6 @@
 // "Run in: Background" on an empty docked chat makes Send start a background agent with the prompt instead.
 
 import React, { KeyboardEvent, useCallback, useEffect, useState } from 'react';
-import { Settings } from 'lucide-react';
 import { useAccessor, useChatThreadsState, useChatThreadsStreamState, useSettingsState } from '../../util/services.js';
 import { TextAreaFns, ZeroEgressInputBox2 } from '../../util/inputs.js';
 import { ButtonStop, ButtonSubmit, getRelative, SelectedFiles } from '../SidebarChat.js';
@@ -18,6 +17,7 @@ import { isFeatureNameDisabled, promptWithContext, ZERO_EGRESS_CTRL_L_ACTION_ID,
 import type { PromptContextItem } from '../composerDeps.js';
 import type { StagingSelectionItem } from '../../../../../common/chatThreadServiceTypes.js';
 import { useThreadReview } from '../useThreadReview.js';
+import { AgentSettingsMenu } from './AgentSettingsMenu.js';
 import { ModeMenu, RunIn, RunInSection } from './ModeMenu.js';
 import { ModelMenu } from './ModelMenu.js';
 import { ReviewBar } from './ReviewBar.js';
@@ -218,18 +218,7 @@ export const Composer = ({ threadId, variant, inputDisabledReason, textAreaRef, 
 				</div>
 				<div className='flex items-center gap-1 shrink-0 ml-auto'>
 					<span data-slot='context-meter' />
-					{/* ⚙ hosts the Agent settings menu (Task 8); inert until then */}
-					<span data-tooltip-id='ze-tooltip' data-tooltip-content='Agent settings' data-tooltip-place='top'>
-						<button
-							type='button'
-							disabled
-							aria-label='Agent settings'
-							className='size-[22px] flex items-center justify-center rounded-[6px] text-ze-fg-3 opacity-60 cursor-default'
-							onClick={e => e.stopPropagation()}
-						>
-							<Settings size={13} />
-						</button>
-					</span>
+					<AgentSettingsMenu />
 					{isRunning
 						? <ButtonStop onClick={onAbort} aria-label='Stop' />
 						: startsInBackground

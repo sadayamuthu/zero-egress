@@ -46,6 +46,7 @@ import { IWorkspaceContextService } from '../../../../../../../platform/workspac
 import { IZeroEgressCommandBarService } from '../../../zeroEgressCommandBarService.js'
 import { IPendingFileOpsService } from '../../../pendingFileOpsService.js'
 import { IChangeOwnersService } from '../../../changeOwnersService.js'
+import { ICommandAllowListService } from '../../../commandAllowListService.js'
 import { AgentSummary, IBackgroundAgentsService } from '../../../backgroundAgentsServiceInterface.js'
 import { PendingFileOp } from '../../../../common/pendingFileOps.js'
 import { INativeHostService } from '../../../../../../../platform/native/common/native.js';
@@ -245,6 +246,7 @@ const getReactAccessor = (accessor: ServicesAccessor) => {
 		IMCPService: accessor.get(IMCPService),
 		IPendingFileOpsService: accessor.get(IPendingFileOpsService),
 		IChangeOwnersService: accessor.get(IChangeOwnersService),
+		ICommandAllowListService: accessor.get(ICommandAllowListService),
 		IBackgroundAgentsService: accessor.get(IBackgroundAgentsService),
 		ILocalModelDetectionService: accessor.get(ILocalModelDetectionService),
 		ILocalStatusService: accessor.get(ILocalStatusService),
@@ -452,6 +454,19 @@ export const useChangeOwners = () => {
 		return () => { d.dispose() }
 	}, [changeOwnersService])
 	return changeOwnersService
+}
+
+// this workspace's allowed terminal commands; re-renders when the list changes
+export const useCommandAllowList = (): readonly string[] => {
+	const accessor = useAccessor()
+	const commandAllowListService = accessor.get('ICommandAllowListService')
+	const [s, ss] = useState(commandAllowListService.list)
+	useEffect(() => {
+		ss(commandAllowListService.list)
+		const d = commandAllowListService.onDidChange(() => { ss(commandAllowListService.list) })
+		return () => { d.dispose() }
+	}, [commandAllowListService])
+	return s
 }
 
 // background agents of this folder (Agents view), newest first
