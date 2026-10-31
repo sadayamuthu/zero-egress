@@ -18,7 +18,9 @@ export type ToolMessage<T extends ToolName> = {
 		// in order of events:
 		| { type: 'invalid_params', result: null, name: T, }
 
-		| { type: 'tool_request', result: null, name: T, params: ToolCallParams<T>, }  // params were validated, awaiting user
+		// params were validated, awaiting user. `conflict`: the path has another docked chat's unreviewed changes (shown as
+		// the conflict card, never auto-approved); `uri` is the tool's target, `ownerThreadId` the chat that owns those changes
+		| { type: 'tool_request', result: null, name: T, params: ToolCallParams<T>, conflict?: { uri: URI; ownerThreadId: string } }
 
 		| { type: 'running_now', result: null, name: T, params: ToolCallParams<T>, }
 

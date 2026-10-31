@@ -31,6 +31,7 @@ import { acceptAllBg, acceptBorder, buttonFontSize, buttonTextColor, rejectAllBg
 import { builtinToolNames, isABuiltinToolName, MAX_FILE_CHARS_PAGE, MAX_TERMINAL_INACTIVE_TIME } from '../../../../common/prompt/prompts.js';
 import { RawToolCallObj } from '../../../../common/sendLLMMessageTypes.js';
 import ErrorBoundary from './ErrorBoundary.js';
+import { ConflictCard } from './chat/ConflictCard.js';
 import { ToolApprovalTypeSwitch } from '../zero-egress-settings-tsx/Settings.js';
 
 import { persistentTerminalNameOfId } from '../../../terminalToolService.js';
@@ -2566,7 +2567,9 @@ const _ChatBubble = ({ threadId, chatMessage, currCheckpointIdx, isCommitted, me
 				</div>
 				{chatMessage.type === 'tool_request' ?
 					<div className={`${isCheckpointGhost ? 'opacity-50 pointer-events-none' : ''}`}>
-						<ToolRequestAcceptRejectButtons toolName={chatMessage.name} />
+						{chatMessage.conflict
+							? <ConflictCard threadId={threadId} toolMessage={chatMessage} />
+							: <ToolRequestAcceptRejectButtons toolName={chatMessage.name} />}
 					</div> : null}
 			</>
 		return null

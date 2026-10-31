@@ -18,7 +18,8 @@ import { FeatureName, ModelSelection, ModelSelectionOptions } from '../common/ze
 import { IZeroEgressSettingsService } from '../common/zeroEgressSettingsService.js';
 import { approvalTypeOfBuiltinToolName, BuiltinToolCallParams, ToolCallParams, ToolName, ToolResult } from '../common/toolsServiceTypes.js';
 import { IToolsService } from './toolsService.js';
-import { IChangeOwnersService } from './changeOwnersService.js';
+import { IChangeOwnersService, OwnershipConflictError } from './changeOwnersService.js';
+import { IPendingFileOpsService } from './pendingFileOpsService.js';
 import { CancellationToken } from '../../../../base/common/cancellation.js';
 import { ILanguageFeaturesService } from '../../../../editor/common/services/languageFeatures.js';
 import { ChatMessage, CheckpointEntry, CodespanLocationLink, StagingSelectionItem, ToolMessage } from '../common/chatThreadServiceTypes.js';
@@ -311,6 +312,11 @@ export interface IChatThreadService {
 	// approve/reject
 	approveLatestToolRequest(threadId: string): void;
 	rejectLatestToolRequest(threadId: string): void;
+	/**
+	 * For a tool_request with a `conflict`: accepts or rejects the other chat's changes that block its path, gives the
+	 * path to this chat, then runs the tool. To stop instead, use rejectLatestToolRequest.
+	 */
+	resolveConflictAndContinue(threadId: string, choice: 'accept' | 'reject'): Promise<void>;
 
 	// jump to history
 	jumpToCheckpointBeforeMessageIdx(opts: { threadId: string, messageIdx: number, jumpToUserModified: boolean }): void;
@@ -357,6 +363,7 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 		@ITerminalToolService private readonly _terminalToolService: ITerminalToolService,
 		@IConfigurationService private readonly _configurationService: IConfigurationService,
 		@IChangeOwnersService private readonly _changeOwnersService: IChangeOwnersService,
+		@IPendingFileOpsService private readonly _pendingFileOpsService: IPendingFileOpsService,
 	) {
 		super()
 		this.state = { allThreads: {}, currentThreadId: null as unknown as string } // default state
@@ -561,6 +568,34 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 			, threadId
 		)
 	}
+	async resolveConflictAndContinue(threadId: string, choice: 'accept' | 'reject') {
+		const thread = this.state.allThreads[threadId]
+		if (!thread) return
+		const lastMsg = thread.messages[thread.messages.length - 1]
+		if (!(lastMsg?.role === 'tool' && lastMsg.type === 'tool_request' && lastMsg.conflict)) return
+		const { uri } = lastMsg.conflict
+
+		// only the conflicting chat's changes that block this path: its files at or under it, and its folder deletes above it
+		const blocking = this._changeOwnersService.changesBlocking(uri, threadId)
+		if (blocking) {
+			for (const owned of blocking.uris) {
+				this._editCodeService.acceptOrRejectAllDiffAreas({ uri: owned, behavior: choice, removeCtrlKs: false })
+				await this._pendingFileOpsService.resolveAll(choice, owned)
+			}
+			for (const id of blocking.opIds) {
+				await this._pendingFileOpsService.resolve(id, choice)
+			}
+		}
+		// the thread may have moved on (deleted, or stopped) while the review ran
+		const messages = this.state.allThreads[threadId]?.messages
+		const latest = messages?.[messages.length - 1]
+		if (!(latest?.role === 'tool' && latest.type === 'tool_request' && latest.id === lastMsg.id)) return
+
+		// if something still blocks it (another chat's write in flight, or a second chat), the tool call shows the card again
+		if (!this._changeOwnersService.conflictFor(uri, threadId)) this._changeOwnersService.transfer(uri, threadId)
+		this.approveLatestToolRequest(threadId)
+	}
+
 	rejectLatestToolRequest(threadId: string) {
 		const thread = this.state.allThreads[threadId]
 		if (!thread) return // should never happen
@@ -659,6 +694,14 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 	}
 
 
+	/** the path a docked file tool writes, which another chat's unreviewed changes can block */
+	private _writeTargetOf(toolName: ToolName, params: ToolCallParams<ToolName>): URI | undefined {
+		if (toolName === 'edit_file' || toolName === 'rewrite_file' || toolName === 'create_file_or_folder' || toolName === 'delete_file_or_folder') {
+			return (params as BuiltinToolCallParams['edit_file']).uri
+		}
+		return undefined
+	}
+
 	// returns true when the tool call is waiting for user approval
 	private _runToolCall = async (
 		threadId: string,
@@ -712,6 +755,14 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 			if (toolName === 'rewrite_file') { this._addToolEditCheckpoint({ threadId, uri: (toolParams as BuiltinToolCallParams['rewrite_file']).uri }) }
 
 			// 2. if tool requires approval, break from the loop, awaiting approval
+
+			// another docked chat has unreviewed changes there: ask with the conflict card, even when edits are auto-approved
+			const conflictUri = toolCtx.kind === 'docked' ? this._writeTargetOf(toolName, toolParams) : undefined
+			const conflict = conflictUri && this._changeOwnersService.conflictFor(conflictUri, threadId)
+			if (conflictUri && conflict) {
+				this._addMessageToThread(threadId, { role: 'tool', type: 'tool_request', content: '(Awaiting user permission...)', result: null, name: toolName, params: toolParams, id: toolId, rawParams: opts.unvalidatedToolParams, mcpServerName, conflict: { uri: conflictUri, ownerThreadId: conflict.owner } })
+				return { awaitingUserApproval: true }
+			}
 
 			const approvalType = isBuiltInTool ? approvalTypeOfBuiltinToolName[toolName] : 'MCP tools'
 			if (approvalType) {
@@ -776,6 +827,13 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 		catch (error) {
 			resolveInterruptor(() => { }) // resolve for the sake of it
 			if (interrupted) { return { interrupted: true } } // the tool result is added where we interrupt, not here
+
+			// race guard: another chat claimed the path after the check above (or while this call awaited approval)
+			const conflictUri = error instanceof OwnershipConflictError && toolCtx.kind === 'docked' ? this._writeTargetOf(toolName, toolParams) : undefined
+			if (conflictUri && error instanceof OwnershipConflictError) {
+				this._updateLatestTool(threadId, { role: 'tool', type: 'tool_request', content: '(Awaiting user permission...)', result: null, name: toolName, params: toolParams, id: toolId, rawParams: opts.unvalidatedToolParams, mcpServerName, conflict: { uri: conflictUri, ownerThreadId: error.owner } })
+				return { awaitingUserApproval: true }
+			}
 
 			const errorMessage = getErrorMessage(error)
 			this._updateLatestTool(threadId, { role: 'tool', type: 'tool_error', params: toolParams, result: errorMessage, name: toolName, content: errorMessage, id: toolId, rawParams: opts.unvalidatedToolParams, mcpServerName })
@@ -873,11 +931,16 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 
 			// before enter loop, call tool
 			if (callThisToolFirst) {
-				const { interrupted } = await this._runToolCall(threadId, callThisToolFirst.name, callThisToolFirst.id, callThisToolFirst.mcpServerName, { preapproved: true, unvalidatedToolParams: callThisToolFirst.rawParams, validatedParams: callThisToolFirst.params })
+				const { interrupted, awaitingUserApproval } = await this._runToolCall(threadId, callThisToolFirst.name, callThisToolFirst.id, callThisToolFirst.mcpServerName, { preapproved: true, unvalidatedToolParams: callThisToolFirst.rawParams, validatedParams: callThisToolFirst.params })
 				if (interrupted) {
 					this._setStreamState(threadId, undefined)
 					this._addUserCheckpoint({ threadId })
 
+				}
+				// the approved write hit another chat's changes (the race guard): it waits on the conflict card again
+				if (awaitingUserApproval) {
+					this._setStreamState(threadId, { isRunning: 'awaiting_user' })
+					return
 				}
 			}
 			this._setStreamState(threadId, { isRunning: 'idle', interrupt: 'not_needed' })  // just decorative, for clarity

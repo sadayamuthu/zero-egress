@@ -38,7 +38,16 @@ export interface IChangeOwnersService {
 	 * over from an owner with nothing pending) and keeps it in flight until the returned disposable is disposed.
 	 */
 	beginWrite(uri: URI, threadId: string, kind: WriteKind): IDisposable;
+	/** Read-only: the chat whose changes would stop `threadId` writing `uri` (the same rule as beginWrite), if any. */
+	conflictFor(uri: URI, threadId: string): { owner: string } | undefined;
+	/**
+	 * Read-only: what to resolve so `threadId` can write `uri`. The conflicting chat's owned paths at or under `uri`
+	 * (resolve their diffs and pending ops), and the ids of its pending folder deletes above `uri`.
+	 */
+	changesBlocking(uri: URI, threadId: string): BlockingChanges | undefined;
 }
+
+export interface BlockingChanges { readonly owner: string; readonly uris: URI[]; readonly opIds: number[] }
 
 export type WriteKind = 'edit' | 'create' | 'delete';
 
@@ -137,6 +146,30 @@ export class ChangeOwnersService extends Disposable implements IChangeOwnersServ
 			this._inFlight.delete(write);
 			this._releaseSettled(); // a write that failed leaves nothing pending, so no owner either
 		});
+	}
+
+	conflictFor(uri: URI, threadId: string): { owner: string } | undefined {
+		const conflict = this._conflictFor(uri, threadId);
+		return conflict && { owner: conflict.owner };
+	}
+
+	changesBlocking(uri: URI, threadId: string): BlockingChanges | undefined {
+		const conflict = this._conflictFor(uri, threadId);
+		if (!conflict) {
+			return undefined;
+		}
+		const { owner } = conflict;
+		const uris = this.ownedUris(owner).filter(u => isEqualOrParent(u, uri));
+		const opIds = this._pendingFileOpsService.ops
+			.filter(op => {
+				if (op.kind !== 'delete') {
+					return false;
+				}
+				const folder = URI.parse(op.path);
+				return this.ownerOf(folder) === owner && isEqualOrParent(uri, folder) && !isEqual(uri, folder);
+			})
+			.map(op => op.id);
+		return { owner, uris, opIds };
 	}
 
 	private _isInFlight(path: string): boolean {

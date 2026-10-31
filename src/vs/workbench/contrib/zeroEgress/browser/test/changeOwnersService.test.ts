@@ -135,4 +135,47 @@ suite('ChangeOwnersService', () => {
 		assert.throws(() => service.beginWrite(inner, 't2', 'edit'), conflictWith('t1', folder)); // pending
 		service.beginWrite(inner, 't1', 'edit').dispose();
 	});
+	test('conflictFor reports the other chat without claiming anything', () => {
+		const write = service.beginWrite(a, 't1', 'edit');
+		diffAreasOfURI[a.fsPath] = new Set(['1']);
+		write.dispose();
+		assert.deepStrictEqual(service.conflictFor(a, 't2'), { owner: 't1' });
+		assert.strictEqual(service.conflictFor(a, 't1'), undefined);
+		assert.strictEqual(service.ownerOf(a), 't1');
+		assert.deepStrictEqual(service.ownedUris('t2'), []);
+		const b = URI.parse('file:///w/b.ts');
+		assert.strictEqual(service.conflictFor(b, 't2'), undefined);
+		assert.strictEqual(service.ownerOf(b), undefined); // the check claims nothing
+	});
+
+	test('changesBlocking selects only the conflicting chat\'s changes at, under or above the path', async () => {
+		const folder = URI.parse('file:///w/d');
+		const inner = URI.parse('file:///w/d/x.ts');
+		const other = URI.parse('file:///w/d/y.ts');
+		await files.writeFile(inner, VSBuffer.fromString('x'));
+		// t1: pending edit inside d, and pending delete of d; t3: pending edit of an unrelated file
+		const w1 = service.beginWrite(inner, 't1', 'edit');
+		diffAreasOfURI[inner.fsPath] = new Set(['1']);
+		w1.dispose();
+		const w3 = service.beginWrite(a, 't3', 'edit');
+		diffAreasOfURI[a.fsPath] = new Set(['1']);
+		w3.dispose();
+		const w2 = service.beginWrite(folder, 't1', 'delete');
+		await pendingFileOps.markDeleted(folder, true, 't1');
+		w2.dispose();
+		const deleteOp = pendingFileOps.ops.find(o => o.kind === 'delete')!;
+
+		// a file under t1's folder delete: the delete above it (by id), and no owned files at or under it
+		const forOther = service.changesBlocking(other, 't2');
+		assert.deepStrictEqual(forOther && { owner: forOther.owner, uris: forOther.uris.map(u => u.toString()), opIds: forOther.opIds },
+			{ owner: 't1', uris: [], opIds: [deleteOp.id] });
+
+		// the folder itself: t1's owned paths at or under it; its own delete is at the path, so no op above it
+		const forFolder = service.changesBlocking(folder, 't2');
+		assert.deepStrictEqual(forFolder && { owner: forFolder.owner, uris: forFolder.uris.map(u => u.toString()).sort(), opIds: forFolder.opIds },
+			{ owner: 't1', uris: [folder.toString(), inner.toString()], opIds: [] });
+
+		assert.strictEqual(service.changesBlocking(a, 't3'), undefined); // its own changes
+		assert.strictEqual(service.changesBlocking(URI.parse('file:///w/c.ts'), 't2'), undefined);
+	});
 });
