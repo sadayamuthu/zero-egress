@@ -176,6 +176,7 @@ export class SidebarPart extends AbstractPaneCompositePart {
 			icon: true,
 			orientation: ActionsOrientation.HORIZONTAL,
 			recomputeSizes: true,
+			moreViews: true, // ZeroEgress: ⌄ at the end of the icon row
 			activityHoverOptions: {
 				position: () => this.getCompositeBarPosition() === CompositeBarPosition.BOTTOM ? HoverPosition.ABOVE : HoverPosition.BELOW,
 			},

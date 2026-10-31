@@ -106,3 +106,8 @@
 .monaco-workbench .sidebar.pane-composite-part > .title.has-composite-bar > .title-actions .monaco-action-bar .action-item {
 	max-width: 150px;
 }
+
+/* ZeroEgress: the icon row on top of the side bar, centered over the panel */
+.monaco-workbench .sidebar.pane-composite-part > .header-or-footer > .composite-bar-container {
+	justify-content: center;
+}

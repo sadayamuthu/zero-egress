@@ -31,6 +31,7 @@ import { GestureEvent } from '../../../base/browser/touch.js';
 import { IPaneCompositePart } from './paneCompositePart.js';
 import { IConfigurationService } from '../../../platform/configuration/common/configuration.js';
 import { IViewsService } from '../../services/views/common/viewsService.js';
+import { isPinnedByDefault } from './moreViewsModel.js'; // ZeroEgress
 
 interface IPlaceholderViewContainer {
 	readonly id: string;
@@ -80,6 +81,7 @@ export interface IPaneCompositeBarOptions {
 	readonly compositeSize: number;
 	readonly overflowActionSize: number;
 	readonly preventLoopNavigation?: boolean;
+	readonly moreViews?: boolean; // ZeroEgress: see ICompositeBarOptions.moreViews
 	readonly activityHoverOptions: IActivityHoverOptions;
 	readonly fillExtraContextMenuActions: (actions: IAction[], e?: MouseEvent | GestureEvent) => void;
 	readonly colors: (theme: IColorTheme) => ICompositeBarColors;
@@ -140,6 +142,7 @@ export class PaneCompositeBar extends Disposable {
 			orientation: this.options.orientation,
 			activityHoverOptions: this.options.activityHoverOptions,
 			preventLoopNavigation: this.options.preventLoopNavigation,
+			moreViews: this.options.moreViews, // ZeroEgress
 			openComposite: async (compositeId, preserveFocus) => {
 				return (await this.paneCompositePart.openPaneComposite(compositeId, !preserveFocus)) ?? null;
 			},
@@ -341,7 +344,11 @@ export class PaneCompositeBar extends Disposable {
 			// Pin it by default if it is new
 			const cachedViewContainer = this.cachedViewContainers.filter(({ id }) => id === viewContainer.id)[0];
 			if (!cachedViewContainer) {
-				this.compositeBar.pin(viewContainer.id);
+				if (isPinnedByDefault(viewContainer.id, this.location)) {
+					this.compositeBar.pin(viewContainer.id);
+				} else {
+					this.compositeBar.unpin(viewContainer.id); // ZeroEgress: new items start pinned in the model; these start in ⌄
+				}
 			}
 
 			// Active
