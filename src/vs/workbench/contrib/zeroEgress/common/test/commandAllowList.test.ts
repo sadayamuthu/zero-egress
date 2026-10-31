@@ -27,6 +27,15 @@ suite('commandAllowList', () => {
 		}
 	});
 
+	test('unicode and control whitespace never matches', () => {
+		assert.strictEqual(isAllowed(['rm -rf build'], 'rm -rf build\u00A0'), false);
+		assert.strictEqual(canAllowList('a\fb'), false);
+		assert.strictEqual(canAllowList('a\vb'), false);
+		assert.strictEqual(canAllowList('a\uFEFFb'), false);
+		assert.strictEqual(canAllowList('a\u2028b'), false);
+		assert.strictEqual(isAllowed(['npm test'], '\tnpm\ttest '), true);
+	});
+
 	test('auto-run mapping round-trips', () => {
 		for (const v of ['off', 'allowList', 'all'] as TerminalAutoRun[]) {
 			const s = settingsForTerminalAutoRun(v);

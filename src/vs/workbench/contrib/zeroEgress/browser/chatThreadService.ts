@@ -703,13 +703,13 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 	}
 
 
-	/** the path a docked file tool writes, which another chat's unreviewed changes can block */
 	/** run_command / run_persistent_command only: the command is on this workspace's allow-list. */
 	private _isAllowListedCommand(toolName: ToolName, params: ToolCallParams<ToolName>): boolean {
 		if (toolName !== 'run_command' && toolName !== 'run_persistent_command') { return false }
 		return this._commandAllowListService.isAllowed((params as { command: string }).command)
 	}
 
+	/** the path a docked file tool writes, which another chat's unreviewed changes can block */
 	private _writeTargetOf(toolName: ToolName, params: ToolCallParams<ToolName>): URI | undefined {
 		if (toolName === 'edit_file' || toolName === 'rewrite_file' || toolName === 'create_file_or_folder' || toolName === 'delete_file_or_folder') {
 			return (params as BuiltinToolCallParams['edit_file']).uri

@@ -6,11 +6,12 @@
 // Allowed terminal commands: exact match after whitespace normalizing; anything with shell control syntax never matches.
 
 export function normalizeCommand(cmd: string): string {
-	return cmd.trim().replace(/\s+/g, ' ');
+	return cmd.replace(/^[ \t]+|[ \t]+$/g, '').replace(/[ \t]+/g, ' ');
 }
 
 export function canAllowList(cmd: string): boolean {
-	if (/[;&|`<>\n\r]|\$\(/.test(cmd)) { return false; }
+	// the shell gets the raw command, so only plain ASCII space and tab may differ; any other control or Unicode space never matches
+	if (/[;&|`<>]|\$\(|[\u0000-\u0008\u000A-\u001F\u007F\uFEFF]|[^\S \t]/u.test(cmd)) { return false; }
 	return normalizeCommand(cmd).length > 0;
 }
 
