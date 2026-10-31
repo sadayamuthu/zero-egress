@@ -1,8 +1,8 @@
 {
 	"nameShort": "ZeroEgress",
 	"nameLong": "ZeroEgress",
-	"zeroEgressVersion": "0.1.0",
-	"zeroEgressRelease": "0001",
+	"zeroEgressVersion": "0.1.1",
+	"zeroEgressRelease": "0002",
 	"applicationName": "zero-egress",
 	"dataFolderName": ".zero-egress",
 	"win32MutexName": "zero-egress",
