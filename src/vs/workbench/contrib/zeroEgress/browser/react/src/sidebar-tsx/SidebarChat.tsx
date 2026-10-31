@@ -30,7 +30,7 @@ import ErrorBoundary from './ErrorBoundary.js';
 import { ConflictCard } from './chat/ConflictCard.js';
 import { LineCounts, StepName, StepRow } from './chat/StepRow.js';
 import type { StepIcon } from './chat/StepRow.js';
-import { ApprovalButton, ApprovalCard, ApprovalCardShell, CHAT_THREAD_ROOT_ATTR } from './chat/ApprovalCard.js';
+import { ApprovalButton, ApprovalCard, ApprovalCardShell } from './chat/ApprovalCard.js';
 import { extractSearchReplaceBlocks } from '../../../../common/helpers/extractCodeFromResult.js';
 import { ChatTabs } from './chat/ChatTabs.js';
 import { Composer, ComposerApi } from './chat/Composer.js';
@@ -46,8 +46,6 @@ import { removeMCPToolNamePrefix } from '../../../../common/mcpServiceTypes.js';
 
 // the thread this chat view renders; deep children (message list, approval row, input) read it from here
 const ThreadIdContext = createContext<string | null>(null)
-// the chat's input box, so an approval card that appears doesn't take focus while the user is typing there
-const ComposerTextAreaContext = createContext<React.RefObject<HTMLTextAreaElement | null> | null>(null)
 const useThreadId = (): string => {
 	const threadId = useContext(ThreadIdContext)
 	if (threadId === null) throw new Error('useThreadId must be used inside a ChatThreadView')
@@ -1055,11 +1053,12 @@ const UserMessageComponent = ({ chatMessage, messageIdx, isCheckpointGhost, curr
 
 		{/* hover controls, left of the bubble */}
 		{mode === 'display' && <div
-			className={`absolute right-full top-1.5 mr-2 flex flex-col items-end gap-0.5 text-xs transition-opacity duration-150 ${showControls ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
+			// padding, not margin, toward the bubble: the column touches it, so moving onto Edit never leaves the hover area
+			className={`absolute right-full top-0 pt-1.5 pr-2 flex flex-col items-end gap-0.5 text-xs transition-opacity duration-150 ${showControls ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
 		>
 			{hasCheckpointBefore && <span
 				role='button'
-				className={`select-none whitespace-nowrap pointer-events-auto ${restore.isDisabled ? 'cursor-default text-ze-fg-4' : 'cursor-pointer text-ze-fg-3 hover:text-ze-fg-1'}`}
+				className={`select-none whitespace-nowrap ${restore.isDisabled ? 'cursor-default text-ze-fg-4' : 'cursor-pointer text-ze-fg-3 hover:text-ze-fg-1'}`}
 				onClick={() => restore.restoreBefore(messageIdx - 1)}
 				{...restore.disabledReason ? {
 					'data-tooltip-id': 'ze-tooltip',
@@ -1438,13 +1437,13 @@ const toolNameToDesc = (toolName: BuiltinToolName, _toolParams: BuiltinToolCallP
 	}
 }
 
-// the approval card for edits, MCP tools and the terminal tools without a command: Approve / Reject, plus that type's auto-approve switch
+// the approval card for edits, MCP tools and the terminal tools without a command: Approve / Reject, plus that type's
+// auto-approve switch. No key: only the terminal card runs on ⏎
 const ToolApprovalCard = ({ toolName, title }: { toolName: ToolName, title: React.ReactNode }) => {
 	const accessor = useAccessor()
 	const chatThreadsService = accessor.get('IChatThreadService')
 	const metricsService = accessor.get('IMetricsService')
 	const threadId = useThreadId()
-	const composerTextAreaRef = useContext(ComposerTextAreaContext)
 
 	const onAccept = useCallback(() => {
 		try { // this doesn't need to be wrapped in try/catch anymore
@@ -1464,9 +1463,6 @@ const ToolApprovalCard = ({ toolName, title }: { toolName: ToolName, title: Reac
 
 	return <ApprovalCardShell
 		title={title}
-		onEnter={onAccept}
-		takeFocus
-		composerTextAreaRef={composerTextAreaRef ?? undefined}
 		buttons={<>
 			<ApprovalButton primary onClick={onAccept}>Approve</ApprovalButton>
 			<ApprovalButton onClick={onReject}>Reject</ApprovalButton>
@@ -1479,7 +1475,6 @@ const ToolApprovalCard = ({ toolName, title }: { toolName: ToolName, title: Reac
 
 /** the card a tool request waits on: a conflict, a command, or Approve/Reject */
 const ToolRequestCard = ({ threadId, toolMessage }: { threadId: string, toolMessage: ToolMessage<ToolName> & { type: 'tool_request' } }) => {
-	const composerTextAreaRef = useContext(ComposerTextAreaContext)
 	if (toolMessage.conflict) {
 		return <ConflictCard threadId={threadId} toolMessage={toolMessage} />
 	}
@@ -1487,7 +1482,6 @@ const ToolRequestCard = ({ threadId, toolMessage }: { threadId: string, toolMess
 		return <ApprovalCard
 			threadId={threadId}
 			toolMessage={toolMessage as ToolMessage<'run_command' | 'run_persistent_command'> & { type: 'tool_request' }}
-			composerTextAreaRef={composerTextAreaRef ?? undefined}
 		/>
 	}
 	return <ToolApprovalCard toolName={toolMessage.name} title={<ApprovalTitle toolMessage={toolMessage} />} />
@@ -2318,31 +2312,26 @@ const builtinToolNameToComponent: { [T in BuiltinToolName]: { resultWrapper: Res
 };
 
 
-// A checkpoint row. One right before a user message is not shown: that message's ↺ Restore makes the same jump.
-// The others (e.g. the one after a run) show only after a restore, so the user can jump forward again.
+// A checkpoint row, as a compact muted `↺ Restore to here`: before each edit mid-run, after a run. One right before a
+// user message is not shown: that message's hover ↺ Restore makes the same jump.
 const Checkpoint = ({ message, threadId, messageIdx, isCheckpointGhost, threadIsRunning }: { message: CheckpointEntry, threadId: string; messageIdx: number, isCheckpointGhost: boolean, threadIsRunning: boolean }) => {
 	const accessor = useAccessor()
 	const chatThreadService = accessor.get('IChatThreadService')
 	const { isDisabled, disabledReason, restoreBefore } = useCheckpointRestore(threadId)
 
 	const thread = chatThreadService.state.allThreads[threadId]
-	const messages = thread?.messages ?? []
-	if (messages[messageIdx + 1]?.role === 'user') return null
-	const currCheckpointIdx = thread?.state?.currCheckpointIdx ?? null
-	const lastCheckpointIdx = messages.findLastIndex(m => m.role === 'checkpoint')
-	const hasJumpedBack = currCheckpointIdx !== null && currCheckpointIdx < lastCheckpointIdx
-	if (!hasJumpedBack) return null
+	if (thread?.messages[messageIdx + 1]?.role === 'user') return null
 
 	return <div
-		className={`flex items-center justify-center px-2 `}
+		className='flex items-center -my-2.5 pl-[22px]' // compact: tucked between the steps around it, aligned with their labels
 	>
 		<div
 			className={`
-                    text-xs
-                    text-ze-fg-3
+                    text-[11px] leading-4
+                    text-ze-fg-4
                     select-none
                     ${isCheckpointGhost ? 'opacity-50' : 'opacity-100'}
-					${isDisabled ? 'cursor-default' : 'cursor-pointer hover:text-ze-fg-1'}
+					${isDisabled ? 'cursor-default' : 'cursor-pointer hover:text-ze-fg-2'}
                 `}
 			style={{ position: 'relative', display: 'inline-block' }} // allow absolute icon
 			onClick={() => {
@@ -2355,7 +2344,7 @@ const Checkpoint = ({ message, threadId, messageIdx, isCheckpointGhost, threadIs
 				'data-tooltip-place': 'top',
 			} : {}}
 		>
-			{currCheckpointIdx === messageIdx ? 'Restored here' : '↺ Restore to here'}
+			↺ Restore to here
 		</div>
 	</div>
 }
@@ -2732,13 +2721,10 @@ const ChatThreadViewInner = ({ threadId, variant, inputDisabledReason }: { threa
 		ref={sidebarRef}
 		className='w-full h-full flex flex-col overflow-hidden'
 		onKeyDown={onThreadKeyDown}
-		{...{ [CHAT_THREAD_ROOT_ATTR]: '' }}
 	>
-		<ComposerTextAreaContext.Provider value={textAreaRef}>
-			<ErrorBoundary>
-				{messagesHTML}
-			</ErrorBoundary>
-		</ComposerTextAreaContext.Provider>
+		<ErrorBoundary>
+			{messagesHTML}
+		</ErrorBoundary>
 		<ErrorBoundary>
 			{threadPageInput}
 		</ErrorBoundary>
