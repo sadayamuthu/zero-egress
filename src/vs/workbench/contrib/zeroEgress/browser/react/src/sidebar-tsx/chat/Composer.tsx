@@ -120,10 +120,13 @@ export const Composer = ({ threadId, variant, inputDisabledReason, textAreaRef, 
 			if (!prompt) { return; }
 			// the agent's first message is plain text: the staged chips go into it as workspace-relative paths
 			const context: PromptContextItem[] = selections.map(sel => {
-				const path = getRelative(sel.uri, accessor) ?? sel.uri.fsPath;
-				return sel.type === 'Folder' ? { kind: 'folder', path }
-					: sel.type === 'CodeSelection' ? { kind: 'selection', path, range: sel.range }
-						: { kind: 'file', path };
+				// getRelative gives back the fsPath itself for a file outside the workspace: that one stays absolute
+				const relative = getRelative(sel.uri, accessor);
+				const absolute = relative === undefined || relative === sel.uri.fsPath;
+				const path = absolute ? sel.uri.fsPath : relative;
+				return sel.type === 'Folder' ? { kind: 'folder', path, absolute }
+					: sel.type === 'CodeSelection' ? { kind: 'selection', path, range: sel.range, absolute }
+						: { kind: 'file', path, absolute };
 			});
 			setIsStarting(true);
 			try {

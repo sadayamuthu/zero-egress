@@ -28,6 +28,24 @@ suite('promptContext', () => {
 		);
 	});
 
+	test('an absolute path outside the workspace keeps its leading separator', () => {
+		assert.strictEqual(
+			promptWithContext('Look', [
+				{ kind: 'file', path: '/Users/x/other.ts', absolute: true },
+				{ kind: 'folder', path: '/Users/x/lib/', absolute: true },
+				{ kind: 'selection', path: '/Users/x/other.ts', range: [1, 3], absolute: true },
+			]),
+			'Look\n\nContext:\n- /Users/x/other.ts\n- /Users/x/lib/\n- /Users/x/other.ts:L1-L3',
+		);
+	});
+
+	test('a Windows absolute path is left as is', () => {
+		assert.strictEqual(
+			promptWithContext('Look', [{ kind: 'file', path: 'C:\\work\\other.ts', absolute: true }, { kind: 'folder', path: 'C:\\work\\lib', absolute: true }]),
+			'Look\n\nContext:\n- C:\\work\\other.ts\n- C:\\work\\lib\\',
+		);
+	});
+
 	test('a selection has its line range', () => {
 		assert.strictEqual(
 			promptWithContext('Explain', [{ kind: 'file', path: 'b.ts' }, { kind: 'selection', path: '/src/a.ts', range: [40, 62] }]),
