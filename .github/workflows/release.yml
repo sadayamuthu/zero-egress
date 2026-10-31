@@ -298,7 +298,9 @@ jobs:
   build-linux:
     needs: test
     if: needs.test.outputs.linux == 'true'
-    runs-on: ubuntu-latest
+    # Pinned: VS Code 1.99's bundled dpkg-shlibdeps.pl fails against the Dpkg perl modules of
+    # ubuntu-26.04 (dpkg 1.23) with "Can't use an undefined value as a HASH reference".
+    runs-on: ubuntu-24.04
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@v7
@@ -463,7 +465,8 @@ jobs:
   smoke-linux:
     needs: [test, build-linux]
     if: needs.test.outputs.linux == 'true'
-    runs-on: ubuntu-latest
+    # Pinned with build-linux: the .deb is installed on the release it was built on.
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
