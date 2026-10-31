@@ -45,6 +45,7 @@ import { IZeroEgressModelService } from '../../../../common/zeroEgressModelServi
 import { IWorkspaceContextService } from '../../../../../../../platform/workspace/common/workspace.js'
 import { IZeroEgressCommandBarService } from '../../../zeroEgressCommandBarService.js'
 import { IPendingFileOpsService } from '../../../pendingFileOpsService.js'
+import { IChangeOwnersService } from '../../../changeOwnersService.js'
 import { AgentSummary, IBackgroundAgentsService } from '../../../backgroundAgentsServiceInterface.js'
 import { PendingFileOp } from '../../../../common/pendingFileOps.js'
 import { INativeHostService } from '../../../../../../../platform/native/common/native.js';
@@ -243,6 +244,7 @@ const getReactAccessor = (accessor: ServicesAccessor) => {
 		IExtensionTransferService: accessor.get(IExtensionTransferService),
 		IMCPService: accessor.get(IMCPService),
 		IPendingFileOpsService: accessor.get(IPendingFileOpsService),
+		IChangeOwnersService: accessor.get(IChangeOwnersService),
 		IBackgroundAgentsService: accessor.get(IBackgroundAgentsService),
 		ILocalModelDetectionService: accessor.get(ILocalModelDetectionService),
 		ILocalStatusService: accessor.get(ILocalStatusService),
@@ -437,6 +439,19 @@ export const usePendingFileOps = (): readonly PendingFileOp[] => {
 		return () => { pendingFileOpsListeners.delete(listener) };
 	}, []);
 	return s
+}
+
+// which docked chat owns each file's pending changes; re-renders when an owner changes
+export const useChangeOwners = () => {
+	const accessor = useAccessor()
+	const changeOwnersService = accessor.get('IChangeOwnersService')
+	const [, setVersion] = useState(0)
+	useEffect(() => {
+		setVersion(v => v + 1)
+		const d = changeOwnersService.onDidChange(() => { setVersion(v => v + 1) })
+		return () => { d.dispose() }
+	}, [changeOwnersService])
+	return changeOwnersService
 }
 
 // background agents of this folder (Agents view), newest first

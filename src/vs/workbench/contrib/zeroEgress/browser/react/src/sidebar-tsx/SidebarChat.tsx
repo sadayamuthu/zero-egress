@@ -6,7 +6,7 @@
 import React, { createContext, useContext, ButtonHTMLAttributes, FormEvent, FormHTMLAttributes, Fragment, KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 
-import { useAccessor, useChatThreadsState, useChatThreadsStreamState, useSettingsState, useActiveURI, useCommandBarState, useFullChatThreadsStreamState, usePendingFileOps } from '../util/services.js';
+import { useAccessor, useChatThreadsState, useChatThreadsStreamState, useSettingsState, useActiveURI, useFullChatThreadsStreamState } from '../util/services.js';
 import { ScrollType } from '../../../../../../../editor/common/editorCommon.js';
 
 import { ChatMarkdownRender, ChatMessageLocation, getApplyBoxId } from '../markdown/ChatMarkdownRender.js';
@@ -16,22 +16,24 @@ import { ErrorDisplay } from './ErrorDisplay.js';
 import { BlockCode, TextAreaFns, ZeroEgressCustomDropdownBox, ZeroEgressInputBox2, ZeroEgressSlider, ZeroEgressSwitch, ZeroEgressDiffEditor } from '../util/inputs.js';
 import { ModelDropdown, } from '../zero-egress-settings-tsx/ModelDropdown.js';
 import { PastThreadsList } from './SidebarThreadSelector.js';
-import { ZERO_EGRESS_ACCEPT_ALL_DIFFS_ACTION_ID, ZERO_EGRESS_CTRL_L_ACTION_ID, ZERO_EGRESS_REJECT_ALL_DIFFS_ACTION_ID } from '../../../actionIDs.js';
+import { ZERO_EGRESS_CTRL_L_ACTION_ID } from '../../../actionIDs.js';
 import { ZERO_EGRESS_OPEN_SETTINGS_ACTION_ID } from '../../../zeroEgressSettingsPane.js';
 import { ChatMode, displayInfoOfProviderName, FeatureName, isFeatureNameDisabled } from '../../../../../../../workbench/contrib/zeroEgress/common/zeroEgressSettingsTypes.js';
 import { ICommandService } from '../../../../../../../platform/commands/common/commands.js';
 import { WarningBox } from '../zero-egress-settings-tsx/WarningBox.js';
 import { getModelCapabilities, getIsReasoningEnabledState } from '../../../../common/modelCapabilities.js';
-import { AlertTriangle, File, Ban, Check, ChevronRight, Dot, FileIcon, Pencil, Undo, Undo2, X, Flag, Copy as CopyIcon, Info, CirclePlus, Ellipsis, CircleEllipsis, CloudUpload, Folder, ALargeSmall, TypeOutline, Text } from 'lucide-react';
+import { AlertTriangle, File, Ban, ChevronRight, Dot, FileIcon, Pencil, Undo, Undo2, X, Flag, Copy as CopyIcon, Info, CirclePlus, Ellipsis, CircleEllipsis, CloudUpload, Folder, ALargeSmall, TypeOutline, Text } from 'lucide-react';
 import { ChatMessage, CheckpointEntry, StagingSelectionItem, ToolMessage } from '../../../../common/chatThreadServiceTypes.js';
 import { approvalTypeOfBuiltinToolName, BuiltinToolCallParams, BuiltinToolName, ToolName, LintErrorItem, ToolApprovalType, toolApprovalTypes } from '../../../../common/toolsServiceTypes.js';
-import { CopyButton, EditToolAcceptRejectButtonsHTML, IconShell1, JumpToFileButton, JumpToTerminalButton, StatusIndicator, StatusIndicatorForApplyButton, useApplyStreamState, useEditToolStreamState } from '../markdown/ApplyBlockHoverButtons.js';
+import { CopyButton, EditToolAcceptRejectButtonsHTML, IconShell1, JumpToFileButton, JumpToTerminalButton, StatusIndicatorForApplyButton, useApplyStreamState, useEditToolStreamState } from '../markdown/ApplyBlockHoverButtons.js';
 import { IsRunningType } from '../../../chatThreadService.js';
 import { acceptAllBg, acceptBorder, buttonFontSize, buttonTextColor, rejectAllBg, rejectBg, rejectBorder } from '../../../../common/helpers/colors.js';
 import { builtinToolNames, isABuiltinToolName, MAX_FILE_CHARS_PAGE, MAX_TERMINAL_INACTIVE_TIME } from '../../../../common/prompt/prompts.js';
 import { RawToolCallObj } from '../../../../common/sendLLMMessageTypes.js';
 import ErrorBoundary from './ErrorBoundary.js';
 import { ConflictCard } from './chat/ConflictCard.js';
+import { ReviewBar } from './chat/ReviewBar.js';
+import { useThreadReview } from './useThreadReview.js';
 import { ToolApprovalTypeSwitch } from '../zero-egress-settings-tsx/Settings.js';
 
 import { persistentTerminalNameOfId } from '../../../terminalToolService.js';
@@ -2593,285 +2595,6 @@ const _ChatBubble = ({ threadId, chatMessage, currCheckpointIdx, isCommitted, me
 
 }
 
-const CommandBarInChat = () => {
-	const { stateOfURI: commandBarStateOfURI, sortedURIs: sortedCommandBarURIs } = useCommandBarState()
-	const pendingFileOps = usePendingFileOps()
-	const numFilesChanged = new Set([...sortedCommandBarURIs.map(uri => uri.toString()), ...pendingFileOps.map(op => op.path)]).size
-
-	const accessor = useAccessor()
-	const editCodeService = accessor.get('IEditCodeService')
-	const commandService = accessor.get('ICommandService')
-	const threadId = useThreadId()
-	const commandBarState = useCommandBarState()
-	const chatThreadsStreamState = useChatThreadsStreamState(threadId)
-
-	// (
-	// 	<IconShell1
-	// 		Icon={CopyIcon}
-	// 		onClick={copyChatToClipboard}
-	// 		data-tooltip-id='ze-tooltip'
-	// 		data-tooltip-place='top'
-	// 		data-tooltip-content='Copy chat JSON'
-	// 	/>
-	// )
-
-	const [fileDetailsOpenedState, setFileDetailsOpenedState] = useState<'auto-opened' | 'auto-closed' | 'user-opened' | 'user-closed'>('auto-closed');
-	const isFileDetailsOpened = fileDetailsOpenedState === 'auto-opened' || fileDetailsOpenedState === 'user-opened';
-
-
-	useEffect(() => {
-		// close the file details if there are no files
-		// this converts 'user-closed' to 'auto-closed'
-		if (numFilesChanged === 0) {
-			setFileDetailsOpenedState('auto-closed')
-		}
-		// open the file details if it hasnt been closed
-		if (numFilesChanged > 0 && fileDetailsOpenedState !== 'user-closed') {
-			setFileDetailsOpenedState('auto-opened')
-		}
-	}, [fileDetailsOpenedState, setFileDetailsOpenedState, numFilesChanged])
-
-
-	const isFinishedMakingThreadChanges = (
-		// there are changed files (edits, or pending creates/deletes)
-		numFilesChanged !== 0
-		// none of the files are streaming
-		&& commandBarState.sortedURIs.every(uri => !commandBarState.stateOfURI[uri.fsPath]?.isStreaming)
-	)
-
-	// ======== status of agent ========
-	// This icon answers the question "is the LLM doing work on this thread?"
-	// assume it is single threaded for now
-	// green = Running
-	// orange = Requires action
-	// dark = Done
-
-	const threadStatus = (
-		chatThreadsStreamState?.isRunning === 'awaiting_user' ? { title: 'Needs Approval', color: 'yellow', } as const
-			: chatThreadsStreamState?.isRunning ? { title: 'Running', color: 'orange', } as const
-				: { title: 'Done', color: 'dark', } as const
-	)
-
-
-	const threadStatusHTML = <StatusIndicator className='mx-1' indicatorColor={threadStatus.color} title={threadStatus.title} />
-
-
-	// ======== info about changes ========
-	// num files changed
-	// acceptall + rejectall
-	// popup info about each change (each with num changes + acceptall + rejectall of their own)
-
-	const numChangesPending = sortedCommandBarURIs.reduce((n, uri) => n + (commandBarStateOfURI[uri.fsPath]?.sortedDiffIds?.length ?? 0), 0) + pendingFileOps.length
-	const pendingFileOpsService = accessor.get('IPendingFileOpsService')
-	const zeroEgressCommandBarService = accessor.get('IZeroEgressCommandBarService')
-	const numFilesChangedStr = numFilesChanged === 0 ? 'No files with changes'
-		: `${numChangesPending} change${numChangesPending === 1 ? '' : 's'} pending · ${numFilesChanged} file${numFilesChanged === 1 ? '' : 's'}`
-	const keybindingService = accessor.get('IKeybindingService')
-	const acceptAllKeybinding = keybindingService.lookupKeybinding(ZERO_EGRESS_ACCEPT_ALL_DIFFS_ACTION_ID)?.getLabel()
-	const rejectAllKeybinding = keybindingService.lookupKeybinding(ZERO_EGRESS_REJECT_ALL_DIFFS_ACTION_ID)?.getLabel()
-
-
-
-
-	const acceptRejectAllButtons = <div
-		// do this with opacity so that the height remains the same at all times
-		className={`flex items-center gap-1.5 flex-shrink-0
-			${isFinishedMakingThreadChanges ? '' : 'opacity-0 pointer-events-none'}`
-		}
-	>
-		<button
-			type='button'
-			className='px-2 py-0.5 rounded-[6px] border border-ze-border-2 bg-ze-bg-2 text-ze-fg-1 hover:bg-ze-bg-2-hover cursor-pointer'
-			onClick={() => { zeroEgressCommandBarService.acceptOrRejectAllFiles({ behavior: 'reject' }) }}
-			{...rejectAllKeybinding ? { 'data-tooltip-id': 'ze-tooltip', 'data-tooltip-place': 'top', 'data-tooltip-content': rejectAllKeybinding } : {}}
-		>Reject all</button>
-
-		<button
-			type='button'
-			className='px-2 py-0.5 rounded-[6px] bg-ze-accent text-ze-on-accent hover:bg-ze-accent-hover font-medium cursor-pointer'
-			onClick={() => { zeroEgressCommandBarService.acceptOrRejectAllFiles({ behavior: 'accept' }) }}
-			{...acceptAllKeybinding ? { 'data-tooltip-id': 'ze-tooltip', 'data-tooltip-place': 'top', 'data-tooltip-content': acceptAllKeybinding } : {}}
-		>Accept all</button>
-
-	</div>
-
-
-	const fileOpRows = pendingFileOps.map(op => (
-		<div key={`op-${op.id}`} className="flex justify-between items-center">
-			<div className="flex items-center gap-2">
-				<span
-					className={`text-ze-fg-3 ${op.isFolder ? '' : 'hover:brightness-125 cursor-pointer'}`}
-					onClick={() => { if (!op.isFolder) { zeroEgressOpenFileFn(URI.parse(op.path), accessor) } }}
-				>{getBasename(op.path)}</span>
-				{op.kind === 'create'
-					? <span className="text-ze-ok">new file</span>
-					: <span className="line-through text-[var(--vscode-errorForeground)]">deleted</span>}
-			</div>
-			<div className="flex items-center gap-0.5">
-				<IconShell1
-					Icon={X}
-					onClick={() => { pendingFileOpsService.resolve(op.id, 'reject') }}
-					data-tooltip-id='ze-tooltip'
-					data-tooltip-place='top'
-					data-tooltip-content={op.kind === 'create' ? 'Reject (remove the new file)' : 'Reject (keep the file)'}
-				/>
-				<IconShell1
-					Icon={Check}
-					onClick={() => { pendingFileOpsService.resolve(op.id, 'accept') }}
-					data-tooltip-id='ze-tooltip'
-					data-tooltip-place='top'
-					data-tooltip-content={op.kind === 'create' ? 'Accept (keep the new file)' : 'Accept (delete the file)'}
-				/>
-			</div>
-		</div>
-	))
-
-	// !select-text cursor-auto
-	const fileDetailsContent = <div className="px-2 gap-1 w-full overflow-y-auto">
-		{fileOpRows}
-		{sortedCommandBarURIs.map((uri, i) => {
-			const basename = getBasename(uri.fsPath)
-
-			const { sortedDiffIds, isStreaming } = commandBarStateOfURI[uri.fsPath] ?? {}
-			const isFinishedMakingFileChanges = !isStreaming
-
-			const numDiffs = sortedDiffIds?.length || 0
-
-			const fileStatus = (isFinishedMakingFileChanges
-				? { title: 'Done', color: 'dark', } as const
-				: { title: 'Running', color: 'orange', } as const
-			)
-
-			const fileNameHTML = <div
-				className="flex items-center gap-1.5 text-ze-fg-3 hover:brightness-125 transition-all duration-200 cursor-pointer"
-				onClick={() => zeroEgressOpenFileFn(uri, accessor)}
-			>
-				{/* <FileIcon size={14} className="text-ze-fg-3" /> */}
-				<span className="text-ze-fg-3">{basename}</span>
-			</div>
-
-
-
-
-			const detailsContent = <div className='flex px-4'>
-				<span className="text-ze-fg-3 opacity-80">{numDiffs} diff{numDiffs !== 1 ? 's' : ''}</span>
-			</div>
-
-			const acceptRejectButtons = <div
-				// do this with opacity so that the height remains the same at all times
-				className={`flex items-center gap-0.5
-					${isFinishedMakingFileChanges ? '' : 'opacity-0 pointer-events-none'}
-				`}
-			>
-				{/* <JumpToFileButton
-					uri={uri}
-					data-tooltip-id='ze-tooltip'
-					data-tooltip-place='top'
-					data-tooltip-content='Go to file'
-				/> */}
-				<IconShell1 // RejectAllButtonWrapper
-					Icon={X}
-					onClick={() => { editCodeService.acceptOrRejectAllDiffAreas({ uri, removeCtrlKs: true, behavior: "reject", _addToHistory: true, }); }}
-					data-tooltip-id='ze-tooltip'
-					data-tooltip-place='top'
-					data-tooltip-content='Reject file'
-
-				/>
-				<IconShell1 // AcceptAllButtonWrapper
-					Icon={Check}
-					onClick={() => { editCodeService.acceptOrRejectAllDiffAreas({ uri, removeCtrlKs: true, behavior: "accept", _addToHistory: true, }); }}
-					data-tooltip-id='ze-tooltip'
-					data-tooltip-place='top'
-					data-tooltip-content='Accept file'
-				/>
-
-			</div>
-
-			const fileStatusHTML = <StatusIndicator className='mx-1' indicatorColor={fileStatus.color} title={fileStatus.title} />
-
-			return (
-				// name, details
-				<div key={i} className="flex justify-between items-center">
-					<div className="flex items-center">
-						{fileNameHTML}
-						{detailsContent}
-					</div>
-					<div className="flex items-center gap-2">
-						{acceptRejectButtons}
-						{fileStatusHTML}
-					</div>
-				</div>
-			)
-		})}
-	</div>
-
-	const fileDetailsButton = (
-		<button
-			className={`flex items-center gap-1 rounded min-w-0 ${numFilesChanged === 0 ? 'cursor-pointer' : 'cursor-pointer hover:brightness-125 transition-all duration-200'}`}
-			onClick={() => isFileDetailsOpened ? setFileDetailsOpenedState('user-closed') : setFileDetailsOpenedState('user-opened')}
-			type='button'
-			disabled={numFilesChanged === 0}
-		>
-			<svg
-				className="transition-transform duration-200 size-3.5"
-				style={{
-					transform: isFileDetailsOpened ? 'rotate(0deg)' : 'rotate(180deg)',
-					transition: 'transform 0.2s cubic-bezier(0.25, 0.1, 0.25, 1)'
-				}}
-				xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="18 15 12 9 6 15"></polyline>
-			</svg>
-			<span className='truncate'>{numFilesChangedStr}</span>
-		</button>
-	)
-
-	// Shown only while there is something to review, or while the agent is working (for its status)
-	if (numFilesChanged === 0 && !chatThreadsStreamState?.isRunning) {
-		return null
-	}
-
-	return (
-		<>
-			{/* file details */}
-			<div className='px-2'>
-				<div
-					className={`
-						select-none
-						flex w-full rounded-t-lg bg-ze-bg-3
-						text-ze-fg-3 text-xs text-nowrap
-
-						overflow-hidden transition-all duration-200 ease-in-out
-						${isFileDetailsOpened ? 'max-h-24' : 'max-h-0'}
-					`}
-				>
-					{fileDetailsContent}
-				</div>
-			</div>
-			{/* main content */}
-			<div
-				className={`
-					select-none
-					flex w-full items-center rounded-t-[10px] bg-ze-bg-2
-					text-ze-fg-2 text-xs text-nowrap
-					border-t border-l border-r border-ze-border-2
-
-					px-2.5 py-1.5 gap-2
-					justify-between
-				`}
-			>
-				<div className="flex gap-2 items-center min-w-0">
-					{fileDetailsButton}
-				</div>
-				<div className="flex gap-2 items-center">
-					{acceptRejectAllButtons}
-					{threadStatusHTML}
-				</div>
-			</div>
-		</>
-	)
-}
-
-
-
 const EditToolSoFar = ({ toolCallSoFar, }: { toolCallSoFar: RawToolCallObj }) => {
 
 	if (!isABuiltinToolName(toolCallSoFar.name)) return null
@@ -2958,10 +2681,9 @@ const ChatThreadViewInner = ({ threadId, variant, inputDisabledReason }: { threa
 
 	const isDisabled = instructionsAreEmpty || !!isFeatureNameDisabled('Chat', settingsState)
 
-	// ⌘⏎ with an empty input accepts every pending change (edits, creates, deletes)
-	const { sortedURIs: pendingURIs } = useCommandBarState()
-	const pendingFileOps = usePendingFileOps()
-	const hasPendingChanges = variant === 'docked' && (pendingURIs.length > 0 || pendingFileOps.length > 0) // the Agents view has its own review column
+	// ⌘⏎ with an empty input accepts this chat's pending changes (edits, creates, deletes), never another chat's
+	const threadReview = useThreadReview(threadId)
+	const hasPendingChanges = variant === 'docked' && threadReview.mine.length > 0 // the Agents view has its own review column
 
 	// ----- Move to background (docked panel only) -----
 	const [bgAvailability, setBgAvailability] = useState<{ ok: true } | { ok: false; reason: string } | null>(null)
@@ -2976,7 +2698,7 @@ const ChatThreadViewInner = ({ threadId, variant, inputDisabledReason }: { threa
 	const moveDisabledReason: string | null = (
 		isRunning ? 'Stop the agent first.'
 			: !hasUserMessage ? 'Nothing to move yet.'
-				: (pendingURIs.length > 0 || pendingFileOps.length > 0) ? `Accept or reject this agent's pending changes first.`
+				: threadReview.mine.length > 0 ? `Accept or reject this agent's pending changes first.`
 					: bgAvailability && !bgAvailability.ok ? bgAvailability.reason
 						: !bgAvailability ? 'Checking whether background agents are available.'
 							: null
@@ -3151,13 +2873,13 @@ const ChatThreadViewInner = ({ threadId, variant, inputDisabledReason }: { threa
 	const onKeyDown = useCallback((e: KeyboardEvent<HTMLTextAreaElement>) => {
 		if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && instructionsAreEmpty && hasPendingChanges) {
 			e.preventDefault()
-			accessor.get('IZeroEgressCommandBarService').acceptOrRejectAllFiles({ behavior: 'accept' })
+			threadReview.acceptOrRejectMine('accept')
 		} else if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
 			onSubmit()
 		} else if (e.key === 'Escape' && isRunning) {
 			onAbort()
 		}
-	}, [onSubmit, onAbort, isRunning, instructionsAreEmpty, hasPendingChanges, accessor])
+	}, [onSubmit, onAbort, isRunning, instructionsAreEmpty, hasPendingChanges, threadReview])
 
 	const inputChatArea = <ZeroEgressChatArea
 		featureName='Chat'
@@ -3210,7 +2932,7 @@ const ChatThreadViewInner = ({ threadId, variant, inputDisabledReason }: { threa
 
 	const threadPageInput = <div key={'input' + threadId}>
 		{variant === 'agents' ? null : <div className='px-4'>
-			<CommandBarInChat />
+			<ReviewBar threadId={threadId} />
 		</div>}
 		<div className='px-2 pb-2'>
 			{inputDisabledReason ? <div className='px-2 py-2 text-sm text-ze-fg-3 select-none'>{inputDisabledReason}</div> : inputChatArea}

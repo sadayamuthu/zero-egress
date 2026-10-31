@@ -19,6 +19,8 @@ import { IZeroEgressSettingsService } from '../common/zeroEgressSettingsService.
 import { approvalTypeOfBuiltinToolName, BuiltinToolCallParams, ToolCallParams, ToolName, ToolResult } from '../common/toolsServiceTypes.js';
 import { IToolsService } from './toolsService.js';
 import { IChangeOwnersService, OwnershipConflictError } from './changeOwnersService.js';
+import { restoreTargets } from '../common/reviewScope.js';
+import { basename } from '../../../../base/common/resources.js';
 import { IPendingFileOpsService } from './pendingFileOpsService.js';
 import { CancellationToken } from '../../../../base/common/cancellation.js';
 import { ILanguageFeaturesService } from '../../../../editor/common/services/languageFeatures.js';
@@ -1313,6 +1315,19 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 		// update the user's checkpoint
 		this._addUserModificationsToCurrCheckpoint({ threadId })
 
+		// never overwrite another chat's unreviewed changes: those files keep their contents (one notification below)
+		const skippedPaths: string[] = []
+		const restoreFilter = (fsPaths: string[]) => {
+			const { restore, skipped } = restoreTargets(
+				fsPaths,
+				p => this._changeOwnersService.ownerOf(URI.file(p)),
+				p => this._changeOwnersService.hasPending(URI.file(p)),
+				threadId,
+			)
+			skippedPaths.push(...skipped)
+			return restore
+		}
+
 		/*
 if undoing
 
@@ -1345,7 +1360,7 @@ We only need to do it for files that were edited since `to`, ie files between to
 				}
 			}
 
-			for (const fsPath in lastIdxOfURI) {
+			for (const fsPath of restoreFilter(Object.keys(lastIdxOfURI))) {
 				// find the first instance of this file starting at toIdx (go up to latest file; if there is none, go down)
 				for (const k of idxes()) {
 					const message = thread.messages[k]
@@ -1379,7 +1394,7 @@ We only need to do it for files that were edited since `from`, ie files between 
 */
 		if (toIdx > fromIdx) {
 			const { lastIdxOfURI } = this._getCheckpointsBetween({ threadId, loIdx: fromIdx + 1, hiIdx: toIdx })
-			for (const fsPath in lastIdxOfURI) {
+			for (const fsPath of restoreFilter(Object.keys(lastIdxOfURI))) {
 				// apply lowest down content for each uri
 				for (let k = toIdx; k >= fromIdx + 1; k -= 1) {
 					const message = thread.messages[k]
@@ -1395,6 +1410,13 @@ We only need to do it for files that were edited since `from`, ie files between 
 		}
 
 		this._setThreadState(threadId, { currCheckpointIdx: toIdx })
+
+		if (skippedPaths.length) {
+			this._notificationService.notify({
+				severity: Severity.Warning,
+				message: `Restore skipped ${skippedPaths.length} file(s) with unreviewed changes from other chats: ${skippedPaths.map(p => basename(URI.file(p))).join(', ')}.`,
+			})
+		}
 	}
 
 
