@@ -23,7 +23,10 @@ export function reviewScope<T extends FilePending>(files: T[], threadId: string)
 	};
 }
 
-/** Restore skips a file another chat has pending changes in; a file no one has pending (or that is mine) is restored. */
+/**
+ * Restore never overwrites unreviewed changes that are not this chat's: a file with pending changes is skipped unless
+ * this chat owns it (no owner, or an owner chat that is gone, counts as not mine). Files with nothing pending are restored.
+ */
 export function restoreTargets(
 	paths: string[],
 	ownerOf: (p: string) => string | undefined,
@@ -33,8 +36,7 @@ export function restoreTargets(
 	const restore: string[] = [];
 	const skipped: string[] = [];
 	for (const p of paths) {
-		const owner = ownerOf(p);
-		if (owner !== undefined && owner !== threadId && hasPending(p)) {
+		if (ownerOf(p) !== threadId && hasPending(p)) {
 			skipped.push(p);
 		} else {
 			restore.push(p);

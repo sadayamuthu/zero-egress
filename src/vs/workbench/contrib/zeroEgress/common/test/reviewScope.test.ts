@@ -39,4 +39,14 @@ suite('reviewScope', () => {
 		assert.ok(r.restore.includes('/b'));
 		assert.deepStrictEqual(r.skipped, []);
 	});
+
+	test('restore skips unowned files that have pending changes', () => {
+		const r = restoreTargets(['/a', '/b'], () => undefined, p => p === '/b', 't1');
+		assert.deepStrictEqual(r, { restore: ['/a'], skipped: ['/b'] });
+	});
+
+	test('restore keeps my own pending files', () => {
+		const r = restoreTargets(['/a'], () => 't1', () => true, 't1');
+		assert.deepStrictEqual(r, { restore: ['/a'], skipped: [] });
+	});
 });

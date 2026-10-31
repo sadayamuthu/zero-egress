@@ -16,7 +16,6 @@ import { deepClone } from '../../../../base/common/objects.js';
 import { InstantiationType, registerSingleton } from '../../../../platform/instantiation/common/extensions.js';
 import { IEditCodeService } from './editCodeServiceInterface.js';
 import { ContextKeyExpr } from '../../../../platform/contextkey/common/contextkey.js';
-import { InputFocusedContext } from '../../../../platform/contextkey/common/contextkeys.js';
 import { EditorContextKeys } from '../../../../editor/common/editorContextKeys.js';
 import { diffAtLine } from '../common/diffAtLine.js';
 import { CURSOR_ON_PENDING_CHANGE, FILE_HAS_PENDING_CHANGES, pendingDiffsOf } from './pendingChangeContextKeys.js';
@@ -877,16 +876,11 @@ registerAction2(class extends Action2 {
 			id: ZERO_EGRESS_ACCEPT_ALL_DIFFS_ACTION_ID,
 			f1: true,
 			title: localize2('zeroEgressAcceptAllDiffsAction', 'ZeroEgress: Accept All Diffs in All Files'),
-			keybinding: [{
+			// ⌘⏎ in the agent panel is handled by the docked chat itself (SidebarChat) and accepts only that chat's changes
+			keybinding: {
 				primary: KeyMod.CtrlCmd | KeyMod.Shift | KeyCode.Enter,
 				weight: KeybindingWeight.ZeroEgressExtension,
-			}, {
-				// ⌘⏎ from the agent panel, outside text inputs (the agent's input box handles ⌘⏎ itself, see SidebarChat,
-				// so typed text is sent and never also accepts everything)
-				primary: KeyMod.CtrlCmd | KeyCode.Enter,
-				when: ContextKeyExpr.and(ContextKeyExpr.equals('focusedView', 'workbench.view.zeroEgress'), InputFocusedContext.negate()), // ZERO_EGRESS_VIEW_ID (sidebarPane.ts); not imported to avoid an import cycle
-				weight: KeybindingWeight.ZeroEgressExtension,
-			}]
+			}
 		});
 	}
 

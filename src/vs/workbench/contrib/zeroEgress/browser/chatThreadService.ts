@@ -1315,7 +1315,7 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 		// update the user's checkpoint
 		this._addUserModificationsToCurrCheckpoint({ threadId })
 
-		// never overwrite another chat's unreviewed changes: those files keep their contents (one notification below)
+		// never overwrite unreviewed changes that are not this chat's (another chat's, or unowned): those files keep their contents (one notification below)
 		const skippedPaths: string[] = []
 		const restoreFilter = (fsPaths: string[]) => {
 			const { restore, skipped } = restoreTargets(

@@ -2980,9 +2980,20 @@ const ChatThreadViewInner = ({ threadId, variant, inputDisabledReason }: { threa
 	// 		</ErrorBoundary>
 	// 	</div>
 	// </div>
+	// ⌘⏎ anywhere in this chat outside a text input (e.g. after clicking the review bar) accepts this chat's changes only;
+	// the input box handles its own ⌘⏎ (onKeyDown above)
+	const onThreadKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+		if (e.key !== 'Enter' || !(e.metaKey || e.ctrlKey) || e.shiftKey || !hasPendingChanges) return
+		const target = e.target as HTMLElement
+		if (target.tagName === 'TEXTAREA' || target.tagName === 'INPUT' || target.isContentEditable) return
+		e.preventDefault()
+		e.stopPropagation()
+		threadReview.acceptOrRejectMine('accept')
+	}
 	const threadPageContent = <div
 		ref={sidebarRef}
 		className='w-full h-full flex flex-col overflow-hidden'
+		onKeyDown={onThreadKeyDown}
 	>
 		{moveToBackgroundRow}
 		<ErrorBoundary>
