@@ -1066,6 +1066,9 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 					}
 					const releaseModelSlot = () => modelSlot?.dispose() // idempotent
 
+					// how long the model reasoned, shown as "Thought for <n>s"
+					let reasoningStartedAt: number | undefined = undefined
+					let reasoningEndedAt: number | undefined = undefined
 					try {
 						llmCancelToken = this._llmMessageService.sendLLMMessage({
 							messagesType: 'chatMessages',
@@ -1077,6 +1080,8 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 							logging: { loggingName: `Chat - ${chatMode}`, loggingExtras: { threadId, nMessagesSent, chatMode } },
 							separateSystemMessage: separateSystemMessage,
 							onText: ({ fullText, fullReasoning, toolCall }) => {
+								if (fullReasoning && reasoningStartedAt === undefined) reasoningStartedAt = Date.now()
+								if ((fullText || toolCall) && reasoningStartedAt !== undefined && reasoningEndedAt === undefined) reasoningEndedAt = Date.now()
 								this._setStreamState(threadId, { isRunning: 'LLM', llmInfo: { displayContentSoFar: fullText, reasoningSoFar: fullReasoning, toolCallSoFar: toolCall ?? null }, interrupt: Promise.resolve(() => { if (llmCancelToken) this._llmMessageService.abort(llmCancelToken) }) })
 							},
 							onFinalMessage: async ({ fullText, fullReasoning, toolCall, anthropicReasoning, }) => {
@@ -1148,7 +1153,8 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 					// llm res success
 					const { toolCall, info } = llmRes
 
-					this._addMessageToThread(threadId, { role: 'assistant', displayContent: info.fullText, reasoning: info.fullReasoning, anthropicReasoning: info.anthropicReasoning })
+					const reasoningMs = reasoningStartedAt !== undefined && info.fullReasoning ? (reasoningEndedAt ?? Date.now()) - reasoningStartedAt : undefined
+					this._addMessageToThread(threadId, { role: 'assistant', displayContent: info.fullText, reasoning: info.fullReasoning, anthropicReasoning: info.anthropicReasoning, reasoningMs })
 
 					this._setStreamState(threadId, { isRunning: 'idle', interrupt: 'not_needed' }) // just decorative for clarity
 

@@ -28,6 +28,10 @@ import { builtinToolNames, isABuiltinToolName, MAX_FILE_CHARS_PAGE, MAX_TERMINAL
 import { RawToolCallObj } from '../../../../common/sendLLMMessageTypes.js';
 import ErrorBoundary from './ErrorBoundary.js';
 import { ConflictCard } from './chat/ConflictCard.js';
+import { LineCounts, StepName, StepRow } from './chat/StepRow.js';
+import type { StepIcon } from './chat/StepRow.js';
+import { ApprovalButton, ApprovalCard, ApprovalCardShell, CHAT_THREAD_ROOT_ATTR } from './chat/ApprovalCard.js';
+import { extractSearchReplaceBlocks } from '../../../../common/helpers/extractCodeFromResult.js';
 import { ChatTabs } from './chat/ChatTabs.js';
 import { Composer, ComposerApi } from './chat/Composer.js';
 import { ModeMenu } from './chat/ModeMenu.js';
@@ -42,6 +46,8 @@ import { removeMCPToolNamePrefix } from '../../../../common/mcpServiceTypes.js';
 
 // the thread this chat view renders; deep children (message list, approval row, input) read it from here
 const ThreadIdContext = createContext<string | null>(null)
+// the chat's input box, so an approval card that appears doesn't take focus while the user is typing there
+const ComposerTextAreaContext = createContext<React.RefObject<HTMLTextAreaElement | null> | null>(null)
 const useThreadId = (): string => {
 	const threadId = useContext(ThreadIdContext)
 	if (threadId === null) throw new Error('useThreadId must be used inside a ChatThreadView')
@@ -627,7 +633,8 @@ export const SelectedFiles = (
 
 
 type ToolHeaderParams = {
-	icon?: React.ReactNode;
+	/** the step's icon; an error result always shows 'error' */
+	icon?: StepIcon | null;
 	title: React.ReactNode;
 	desc1: React.ReactNode;
 	desc1OnClick?: () => void;
@@ -638,6 +645,8 @@ type ToolHeaderParams = {
 	isRejected?: boolean;
 	numResults?: number;
 	hasNextPage?: boolean;
+	/** an edit's `+a −r` */
+	lineCounts?: { added: number, removed: number };
 	children?: React.ReactNode;
 	bottomChildren?: React.ReactNode;
 	onClick?: () => void;
@@ -646,6 +655,7 @@ type ToolHeaderParams = {
 	className?: string;
 }
 
+// every tool renders as one StepRow: title muted, desc1 (the file or query) in the primary color, desc2/info/results on the right
 const ToolHeaderWrapper = ({
 	icon,
 	title,
@@ -655,6 +665,7 @@ const ToolHeaderWrapper = ({
 	desc2,
 	numResults,
 	hasNextPage,
+	lineCounts,
 	children,
 	info,
 	bottomChildren,
@@ -663,111 +674,89 @@ const ToolHeaderWrapper = ({
 	desc2OnClick,
 	isOpen,
 	isRejected,
-	className, // applies to the main content
+	className,
 }: ToolHeaderParams) => {
-
 	const [isOpen_, setIsOpen] = useState(false);
 	const isExpanded = isOpen !== undefined ? isOpen : isOpen_
 
-	const isDropdown = children !== undefined // null ALLOWS dropdown
-	const isClickable = !!(isDropdown || onClick)
+	const hasDesc1 = desc1 !== undefined && desc1 !== null && desc1 !== ''
+	const label = <>
+		<span className='shrink-0 flex items-center'>{title}</span>
+		{hasDesc1 && <StepName onClick={desc1OnClick} tooltip={desc1Info}>{desc1}</StepName>}
+	</>
 
-	const isDesc1Clickable = !!desc1OnClick
+	const right = (info || isError || isRejected || desc2 || numResults !== undefined) ? <>
+		{numResults !== undefined && <span className='text-ze-fg-4'>
+			{`${numResults}${hasNextPage ? '+' : ''} result${numResults !== 1 ? 's' : ''}`}
+		</span>}
+		{desc2 && <span className='text-ze-fg-4 flex items-center' onClick={desc2OnClick}>{desc2}</span>}
+		{info && <CircleEllipsis
+			className='text-ze-fg-4 opacity-60 flex-shrink-0'
+			size={14}
+			data-tooltip-id='ze-tooltip'
+			data-tooltip-content={info}
+			data-tooltip-place='top-end'
+		/>}
+		{isError && <AlertTriangle
+			className='text-ze-warning opacity-90 flex-shrink-0'
+			size={14}
+			data-tooltip-id='ze-tooltip'
+			data-tooltip-content={'Error running tool'}
+			data-tooltip-place='top'
+		/>}
+		{isRejected && <Ban
+			className='text-ze-fg-4 opacity-90 flex-shrink-0'
+			size={14}
+			data-tooltip-id='ze-tooltip'
+			data-tooltip-content={'Canceled'}
+			data-tooltip-place='top'
+		/>}
+	</> : undefined
 
-	const desc1HTML = <span
-		className={`text-ze-fg-4 text-xs italic truncate ml-2
-			${isDesc1Clickable ? 'cursor-pointer hover:brightness-125 transition-all duration-150' : ''}
-		`}
-		onClick={desc1OnClick}
-		{...desc1Info ? {
-			'data-tooltip-id': 'ze-tooltip',
-			'data-tooltip-content': desc1Info,
-			'data-tooltip-place': 'top',
-			'data-tooltip-delay-show': 1000,
-		} : {}}
-	>{desc1}</span>
-
-	return (<div className=''>
-		<div className={`w-full border-l-2 border-ze-border-4 pl-2 py-0.5 text-sm overflow-hidden ${className}`}>
-			{/* header */}
-			<div className={`select-none flex items-center min-h-[20px]`}>
-				<div className={`flex items-center w-full gap-x-2 overflow-hidden justify-between ${isRejected ? 'line-through' : ''}`}>
-					{/* left */}
-					<div // container for if desc1 is clickable
-						className='ml-1 flex items-center overflow-hidden'
-					>
-						{/* title eg "> Edited File" */}
-						<div className={`
-							flex items-center min-w-0 overflow-hidden grow
-							${isClickable ? 'cursor-pointer hover:brightness-125 transition-all duration-150' : ''}
-						`}
-							onClick={() => {
-								if (isDropdown) { setIsOpen(v => !v); }
-								if (onClick) { onClick(); }
-							}}
-						>
-							{isDropdown && (<ChevronRight
-								className={`
-								text-ze-fg-3 mr-0.5 h-4 w-4 flex-shrink-0 transition-transform duration-100 ease-[cubic-bezier(0.4,0,0.2,1)]
-								${isExpanded ? 'rotate-90' : ''}
-							`}
-							/>)}
-							<span className="text-ze-fg-3 flex-shrink-0">{title}</span>
-
-							{!isDesc1Clickable && desc1HTML}
-						</div>
-						{isDesc1Clickable && desc1HTML}
-					</div>
-
-					{/* right */}
-					<div className="flex items-center gap-x-2 flex-shrink-0">
-
-						{info && <CircleEllipsis
-							className='ml-2 text-ze-fg-4 opacity-60 flex-shrink-0'
-							size={14}
-							data-tooltip-id='ze-tooltip'
-							data-tooltip-content={info}
-							data-tooltip-place='top-end'
-						/>}
-
-						{isError && <AlertTriangle
-							className='text-ze-warning opacity-90 flex-shrink-0'
-							size={14}
-							data-tooltip-id='ze-tooltip'
-							data-tooltip-content={'Error running tool'}
-							data-tooltip-place='top'
-						/>}
-						{isRejected && <Ban
-							className='text-ze-fg-4 opacity-90 flex-shrink-0'
-							size={14}
-							data-tooltip-id='ze-tooltip'
-							data-tooltip-content={'Canceled'}
-							data-tooltip-place='top'
-						/>}
-						{desc2 && <span className="text-ze-fg-4 text-xs" onClick={desc2OnClick}>
-							{desc2}
-						</span>}
-						{numResults !== undefined && (
-							<span className="text-ze-fg-4 text-xs ml-auto mr-1">
-								{`${numResults}${hasNextPage ? '+' : ''} result${numResults !== 1 ? 's' : ''}`}
-							</span>
-						)}
-					</div>
-				</div>
-			</div>
-			{/* children */}
-			{<div
-				className={`overflow-hidden transition-all duration-200 ease-in-out ${isExpanded ? 'opacity-100 py-1' : 'max-h-0 opacity-0'}
-					text-ze-fg-4 rounded-sm overflow-x-auto
-				  `}
-			//    bg-black bg-opacity-10 border border-ze-border-4 border-opacity-50
-			>
-				{children}
-			</div>}
-		</div>
-		{bottomChildren}
-	</div>);
+	return <StepRow
+		icon={isError ? 'error' : (icon ?? 'ok')}
+		label={label}
+		detail={lineCounts ? <LineCounts added={lineCounts.added} removed={lineCounts.removed} /> : undefined}
+		open={isExpanded}
+		onToggle={() => setIsOpen(v => !v)}
+		onClick={onClick}
+		right={right}
+		bottom={bottomChildren}
+		rejected={isRejected}
+		className={className}
+	>
+		{children}
+	</StepRow>
 };
+
+/** the icon of a tool's step: edits ✎, terminal ▷, errors ⚠, the rest ✓ */
+const stepIconOfTool = (toolMessage: { name: ToolName, type: string }): StepIcon => {
+	if (toolMessage.type === 'tool_error' || toolMessage.type === 'invalid_params') return 'error'
+	const approvalType = isABuiltinToolName(toolMessage.name) ? approvalTypeOfBuiltinToolName[toolMessage.name] : undefined
+	if (approvalType === 'edits') return 'edit'
+	if (approvalType === 'terminal') return 'run'
+	return 'ok'
+}
+
+const countLines = (s: string) => s === '' ? 0 : s.replace(/\n$/, '').split('\n').length
+
+/** an edit's added and removed lines: per search/replace block, the lines outside the common head and tail; a rewrite counts its new content */
+const lineCountsOfEdit = (type: 'diff' | 'rewrite', content: string): { added: number, removed: number } => {
+	if (type === 'rewrite') return { added: countLines(content), removed: 0 }
+	let added = 0, removed = 0
+	for (const block of extractSearchReplaceBlocks(content)) {
+		const a = block.orig === '' ? [] : block.orig.replace(/\n$/, '').split('\n')
+		const b = block.final === '' ? [] : block.final.replace(/\n$/, '').split('\n')
+		let head = 0
+		while (head < a.length && head < b.length && a[head] === b[head]) head++
+		let tail = 0
+		while (tail < a.length - head && tail < b.length - head && a[a.length - 1 - tail] === b[b.length - 1 - tail]) tail++
+		removed += a.length - head - tail
+		added += b.length - head - tail
+	}
+	return { added, removed }
+}
+
 
 
 
@@ -779,7 +768,7 @@ const EditTool = ({ toolMessage, threadId, messageIdx, content }: Parameters<Res
 	const title = getTitle(toolMessage)
 
 	const { desc1, desc1Info } = toolNameToDesc(toolMessage.name, toolMessage.params, accessor)
-	const icon = null
+	const icon = stepIconOfTool(toolMessage)
 
 	const { rawParams, params, name } = toolMessage
 	const desc1OnClick = () => zeroEgressOpenFileFn(params.uri, accessor)
@@ -787,6 +776,7 @@ const EditTool = ({ toolMessage, threadId, messageIdx, content }: Parameters<Res
 
 
 	const editToolType = toolMessage.name === 'edit_file' ? 'diff' : 'rewrite'
+	componentParams.lineCounts = useMemo(() => lineCountsOfEdit(editToolType, content ?? ''), [editToolType, content])
 	if (toolMessage.type === 'running_now' || toolMessage.type === 'tool_request') {
 		componentParams.children = <ToolChildrenWrapper className='bg-ze-bg-3'>
 			<EditToolChildren
@@ -850,39 +840,30 @@ const SimplifiedToolHeader = ({
 	title: string;
 	children?: React.ReactNode;
 }) => {
-	const [isOpen, setIsOpen] = useState(false);
-	const isDropdown = children !== undefined;
-	return (
-		<div>
-			<div className="w-full">
-				{/* header */}
-				<div
-					className={`select-none flex items-center min-h-[24px] ${isDropdown ? 'cursor-pointer' : ''}`}
-					onClick={() => {
-						if (isDropdown) { setIsOpen(v => !v); }
-					}}
-				>
-					{isDropdown && (
-						<ChevronRight
-							className={`text-ze-fg-3 mr-0.5 h-4 w-4 flex-shrink-0 transition-transform duration-100 ease-[cubic-bezier(0.4,0,0.2,1)] ${isOpen ? 'rotate-90' : ''}`}
-						/>
-					)}
-					<div className="flex items-center w-full overflow-hidden">
-						<span className="text-ze-fg-3">{title}</span>
-					</div>
-				</div>
-				{/* children */}
-				{<div
-					className={`overflow-hidden transition-all duration-200 ease-in-out ${isOpen ? 'opacity-100' : 'max-h-0 opacity-0'} text-ze-fg-4`}
-				>
-					{children}
-				</div>}
-			</div>
-		</div>
-	);
+	return <StepRow icon='ok' label={title}>{children}</StepRow>
 };
 
-
+/** Restore (jump to the checkpoint before a message), and whether it's disabled right now: while this or another chat runs */
+const useCheckpointRestore = (threadId: string) => {
+	const accessor = useAccessor()
+	const chatThreadService = accessor.get('IChatThreadService')
+	const streamState = useFullChatThreadsStreamState()
+	const isRunning = useChatThreadsStreamState(threadId)?.isRunning
+	const isDisabled = useMemo(() => {
+		if (isRunning) return true
+		return !!Object.keys(streamState).find((threadId2) => streamState[threadId2]?.isRunning)
+	}, [isRunning, streamState])
+	const disabledReason = isDisabled ? `Disabled ${isRunning ? 'when running' : 'because another thread is running'}` : undefined
+	const restoreBefore = useCallback((messageIdx: number) => {
+		if (isDisabled) return
+		chatThreadService.jumpToCheckpointBeforeMessageIdx({
+			threadId,
+			messageIdx,
+			jumpToUserModified: messageIdx === (chatThreadService.state.allThreads[threadId]?.messages.length ?? 0) - 1
+		})
+	}, [chatThreadService, threadId, isDisabled])
+	return { isDisabled, disabledReason, restoreBefore }
+}
 
 
 const UserMessageComponent = ({ chatMessage, messageIdx, isCheckpointGhost, currCheckpointIdx, _scrollToBottom }: { chatMessage: ChatMessage & { role: 'user' }, messageIdx: number, currCheckpointIdx: number | undefined, isCheckpointGhost: boolean, _scrollToBottom: (() => void) | null }) => {
@@ -951,14 +932,16 @@ const UserMessageComponent = ({ chatMessage, messageIdx, isCheckpointGhost, curr
 
 	}
 
-	const EditSymbol = mode === 'display' ? Pencil : X
+	const restore = useCheckpointRestore(threadId)
 
 
 	let chatbubbleContents: React.ReactNode
 	if (mode === 'display') {
 		chatbubbleContents = <>
-			<SelectedFiles type='past' messageIdx={messageIdx} selections={chatMessage.selections || []} />
 			<span className='px-0.5'>{chatMessage.displayContent}</span>
+			{(chatMessage.selections?.length ?? 0) > 0 && <div className='mt-1.5 whitespace-normal'>
+				<SelectedFiles type='past' messageIdx={messageIdx} selections={chatMessage.selections || []} />
+			</div>}
 		</>
 	}
 	else if (mode === 'edit') {
@@ -1037,61 +1020,75 @@ const UserMessageComponent = ({ chatMessage, messageIdx, isCheckpointGhost, curr
 	}
 
 	const isMsgAfterCheckpoint = currCheckpointIdx !== undefined && currCheckpointIdx === messageIdx - 1
+	const isGhost = isCheckpointGhost && !isMsgAfterCheckpoint
+
+	// ↺ Restore jumps to the checkpoint right before this message: the jump its Checkpoint row made, which is hidden now.
+	// No checkpoint right before it (e.g. the previous run ended on a rejected tool) means no Restore, as there was no row
+	const hasCheckpointBefore = chatThreadsService.state.allThreads[threadId]?.messages[messageIdx - 1]?.role === 'checkpoint'
+	const showControls = isHovered || isGhost // a ghost (after a restore) keeps Restore visible, to jump forward again
 
 	return <div
 		// align chatbubble accoridng to role
 		className={`
         relative ml-auto
         ${mode === 'edit' ? 'w-full max-w-full'
-				: mode === 'display' ? `self-end w-fit max-w-full whitespace-pre-wrap` : '' // user words should be pre
+				: mode === 'display' ? `self-end w-fit max-w-[calc(100%-4.5rem)] whitespace-pre-wrap` : '' // user words should be pre; the gap on the left holds Restore and Edit
 			}
-
-        ${isCheckpointGhost && !isMsgAfterCheckpoint ? 'opacity-50 pointer-events-none' : ''}
     `}
 		onMouseEnter={() => setIsHovered(true)}
 		onMouseLeave={() => setIsHovered(false)}
 	>
-		<div
-			// style chatbubble according to role
-			className={`
+		<div className={isGhost ? 'opacity-50 pointer-events-none' : ''}>
+			<div
+				// style chatbubble according to role
+				className={`
             text-left rounded-[10px] max-w-full
             ${mode === 'edit' ? ''
-					: mode === 'display' ? 'px-3 py-2 flex flex-col bg-[color-mix(in_srgb,var(--ze-accent)_12%,var(--ze-bg-2))] text-ze-fg-1 overflow-x-auto cursor-pointer' : ''
-				}
+						: mode === 'display' ? 'px-3 py-2 flex flex-col border border-ze-border-2 bg-[color-mix(in_srgb,var(--ze-accent)_12%,var(--ze-bg-2))] text-ze-fg-1 overflow-x-auto cursor-pointer' : ''
+					}
         `}
-			onClick={() => { if (mode === 'display') { onOpenEdit() } }}
-		>
-			{chatbubbleContents}
+				onClick={() => { if (mode === 'display') { onOpenEdit() } }}
+			>
+				{chatbubbleContents}
+			</div>
 		</div>
 
-
-
-		<div
-			className="absolute -top-1 -right-1 translate-x-0 -translate-y-0 z-1"
-		// data-tooltip-id='ze-tooltip'
-		// data-tooltip-content='Edit message'
-		// data-tooltip-place='left'
+		{/* hover controls, left of the bubble */}
+		{mode === 'display' && <div
+			className={`absolute right-full top-1.5 mr-2 flex flex-col items-end gap-0.5 text-xs transition-opacity duration-150 ${showControls ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
 		>
-			<EditSymbol
+			{hasCheckpointBefore && <span
+				role='button'
+				className={`select-none whitespace-nowrap pointer-events-auto ${restore.isDisabled ? 'cursor-default text-ze-fg-4' : 'cursor-pointer text-ze-fg-3 hover:text-ze-fg-1'}`}
+				onClick={() => restore.restoreBefore(messageIdx - 1)}
+				{...restore.disabledReason ? {
+					'data-tooltip-id': 'ze-tooltip',
+					'data-tooltip-content': restore.disabledReason,
+					'data-tooltip-place': 'top',
+				} : {
+					'data-tooltip-id': 'ze-tooltip',
+					'data-tooltip-content': 'Restore files to before this message',
+					'data-tooltip-place': 'top',
+					'data-tooltip-delay-show': 800,
+				}}
+			>↺ Restore</span>}
+			{!isGhost && <span role='button' className='cursor-pointer select-none whitespace-nowrap text-ze-fg-3 hover:text-ze-fg-1' onClick={onOpenEdit}>Edit</span>}
+		</div>}
+
+		{/* close the edit */}
+		{mode === 'edit' && <div className="absolute -top-1 -right-1 z-1">
+			<X
 				size={18}
 				className={`
                     cursor-pointer
                     p-[2px]
                     bg-ze-bg-1 border border-ze-border-1 rounded-md
                     transition-opacity duration-200 ease-in-out
-                    ${isHovered || (isFocused && mode === 'edit') ? 'opacity-100' : 'opacity-0'}
+                    ${isHovered || isFocused ? 'opacity-100' : 'opacity-0'}
                 `}
-				onClick={() => {
-					if (mode === 'display') {
-						onOpenEdit()
-					} else if (mode === 'edit') {
-						onCloseEdit()
-					}
-				}}
+				onClick={onCloseEdit}
 			/>
-		</div>
-
-
+		</div>}
 	</div>
 
 }
@@ -1211,7 +1208,7 @@ const AssistantMessageComponent = ({ chatMessage, isCheckpointGhost, isCommitted
 		{/* reasoning token */}
 		{hasReasoning &&
 			<div className={`${isCheckpointGhost ? 'opacity-50' : ''}`}>
-				<ReasoningWrapper isDoneReasoning={isDoneReasoning} isStreaming={!isCommitted}>
+				<ReasoningWrapper isDoneReasoning={isDoneReasoning} isStreaming={!isCommitted} reasoningMs={chatMessage.reasoningMs}>
 					<SmallProseWrapper>
 						<ChatMarkdownRender
 							string={reasoningStr}
@@ -1241,20 +1238,24 @@ const AssistantMessageComponent = ({ chatMessage, isCheckpointGhost, isCommitted
 
 }
 
-const ReasoningWrapper = ({ isDoneReasoning, isStreaming, children }: { isDoneReasoning: boolean, isStreaming: boolean, children: React.ReactNode }) => {
+// reasoning collapses to one step, `Thought for <n>s` (just `Thought` for messages from before the time was kept)
+const ReasoningWrapper = ({ isDoneReasoning, isStreaming, reasoningMs, children }: { isDoneReasoning: boolean, isStreaming: boolean, reasoningMs?: number, children: React.ReactNode }) => {
 	const isDone = isDoneReasoning || !isStreaming
 	const isWriting = !isDone
 	const [isOpen, setIsOpen] = useState(isWriting)
 	useEffect(() => {
 		if (!isWriting) setIsOpen(false) // if just finished reasoning, close
 	}, [isWriting])
-	return <ToolHeaderWrapper title='Reasoning' desc1={isWriting ? <IconLoading /> : ''} isOpen={isOpen} onClick={() => setIsOpen(v => !v)}>
+	const label = isWriting ? loadingTitleWrapper('Thinking')
+		: reasoningMs !== undefined ? `Thought for ${Math.max(1, Math.round(reasoningMs / 1000))}s`
+			: 'Thought'
+	return <StepRow icon='think' label={label} open={isOpen} onToggle={() => setIsOpen(v => !v)}>
 		<ToolChildrenWrapper>
 			<div className='!select-text cursor-auto'>
 				{children}
 			</div>
 		</ToolChildrenWrapper>
-	</ToolHeaderWrapper>
+	</StepRow>
 }
 
 
@@ -1437,13 +1438,13 @@ const toolNameToDesc = (toolName: BuiltinToolName, _toolParams: BuiltinToolCallP
 	}
 }
 
-const ToolRequestAcceptRejectButtons = ({ toolName }: { toolName: ToolName }) => {
+// the approval card for edits, MCP tools and the terminal tools without a command: Approve / Reject, plus that type's auto-approve switch
+const ToolApprovalCard = ({ toolName, title }: { toolName: ToolName, title: React.ReactNode }) => {
 	const accessor = useAccessor()
 	const chatThreadsService = accessor.get('IChatThreadService')
 	const metricsService = accessor.get('IMetricsService')
-	const zeroEgressSettingsService = accessor.get('IZeroEgressSettingsService')
-	const zeroEgressSettingsState = useSettingsState()
 	const threadId = useThreadId()
+	const composerTextAreaRef = useContext(ComposerTextAreaContext)
 
 	const onAccept = useCallback(() => {
 		try { // this doesn't need to be wrapped in try/catch anymore
@@ -1459,48 +1460,51 @@ const ToolRequestAcceptRejectButtons = ({ toolName }: { toolName: ToolName }) =>
 		metricsService.capture('Tool Request Rejected', {})
 	}, [chatThreadsService, metricsService, threadId])
 
-	const approveButton = (
-		<button
-			onClick={onAccept}
-			className={`
-                px-2 py-1
-                bg-[var(--vscode-button-background)]
-                text-[var(--vscode-button-foreground)]
-                hover:bg-[var(--vscode-button-hoverBackground)]
-                rounded
-                text-sm font-medium
-            `}
-		>
-			Approve
-		</button>
-	)
-
-	const cancelButton = (
-		<button
-			onClick={onReject}
-			className={`
-                px-2 py-1
-                bg-[var(--vscode-button-secondaryBackground)]
-                text-[var(--vscode-button-secondaryForeground)]
-                hover:bg-[var(--vscode-button-secondaryHoverBackground)]
-                rounded
-                text-sm font-medium
-            `}
-		>
-			Cancel
-		</button>
-	)
-
 	const approvalType = isABuiltinToolName(toolName) ? approvalTypeOfBuiltinToolName[toolName] : 'MCP tools'
-	const approvalToggle = approvalType ? <div key={approvalType} className="flex items-center ml-2 gap-x-1">
-		<ToolApprovalTypeSwitch size='xs' approvalType={approvalType} desc={`Auto-approve ${approvalType}`} />
-	</div> : null
 
-	return <div className="flex gap-2 mx-0.5 items-center">
-		{approveButton}
-		{cancelButton}
-		{approvalToggle}
-	</div>
+	return <ApprovalCardShell
+		title={title}
+		onEnter={onAccept}
+		takeFocus
+		composerTextAreaRef={composerTextAreaRef ?? undefined}
+		buttons={<>
+			<ApprovalButton primary onClick={onAccept}>Approve</ApprovalButton>
+			<ApprovalButton onClick={onReject}>Reject</ApprovalButton>
+			{approvalType && <div key={approvalType} className="flex items-center ml-1 gap-x-1">
+				<ToolApprovalTypeSwitch size='xs' approvalType={approvalType} desc={`Auto-approve ${approvalType}`} />
+			</div>}
+		</>}
+	/>
+}
+
+/** the card a tool request waits on: a conflict, a command, or Approve/Reject */
+const ToolRequestCard = ({ threadId, toolMessage }: { threadId: string, toolMessage: ToolMessage<ToolName> & { type: 'tool_request' } }) => {
+	const composerTextAreaRef = useContext(ComposerTextAreaContext)
+	if (toolMessage.conflict) {
+		return <ConflictCard threadId={threadId} toolMessage={toolMessage} />
+	}
+	if ((toolMessage.name === 'run_command' || toolMessage.name === 'run_persistent_command') && typeof (toolMessage.params as { command?: unknown } | undefined)?.command === 'string') {
+		return <ApprovalCard
+			threadId={threadId}
+			toolMessage={toolMessage as ToolMessage<'run_command' | 'run_persistent_command'> & { type: 'tool_request' }}
+			composerTextAreaRef={composerTextAreaRef ?? undefined}
+		/>
+	}
+	return <ToolApprovalCard toolName={toolMessage.name} title={<ApprovalTitle toolMessage={toolMessage} />} />
+}
+
+// e.g. `Edit file a.ts?`, `Call search (my-server)?`
+const ApprovalTitle = ({ toolMessage }: { toolMessage: ToolMessage<ToolName> & { type: 'tool_request' } }) => {
+	const accessor = useAccessor()
+	if (isABuiltinToolName(toolMessage.name)) {
+		const { desc1 } = toolNameToDesc(toolMessage.name, toolMessage.params as BuiltinToolCallParams[BuiltinToolName], accessor)
+		return <span className='flex items-center gap-1 min-w-0'>
+			<span className='shrink-0'>{titleOfBuiltinToolName[toolMessage.name].proposed}</span>
+			{desc1 ? <span className='truncate font-mono text-xs'>{desc1}</span> : null}
+			<span className='shrink-0 -ml-1'>?</span>
+		</span>
+	}
+	return <span className='truncate'>Call {removeMCPToolNamePrefix(toolMessage.name)}{toolMessage.mcpServerName ? ` (${toolMessage.mcpServerName})` : ''}?</span>
 }
 
 export const ToolChildrenWrapper = ({ children, className }: { children: React.ReactNode, className?: string }) => {
@@ -1600,7 +1604,7 @@ const InvalidTool = ({ toolName, message, mcpServerName }: { toolName: ToolName,
 	const accessor = useAccessor()
 	const title = getTitle({ name: toolName, type: 'invalid_params', mcpServerName })
 	const desc1 = 'Invalid parameters'
-	const icon = null
+	const icon: StepIcon = 'error'
 	const isError = true
 	const componentParams: ToolHeaderParams = { title, desc1, isError, icon }
 
@@ -1616,7 +1620,7 @@ const CanceledTool = ({ toolName, mcpServerName }: { toolName: ToolName, mcpServ
 	const accessor = useAccessor()
 	const title = getTitle({ name: toolName, type: 'rejected', mcpServerName })
 	const desc1 = ''
-	const icon = null
+	const icon = stepIconOfTool({ name: toolName, type: 'rejected' })
 	const isRejected = true
 	const componentParams: ToolHeaderParams = { title, desc1, icon, isRejected }
 	return <ToolHeaderWrapper {...componentParams} />
@@ -1638,7 +1642,7 @@ const CommandTool = ({ toolMessage, type, threadId }: { threadId: string } & ({
 	const isError = false
 	const title = getTitle(toolMessage)
 	const { desc1, desc1Info } = toolNameToDesc(toolMessage.name, toolMessage.params, accessor)
-	const icon = null
+	const icon = stepIconOfTool(toolMessage)
 	const streamState = useChatThreadsStreamState(threadId)
 
 	const divRef = useRef<HTMLDivElement | null>(null)
@@ -1733,7 +1737,7 @@ const MCPToolWrapper = ({ toolMessage }: WrapperProps<string>) => {
 
 	const title = getTitle(toolMessage)
 	const desc1 = removeMCPToolNamePrefix(toolMessage.name)
-	const icon = null
+	const icon = stepIconOfTool(toolMessage)
 
 
 	if (toolMessage.type === 'running_now') return null // do not show running
@@ -1789,7 +1793,7 @@ const builtinToolNameToComponent: { [T in BuiltinToolName]: { resultWrapper: Res
 			const title = getTitle(toolMessage)
 
 			const { desc1, desc1Info } = toolNameToDesc(toolMessage.name, toolMessage.params, accessor);
-			const icon = null
+			const icon = stepIconOfTool(toolMessage)
 
 			if (toolMessage.type === 'tool_request') return null // do not show past requests
 			if (toolMessage.type === 'running_now') return null // do not show running
@@ -1836,7 +1840,7 @@ const builtinToolNameToComponent: { [T in BuiltinToolName]: { resultWrapper: Res
 
 			const title = getTitle(toolMessage)
 			const { desc1, desc1Info } = toolNameToDesc(toolMessage.name, toolMessage.params, accessor)
-			const icon = null
+			const icon = stepIconOfTool(toolMessage)
 
 			if (toolMessage.type === 'tool_request') return null // do not show past requests
 			if (toolMessage.type === 'running_now') return null // do not show running
@@ -1884,7 +1888,7 @@ const builtinToolNameToComponent: { [T in BuiltinToolName]: { resultWrapper: Res
 			const explorerService = accessor.get('IExplorerService')
 			const title = getTitle(toolMessage)
 			const { desc1, desc1Info } = toolNameToDesc(toolMessage.name, toolMessage.params, accessor)
-			const icon = null
+			const icon = stepIconOfTool(toolMessage)
 
 			if (toolMessage.type === 'tool_request') return null // do not show past requests
 			if (toolMessage.type === 'running_now') return null // do not show running
@@ -1939,7 +1943,7 @@ const builtinToolNameToComponent: { [T in BuiltinToolName]: { resultWrapper: Res
 			const isRejected = toolMessage.type === 'rejected'
 			const title = getTitle(toolMessage)
 			const { desc1, desc1Info } = toolNameToDesc(toolMessage.name, toolMessage.params, accessor)
-			const icon = null
+			const icon = stepIconOfTool(toolMessage)
 
 			if (toolMessage.type === 'tool_request') return null // do not show past requests
 			if (toolMessage.type === 'running_now') return null // do not show running
@@ -1988,7 +1992,7 @@ const builtinToolNameToComponent: { [T in BuiltinToolName]: { resultWrapper: Res
 			const isRejected = toolMessage.type === 'rejected'
 			const title = getTitle(toolMessage)
 			const { desc1, desc1Info } = toolNameToDesc(toolMessage.name, toolMessage.params, accessor)
-			const icon = null
+			const icon = stepIconOfTool(toolMessage)
 
 			if (toolMessage.type === 'tool_request') return null // do not show past requests
 			if (toolMessage.type === 'running_now') return null // do not show running
@@ -2043,7 +2047,7 @@ const builtinToolNameToComponent: { [T in BuiltinToolName]: { resultWrapper: Res
 			const isError = false
 			const isRejected = toolMessage.type === 'rejected'
 			const { desc1, desc1Info } = toolNameToDesc(toolMessage.name, toolMessage.params, accessor);
-			const icon = null;
+			const icon = stepIconOfTool(toolMessage)
 
 			if (toolMessage.type === 'tool_request') return null // do not show past requests
 			if (toolMessage.type === 'running_now') return null // do not show running
@@ -2091,7 +2095,7 @@ const builtinToolNameToComponent: { [T in BuiltinToolName]: { resultWrapper: Res
 
 			const { uri } = toolMessage.params ?? {}
 			const { desc1, desc1Info } = toolNameToDesc(toolMessage.name, toolMessage.params, accessor)
-			const icon = null
+			const icon = stepIconOfTool(toolMessage)
 
 			if (toolMessage.type === 'tool_request') return null // do not show past requests
 			if (toolMessage.type === 'running_now') return null // do not show running
@@ -2136,7 +2140,7 @@ const builtinToolNameToComponent: { [T in BuiltinToolName]: { resultWrapper: Res
 			const isRejected = toolMessage.type === 'rejected'
 			const title = getTitle(toolMessage)
 			const { desc1, desc1Info } = toolNameToDesc(toolMessage.name, toolMessage.params, accessor)
-			const icon = null
+			const icon = stepIconOfTool(toolMessage)
 
 
 			const { rawParams, params } = toolMessage
@@ -2179,7 +2183,7 @@ const builtinToolNameToComponent: { [T in BuiltinToolName]: { resultWrapper: Res
 			const isRejected = toolMessage.type === 'rejected'
 			const title = getTitle(toolMessage)
 			const { desc1, desc1Info } = toolNameToDesc(toolMessage.name, toolMessage.params, accessor)
-			const icon = null
+			const icon = stepIconOfTool(toolMessage)
 
 			const { rawParams, params } = toolMessage
 			const componentParams: ToolHeaderParams = { title, desc1, desc1Info, isError, icon, isRejected, }
@@ -2245,7 +2249,7 @@ const builtinToolNameToComponent: { [T in BuiltinToolName]: { resultWrapper: Res
 
 			const { desc1, desc1Info } = toolNameToDesc(toolMessage.name, toolMessage.params, accessor)
 			const title = getTitle(toolMessage)
-			const icon = null
+			const icon = stepIconOfTool(toolMessage)
 
 			if (toolMessage.type === 'tool_request') return null // do not show past requests
 			if (toolMessage.type === 'running_now') return null // do not show running
@@ -2284,7 +2288,7 @@ const builtinToolNameToComponent: { [T in BuiltinToolName]: { resultWrapper: Res
 
 			const { desc1, desc1Info } = toolNameToDesc(toolMessage.name, toolMessage.params, accessor)
 			const title = getTitle(toolMessage)
-			const icon = null
+			const icon = stepIconOfTool(toolMessage)
 
 			if (toolMessage.type === 'tool_request') return null // do not show past requests
 			if (toolMessage.type === 'running_now') return null // do not show running
@@ -2314,16 +2318,20 @@ const builtinToolNameToComponent: { [T in BuiltinToolName]: { resultWrapper: Res
 };
 
 
+// A checkpoint row. One right before a user message is not shown: that message's ↺ Restore makes the same jump.
+// The others (e.g. the one after a run) show only after a restore, so the user can jump forward again.
 const Checkpoint = ({ message, threadId, messageIdx, isCheckpointGhost, threadIsRunning }: { message: CheckpointEntry, threadId: string; messageIdx: number, isCheckpointGhost: boolean, threadIsRunning: boolean }) => {
 	const accessor = useAccessor()
 	const chatThreadService = accessor.get('IChatThreadService')
-	const streamState = useFullChatThreadsStreamState()
+	const { isDisabled, disabledReason, restoreBefore } = useCheckpointRestore(threadId)
 
-	const isRunning = useChatThreadsStreamState(threadId)?.isRunning
-	const isDisabled = useMemo(() => {
-		if (isRunning) return true
-		return !!Object.keys(streamState).find((threadId2) => streamState[threadId2]?.isRunning)
-	}, [isRunning, streamState])
+	const thread = chatThreadService.state.allThreads[threadId]
+	const messages = thread?.messages ?? []
+	if (messages[messageIdx + 1]?.role === 'user') return null
+	const currCheckpointIdx = thread?.state?.currCheckpointIdx ?? null
+	const lastCheckpointIdx = messages.findLastIndex(m => m.role === 'checkpoint')
+	const hasJumpedBack = currCheckpointIdx !== null && currCheckpointIdx < lastCheckpointIdx
+	if (!hasJumpedBack) return null
 
 	return <div
 		className={`flex items-center justify-center px-2 `}
@@ -2334,25 +2342,20 @@ const Checkpoint = ({ message, threadId, messageIdx, isCheckpointGhost, threadIs
                     text-ze-fg-3
                     select-none
                     ${isCheckpointGhost ? 'opacity-50' : 'opacity-100'}
-					${isDisabled ? 'cursor-default' : 'cursor-pointer'}
+					${isDisabled ? 'cursor-default' : 'cursor-pointer hover:text-ze-fg-1'}
                 `}
 			style={{ position: 'relative', display: 'inline-block' }} // allow absolute icon
 			onClick={() => {
 				if (threadIsRunning) return
-				if (isDisabled) return
-				chatThreadService.jumpToCheckpointBeforeMessageIdx({
-					threadId,
-					messageIdx,
-					jumpToUserModified: messageIdx === (chatThreadService.state.allThreads[threadId]?.messages.length ?? 0) - 1
-				})
+				restoreBefore(messageIdx)
 			}}
-			{...isDisabled ? {
+			{...disabledReason ? {
 				'data-tooltip-id': 'ze-tooltip',
-				'data-tooltip-content': `Disabled ${isRunning ? 'when running' : 'because another thread is running'}`,
+				'data-tooltip-content': disabledReason,
 				'data-tooltip-place': 'top',
 			} : {}}
 		>
-			Checkpoint
+			{currCheckpointIdx === messageIdx ? 'Restored here' : '↺ Restore to here'}
 		</div>
 	</div>
 }
@@ -2421,9 +2424,7 @@ const _ChatBubble = ({ threadId, chatMessage, currCheckpointIdx, isCommitted, me
 				</div>
 				{chatMessage.type === 'tool_request' ?
 					<div className={`${isCheckpointGhost ? 'opacity-50 pointer-events-none' : ''}`}>
-						{chatMessage.conflict
-							? <ConflictCard threadId={threadId} toolMessage={chatMessage} />
-							: <ToolRequestAcceptRejectButtons toolName={chatMessage.name} />}
+						<ToolRequestCard threadId={threadId} toolMessage={chatMessage} />
 					</div> : null}
 			</>
 		return null
@@ -2731,10 +2732,13 @@ const ChatThreadViewInner = ({ threadId, variant, inputDisabledReason }: { threa
 		ref={sidebarRef}
 		className='w-full h-full flex flex-col overflow-hidden'
 		onKeyDown={onThreadKeyDown}
+		{...{ [CHAT_THREAD_ROOT_ATTR]: '' }}
 	>
-		<ErrorBoundary>
-			{messagesHTML}
-		</ErrorBoundary>
+		<ComposerTextAreaContext.Provider value={textAreaRef}>
+			<ErrorBoundary>
+				{messagesHTML}
+			</ErrorBoundary>
+		</ComposerTextAreaContext.Provider>
 		<ErrorBoundary>
 			{threadPageInput}
 		</ErrorBoundary>

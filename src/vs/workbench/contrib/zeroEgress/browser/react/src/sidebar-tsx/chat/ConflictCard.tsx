@@ -13,6 +13,7 @@ import { ToolName } from '../../../../../common/toolsServiceTypes.js';
 import { useAccessor, useChatThreadsState } from '../../util/services.js';
 // no runtime imports from vs/ here: the bundle flattens this folder, so a relative path one level deeper breaks
 import { threadTitleOf } from '../chatTitle.js';
+import { ApprovalButton } from './ApprovalCard.js';
 
 const basenameOf = (path: string) => path.split('/').filter(Boolean).pop() ?? path;
 
@@ -46,18 +47,15 @@ export const ConflictCard = ({ threadId, toolMessage }: { threadId: string; tool
 	const otherThread = chatThreadsState.allThreads[conflict.ownerThreadId];
 	const otherTitle = otherThread ? threadTitleOf(otherThread) : 'New chat';
 
-	const primary = `px-2 py-1 rounded text-sm font-medium bg-[var(--vscode-button-background)] text-[var(--vscode-button-foreground)] hover:bg-[var(--vscode-button-hoverBackground)] disabled:opacity-50`;
-	const secondary = `px-2 py-1 rounded text-sm font-medium bg-[var(--vscode-button-secondaryBackground)] text-[var(--vscode-button-secondaryForeground)] hover:bg-[var(--vscode-button-secondaryHoverBackground)] disabled:opacity-50`;
-
-	return <div className='mx-0.5 my-1 p-2 rounded border border-ze-border-2 bg-ze-bg-2-alt text-ze-fg-1 flex flex-col gap-2'>
+	return <div className='mx-0.5 my-1 px-2.5 py-2 rounded-[10px] border border-ze-border-2 bg-[color-mix(in_srgb,var(--ze-warning)_8%,var(--ze-bg-2))] text-ze-fg-1 flex flex-col gap-2'>
 		<div className='flex items-start gap-1.5 text-sm'>
 			<AlertTriangle size={14} className='text-ze-warning shrink-0 mt-0.5' />
 			<span>{file} has unreviewed changes from “{otherTitle}”.</span>
 		</div>
-		<div className='flex flex-wrap gap-2'>
-			<button className={primary} disabled={busy} onClick={() => resolve('accept')}>Accept theirs & continue</button>
-			<button className={secondary} disabled={busy} onClick={() => resolve('reject')}>Reject theirs & continue</button>
-			<button className={secondary} disabled={busy} onClick={stop}>Stop</button>
+		<div className='flex flex-wrap gap-1.5'>
+			<ApprovalButton primary disabled={busy} onClick={() => resolve('accept')}>Accept theirs & continue</ApprovalButton>
+			<ApprovalButton disabled={busy} onClick={() => resolve('reject')}>Reject theirs & continue</ApprovalButton>
+			<ApprovalButton disabled={busy} onClick={stop}>Stop</ApprovalButton>
 		</div>
 	</div>;
 };

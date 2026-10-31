@@ -1,0 +1,135 @@
+/*--------------------------------------------------------------------------------------
+ *  Copyright 2025 Glass Devtools, Inc. All rights reserved.
+ *  Licensed under the Apache License, Version 2.0. See LICENSE.txt for more information.
+ *--------------------------------------------------------------------------------------*/
+
+// The card a terminal tool request waits on: the command in mono, then Run (⏎), Skip and Always allow “<command>”.
+// ⏎ runs only while the card itself has focus. The card takes focus when it appears, unless the user is typing:
+// the input box has text, a text field is focused, or focus is somewhere outside this chat.
+// ApprovalCardShell is the shared frame; the other approval types (edits, MCP tools) use it with Approve/Reject.
+
+import React, { useCallback, useEffect, useRef } from 'react';
+import type { ToolMessage } from '../../../../../common/chatThreadServiceTypes.js';
+import type { ToolName } from '../../../../../common/toolsServiceTypes.js';
+import { useAccessor } from '../../util/services.js';
+// no runtime imports from vs/ here: the bundle flattens this folder, so a relative path one level deeper breaks
+import { canAllowList, normalizeCommand } from '../composerDeps.js';
+
+/** marks a chat's root element, so a card can tell whether focus is inside its own chat */
+export const CHAT_THREAD_ROOT_ATTR = 'data-ze-chat-thread';
+
+// the class lists stay inside JSX className: the scope-tailwind pass only prefixes classes written there
+export const ApprovalButton = ({ primary, className = '', ...props }: { primary?: boolean } & React.ButtonHTMLAttributes<HTMLButtonElement>) => {
+	return primary
+		? <button type='button' className={`px-2 py-0.5 rounded-[6px] text-xs font-medium bg-ze-accent text-ze-on-accent hover:bg-ze-accent-hover cursor-pointer disabled:opacity-50 ${className}`} {...props} />
+		: <button type='button' className={`px-2 py-0.5 rounded-[6px] text-xs border border-ze-border-2 bg-ze-bg-2 text-ze-fg-1 hover:bg-ze-bg-2-hover cursor-pointer disabled:opacity-50 min-w-0 truncate ${className}`} {...props} />;
+};
+
+const isTypingIn = (el: Element | null) => {
+	if (!el) { return false; }
+	if (el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement) { return el.value.length > 0; }
+	return (el as HTMLElement).isContentEditable;
+};
+
+/** whether a card that just appeared may take focus: never while the user is typing, or busy elsewhere in the app */
+const mayTakeFocus = (card: HTMLElement, composer: HTMLTextAreaElement | null | undefined) => {
+	if (composer && composer.value.length > 0) { return false; }
+	const active = card.ownerDocument.activeElement;
+	if (isTypingIn(active)) { return false; }
+	if (!active || active === card.ownerDocument.body) { return true; }
+	const root = card.closest(`[${CHAT_THREAD_ROOT_ATTR}]`);
+	return !!root && root.contains(active);
+};
+
+export const ApprovalCardShell = ({ title, children, buttons, onEnter, takeFocus, composerTextAreaRef }: {
+	title: React.ReactNode;
+	children?: React.ReactNode;
+	buttons: React.ReactNode;
+	/** ⏎ while the card itself is focused */
+	onEnter?: () => void;
+	takeFocus?: boolean;
+	composerTextAreaRef?: React.RefObject<HTMLTextAreaElement | null>;
+}) => {
+	const cardRef = useRef<HTMLDivElement | null>(null);
+	useEffect(() => {
+		const card = cardRef.current;
+		if (!takeFocus || !card) { return; }
+		if (mayTakeFocus(card, composerTextAreaRef?.current)) {
+			card.focus({ preventScroll: true });
+		}
+	}, [takeFocus, composerTextAreaRef]);
+
+	return <div
+		ref={cardRef}
+		tabIndex={onEnter ? 0 : undefined}
+		className='mx-0.5 my-1 px-2.5 py-2 rounded-[10px] border border-ze-border-2 bg-[color-mix(in_srgb,var(--ze-warning)_8%,var(--ze-bg-2))] text-ze-fg-1 flex flex-col gap-1.5 outline-none focus:border-ze-accent'
+		onKeyDown={onEnter ? e => {
+			// only the card itself: Enter on a focused button presses that button
+			if (e.target !== e.currentTarget || e.key !== 'Enter' || e.shiftKey || e.metaKey || e.ctrlKey || e.altKey || e.nativeEvent.isComposing) { return; }
+			e.preventDefault();
+			e.stopPropagation();
+			onEnter();
+		} : undefined}
+	>
+		<div className='text-sm font-medium'>{title}</div>
+		{children}
+		<div className='flex flex-wrap items-center gap-1.5'>{buttons}</div>
+	</div>;
+};
+
+export const ApprovalCard = ({ threadId, toolMessage, composerTextAreaRef }: {
+	threadId: string;
+	toolMessage: ToolMessage<'run_command' | 'run_persistent_command'> & { type: 'tool_request' };
+	composerTextAreaRef?: React.RefObject<HTMLTextAreaElement | null>;
+}) => {
+	const accessor = useAccessor();
+	const chatThreadsService = accessor.get('IChatThreadService');
+	const commandAllowListService = accessor.get('ICommandAllowListService');
+	const metricsService = accessor.get('IMetricsService');
+
+	const command = toolMessage.params.command;
+
+	const onRun = useCallback(() => {
+		try {
+			chatThreadsService.approveLatestToolRequest(threadId);
+			metricsService.capture('Tool Request Accepted', {});
+		} catch (e) { console.error('Error while approving a command in chat:', e); }
+	}, [chatThreadsService, metricsService, threadId]);
+	const onSkip = useCallback(() => {
+		try {
+			chatThreadsService.rejectLatestToolRequest(threadId);
+		} catch (e) { console.error('Error while skipping a command in chat:', e); }
+		metricsService.capture('Tool Request Rejected', {});
+	}, [chatThreadsService, metricsService, threadId]);
+	const onAlwaysAllow = useCallback(() => {
+		try {
+			commandAllowListService.add(command);
+		} catch (e) { console.error('Error while allowing a command in chat:', e); }
+		onRun();
+	}, [commandAllowListService, command, onRun]);
+
+	const allowLabel = `Always allow “${normalizeCommand(command)}”`;
+
+	return <ApprovalCardShell
+		title='Run this command?'
+		onEnter={onRun}
+		takeFocus
+		composerTextAreaRef={composerTextAreaRef}
+		buttons={<>
+			<ApprovalButton primary onClick={onRun}>
+				Run <span className='ml-0.5 opacity-70'>⏎</span>
+			</ApprovalButton>
+			<ApprovalButton onClick={onSkip}>Skip</ApprovalButton>
+			{canAllowList(command) && <ApprovalButton
+				className='max-w-full'
+				onClick={onAlwaysAllow}
+				data-tooltip-id='ze-tooltip'
+				data-tooltip-place='top'
+				data-tooltip-content={allowLabel}
+				data-tooltip-delay-show={600}
+			>{allowLabel}</ApprovalButton>}
+		</>}
+	>
+		<div className='font-mono text-xs px-2 py-1 rounded-[6px] border border-ze-border-2 bg-ze-bg-1 whitespace-pre-wrap break-all select-text max-h-40 overflow-y-auto'>{command}</div>
+	</ApprovalCardShell>;
+};

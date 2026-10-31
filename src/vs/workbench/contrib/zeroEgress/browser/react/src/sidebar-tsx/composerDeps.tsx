@@ -3,7 +3,7 @@
  *  Licensed under the Apache License, Version 2.0. See LICENSE.txt for more information.
  *--------------------------------------------------------------------------------------*/
 
-// The vs/ helpers the input box and its menus (chat/Composer, chat/ModeMenu, chat/ModelMenu) use. This file sits
+// The vs/ helpers the chat/ components (the input box and its menus, the approval card) use. This file sits
 // directly in sidebar-tsx/ (not chat/) on purpose: the bundle flattens chat/ into this folder, so these relative paths
 // only resolve from here.
 
@@ -15,7 +15,7 @@ export type { ModelOption } from '../../../../common/zeroEgressSettingsService.j
 export { getIsReasoningEnabledState, getModelCapabilities } from '../../../../common/modelCapabilities.js';
 export { promptWithContext } from '../../../../common/promptContext.js';
 export type { PromptContextItem } from '../../../../common/promptContext.js';
-export { terminalAutoRunOf, settingsForTerminalAutoRun } from '../../../../common/commandAllowList.js';
+export { canAllowList, normalizeCommand, terminalAutoRunOf, settingsForTerminalAutoRun } from '../../../../common/commandAllowList.js';
 export type { TerminalAutoRun } from '../../../../common/commandAllowList.js';
 // the id of zeroEgressSettingsPane's open-settings action (that module registers actions, so only the id is copied)
 export const ZERO_EGRESS_OPEN_SETTINGS_ACTION_ID = 'workbench.action.openZeroEgressSettings';

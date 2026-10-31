@@ -63,6 +63,7 @@ export type ChatMessage =
 		role: 'assistant';
 		displayContent: string; // content received from LLM  - allowed to be '', will be replaced with (empty)
 		reasoning: string; // reasoning from the LLM, used for step-by-step thinking
+		reasoningMs?: number; // how long the model reasoned (first reasoning token to the first answer token or the end); missing in older chats
 
 		anthropicReasoning: AnthropicReasoning[] | null; // anthropic reasoning
 	}
