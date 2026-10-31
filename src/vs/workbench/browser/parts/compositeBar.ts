@@ -21,6 +21,8 @@ import { IPaneComposite } from '../../common/panecomposite.js';
 import { IComposite } from '../../common/composite.js';
 import { CompositeDragAndDropData, CompositeDragAndDropObserver, IDraggedCompositeData, ICompositeDragAndDrop, Before2D, toggleDropEffect, ICompositeDragAndDropObserverCallbacks } from '../dnd.js';
 import { Gesture, EventType as TouchEventType, GestureEvent } from '../../../base/browser/touch.js';
+import { MoreViewsAction, MoreViewsActionViewItem } from './moreViews.js'; // ZeroEgress
+import { moreViewsItems } from './moreViewsModel.js'; // ZeroEgress
 
 export interface ICompositeBarItem {
 
@@ -147,6 +149,8 @@ export interface ICompositeBarOptions {
 	readonly dndHandler: ICompositeDragAndDrop;
 	readonly activityHoverOptions: IActivityHoverOptions;
 	readonly preventLoopNavigation?: boolean;
+	/** ZeroEgress: end the bar with ⌄, listing the views that aren't in it (instead of an overflow … only when full) */
+	readonly moreViews?: boolean;
 
 	readonly getActivityAction: (compositeId: string) => CompositeBarAction;
 	readonly getCompositePinnedAction: (compositeId: string) => IAction;
@@ -241,6 +245,8 @@ export class CompositeBar extends Widget implements ICompositeBar {
 	private compositeSwitcherBar: ActionBar | undefined;
 	private compositeOverflowAction: CompositeOverflowActivityAction | undefined;
 	private compositeOverflowActionViewItem: CompositeOverflowActivityActionViewItem | undefined;
+	private moreViewsAction: MoreViewsAction | undefined; // ZeroEgress
+	private moreViewsActionViewItem: MoreViewsActionViewItem | undefined; // ZeroEgress
 
 	private readonly model: CompositeBarModel;
 	private readonly visibleComposites: string[];
@@ -288,6 +294,9 @@ export class CompositeBar extends Widget implements ICompositeBar {
 			actionViewItemProvider: (action, options) => {
 				if (action instanceof CompositeOverflowActivityAction) {
 					return this.compositeOverflowActionViewItem;
+				}
+				if (action instanceof MoreViewsAction) { // ZeroEgress
+					return this.moreViewsActionViewItem;
 				}
 				const item = this.model.findItem(action.id);
 				return item && this.instantiationService.createInstance(
@@ -532,7 +541,10 @@ export class CompositeBar extends Widget implements ICompositeBar {
 		let maxVisible = compositesToShow.length;
 		const totalComposites = compositesToShow.length;
 		let size = 0;
-		const limit = this.options.orientation === ActionsOrientation.VERTICAL ? this.dimension.height : this.dimension.width;
+		let limit = this.options.orientation === ActionsOrientation.VERTICAL ? this.dimension.height : this.dimension.width;
+		if (this.options.moreViews) {
+			limit -= this.options.overflowActionSize; // ZeroEgress: ⌄ is always there and lists whatever doesn't fit
+		}
 
 		// Add composites while they fit
 		for (let i = 0; i < compositesToShow.length; i++) {
@@ -566,7 +578,7 @@ export class CompositeBar extends Widget implements ICompositeBar {
 		}
 
 		// We are overflowing, add the overflow size
-		if (totalComposites > compositesToShow.length) {
+		if (totalComposites > compositesToShow.length && !this.options.moreViews) { // ZeroEgress: ⌄'s room is already taken off the limit
 			size += this.options.overflowActionSize;
 		}
 
@@ -614,8 +626,26 @@ export class CompositeBar extends Widget implements ICompositeBar {
 			}
 		});
 
+		// ZeroEgress: ⌄ goes last, once
+		if (this.options.moreViews && !this.moreViewsAction) {
+			this.moreViewsAction = this._register(new MoreViewsAction(() => this.moreViewsActionViewItem?.toggleMenu()));
+			this.moreViewsActionViewItem = this._register(this.instantiationService.createInstance(
+				MoreViewsActionViewItem,
+				this.moreViewsAction,
+				{
+					getItems: () => moreViewsItems(this.model.visibleItems, this.visibleComposites),
+					getActionItem: id => this.model.findItem(id)?.activityAction.compositeBarActionItem,
+					open: id => { this.options.openComposite(id); },
+					setPinned: (id, pinned) => { if (pinned) { this.pin(id); } else { this.unpin(id); } },
+				},
+				this.options.colors,
+				this.options.activityHoverOptions
+			));
+			compositeSwitcherBar.push(this.moreViewsAction, { label: false, icon: true });
+		}
+
 		// Add overflow action as needed
-		if (totalComposites > compositesToShow.length && !this.compositeOverflowAction) {
+		if (totalComposites > compositesToShow.length && !this.compositeOverflowAction && !this.options.moreViews) { // ZeroEgress: ⌄ lists overflow too
 			this.compositeOverflowAction = this._register(this.instantiationService.createInstance(CompositeOverflowActivityAction, () => {
 				this.compositeOverflowActionViewItem?.showMenu();
 			}));

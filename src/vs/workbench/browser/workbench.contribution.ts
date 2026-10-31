@@ -546,7 +546,7 @@ const registry = Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Con
 			[LayoutSettings.ACTIVITY_BAR_LOCATION]: {
 				'type': 'string',
 				'enum': ['default', 'top', 'bottom', 'hidden'],
-				'default': 'default',
+				'default': 'top', // ZeroEgress changed this from 'default': icons on top of the side bar
 				'markdownDescription': localize({ comment: ['This is the description for a setting'], key: 'activityBarLocation' }, "Controls the location of the Activity Bar relative to the Primary and ZeroEgress Side Bars."), // ZeroEgress side bar
 				'enumDescriptions': [
 					localize('workbench.activityBar.location.default', "Show the Activity Bar on the side of the Primary Side Bar and on top of the ZeroEgress Side Bar."), // ZeroEgress side bar
@@ -649,7 +649,7 @@ const registry = Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Con
 					localize('layoutcontrol.type.toggles', "Shows several buttons for toggling the visibility of the panels and side bar."),
 					localize('layoutcontrol.type.both', "Shows both the dropdown and toggle buttons."),
 				],
-				'default': 'both',
+				'default': 'toggles', // ZeroEgress changed this from 'both': only the toggles in the title bar
 				'description': localize('layoutControlType', "Controls whether the layout control in the custom title bar is displayed as a single menu button or with multiple UI toggles."),
 			},
 			'workbench.tips.enabled': {
