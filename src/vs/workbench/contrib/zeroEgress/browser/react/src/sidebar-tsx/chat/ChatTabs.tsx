@@ -48,7 +48,7 @@ const MoreMenu = ({ threadId, onRename, onClose }: { threadId: string; onRename:
 		<button type='button' role='menuitem' className={item} onClick={() => { onClose(); onRename(); }}>Rename</button>
 		<button type='button' role='menuitem' className={item} onClick={() => { onClose(); chatThreadsService.duplicateThread(threadId); }}>Duplicate</button>
 		{confirmDelete
-			? <button type='button' role='menuitem' className={`${item} text-[var(--vscode-errorForeground)]`} onClick={() => { onClose(); chatThreadsService.deleteThread(threadId); }}>Confirm delete</button>
+			? <button type='button' role='menuitem' className={`${item} text-[var(--vscode-errorForeground)]`} onClick={() => { onClose(); chatThreadsService.deleteThread(threadId).catch(e => console.error('Error while deleting a chat:', e)); }}>Confirm delete</button>
 			: <button type='button' role='menuitem' className={item} onClick={() => setConfirmDelete(true)}>Delete</button>}
 	</div>;
 };

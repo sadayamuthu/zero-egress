@@ -97,7 +97,7 @@ export const HistoryMenu = ({ onClose }: { onClose: () => void }) => {
 						{confirmDeleteId === thread.id
 							? <>
 								<SmallIconButton Icon={X} label='Cancel' onClick={() => setConfirmDeleteId(null)} />
-								<SmallIconButton Icon={Check} label='Confirm delete' onClick={() => { chatThreadsService.deleteThread(thread.id); setConfirmDeleteId(null); }} />
+								<SmallIconButton Icon={Check} label='Confirm delete' onClick={() => { chatThreadsService.deleteThread(thread.id).catch(e => console.error('Error while deleting a chat:', e)); setConfirmDeleteId(null); }} />
 							</>
 							: <>
 								<span className='text-xs opacity-80 group-hover:hidden'>{formatDate(thread.lastModified)}</span>

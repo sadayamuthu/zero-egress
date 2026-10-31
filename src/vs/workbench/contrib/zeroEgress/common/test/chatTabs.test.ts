@@ -5,7 +5,7 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { closeTab, MAX_OPEN_TABS, openTab, threadTitleOf } from '../chatTabs.js';
+import { closeTab, MAX_OPEN_TABS, openTab, restoreTabs, threadTitleOf } from '../chatTabs.js';
 
 suite('chatTabs', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
@@ -33,5 +33,32 @@ suite('chatTabs', () => {
 		assert.ok(result.includes('t0'));
 		assert.ok(!result.includes('t1'));
 		assert.ok(result.includes('t8'));
+	});
+
+	const known = new Set(['a', 'b', 'c', 'agent']);
+	const exists = (id: string) => known.has(id);
+	const isAgent = (id: string) => id === 'agent';
+
+	test('restore keeps the stored tabs and current chat', () => {
+		assert.deepStrictEqual(restoreTabs({ tabs: ['a', 'b', 'c'], current: 'b' }, exists, isAgent), { tabs: ['a', 'b', 'c'], current: 'b' });
+	});
+
+	test('restore drops missing and agent ids, and never applies the cap', () => {
+		const many = Array.from({ length: MAX_OPEN_TABS + 2 }, (_, i) => `t${i}`);
+		const all = (id: string) => id.startsWith('t') || exists(id);
+		assert.deepStrictEqual(restoreTabs({ tabs: ['gone', 'a', 'agent', 'a', 'c'], current: 'c' }, exists, isAgent), { tabs: ['a', 'c'], current: 'c' });
+		assert.strictEqual(restoreTabs({ tabs: many, current: 't0' }, all, isAgent).tabs.length, MAX_OPEN_TABS + 2);
+	});
+
+	test('restore falls back to the last tab, then to nothing', () => {
+		assert.deepStrictEqual(restoreTabs({ tabs: ['a', 'b'], current: 'gone' }, exists, isAgent), { tabs: ['a', 'b'], current: 'b' });
+		assert.deepStrictEqual(restoreTabs({ tabs: ['a', 'b'], current: 'agent' }, exists, isAgent), { tabs: ['a', 'b'], current: 'b' });
+		assert.deepStrictEqual(restoreTabs({ tabs: ['gone'], current: 'gone' }, exists, isAgent), { tabs: [], current: undefined });
+		assert.deepStrictEqual(restoreTabs(undefined, exists, isAgent), { tabs: [], current: undefined });
+		assert.deepStrictEqual(restoreTabs('junk', exists, isAgent), { tabs: [], current: undefined });
+	});
+
+	test('restore reads the old plain-array format', () => {
+		assert.deepStrictEqual(restoreTabs(['a', 'b', 7], exists, isAgent), { tabs: ['a', 'b'], current: 'b' });
 	});
 });

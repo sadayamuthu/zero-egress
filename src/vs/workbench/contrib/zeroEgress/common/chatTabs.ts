@@ -51,3 +51,23 @@ export function closeTab(tabs: readonly string[], id: string, current: string): 
 	}
 	return { tabs: rest, next: tabs[idx + 1] ?? tabs[idx - 1] };
 }
+
+/**
+ * The tabs and current chat to reopen at startup, from what was stored under the open-tabs key: `{ tabs, current }`,
+ * or the older plain `string[]`. Drops ids that no longer exist, background agents and duplicates; never applies the
+ * cap. `current` is the stored one if it is still a tab, else the last tab, else undefined (the caller opens a new chat).
+ */
+export function restoreTabs(stored: unknown, exists: (id: string) => boolean, isAgent: (id: string) => boolean): { tabs: string[]; current: string | undefined } {
+	const raw: unknown = Array.isArray(stored) ? stored : (stored && typeof stored === 'object' ? (stored as { tabs?: unknown }).tabs : undefined);
+	const storedCurrent: unknown = !Array.isArray(stored) && stored && typeof stored === 'object' ? (stored as { current?: unknown }).current : undefined;
+	const tabs: string[] = [];
+	if (Array.isArray(raw)) {
+		for (const id of raw) {
+			if (typeof id === 'string' && !tabs.includes(id) && exists(id) && !isAgent(id)) {
+				tabs.push(id);
+			}
+		}
+	}
+	const current = typeof storedCurrent === 'string' && tabs.includes(storedCurrent) ? storedCurrent : tabs[tabs.length - 1];
+	return { tabs, current };
+}
