@@ -10,7 +10,7 @@ import { performance } from 'perf_hooks';
 import { configurePortable } from './bootstrap-node.js';
 import { bootstrapESM } from './bootstrap-esm.js';
 import { fileURLToPath } from 'url';
-import { app, protocol, crashReporter, Menu, contentTracing } from 'electron';
+import { app, protocol, crashReporter, Menu, contentTracing, session } from 'electron'; // ZeroEgress: session
 import minimist from 'minimist';
 import { product } from './bootstrap-meta.js';
 import { parse } from './vs/base/common/jsonc.js';
@@ -65,6 +65,16 @@ if (process.platform === 'win32') {
 	}
 }
 app.setPath('userData', userDataPath);
+
+// ZeroEgress: Electron's built-in spell checker (Linux) downloads a Hunspell dictionary for every language in
+// its list (never empty: Electron refills it with the UI language) from redirector.gvt1.com, starting right
+// after the default session is created and outside its webRequest filter. Turning it off doesn't stop the
+// download, but the download URL is read when the download starts: this is the first 'ready' listener, so
+// the URL points at a closed loopback port before that. Registered before VS Code's own 'ready' listener.
+app.once('ready', () => {
+	session.defaultSession.setSpellCheckerDictionaryDownloadURL('http://127.0.0.1:9/');
+	session.defaultSession.setSpellCheckerEnabled(false);
+});
 
 // Resolve code cache path
 const codeCachePath = getCodeCachePath();
