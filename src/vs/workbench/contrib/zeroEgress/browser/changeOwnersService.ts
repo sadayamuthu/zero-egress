@@ -7,10 +7,14 @@
 // A docked edit, create or delete claims its file first; once the file has nothing pending (the user accepted or
 // rejected it, in the chat or in the editor), the owner is released, so the next chat to touch it gets no conflict.
 // Owners live in memory only: changes that survive a reload have no owner.
+// Docked tools go through beginWrite, which checks for conflicts and claims in the same tick and keeps the path
+// "in flight" until the write is done: an in-flight path counts as pending for other chats and is never released.
+// The conflict check also covers folders: a path conflicts with another chat's pending changes at or under it, and
+// with another chat's pending (or in-flight) folder delete above it. Owner keys stay per file.
 
 import { Emitter, Event } from '../../../../base/common/event.js';
-import { Disposable } from '../../../../base/common/lifecycle.js';
-import { isEqual } from '../../../../base/common/resources.js';
+import { Disposable, IDisposable, toDisposable } from '../../../../base/common/lifecycle.js';
+import { isEqual, isEqualOrParent } from '../../../../base/common/resources.js';
 import { URI } from '../../../../base/common/uri.js';
 import { InstantiationType, registerSingleton } from '../../../../platform/instantiation/common/extensions.js';
 import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
@@ -28,10 +32,21 @@ export interface IChangeOwnersService {
 	ownedUris(threadId: string): URI[];
 	/** True if the file has diff zones, or a pending create or delete is at its path. */
 	hasPending(uri: URI): boolean;
+	/**
+	 * For a docked tool, before it writes: throws OwnershipConflictError if another chat has pending or in-flight
+	 * changes at or under `uri`, or a pending or in-flight folder delete above it. Otherwise claims `uri` (taking it
+	 * over from an owner with nothing pending) and keeps it in flight until the returned disposable is disposed.
+	 */
+	beginWrite(uri: URI, threadId: string, kind: WriteKind): IDisposable;
 }
+
+export type WriteKind = 'edit' | 'create' | 'delete';
+
+interface InFlightWrite { readonly uri: URI; readonly threadId: string; readonly kind: WriteKind }
 
 export const IChangeOwnersService = createDecorator<IChangeOwnersService>('zeroEgressChangeOwnersService');
 
+/** `uri` is the path holding the other chat's changes (the target itself, or a path under or above it). */
 export class OwnershipConflictError extends Error {
 	constructor(readonly uri: URI, readonly owner: string) {
 		super(`${uri.fsPath} has unreviewed changes from another chat.`);
@@ -45,6 +60,7 @@ export class ChangeOwnersService extends Disposable implements IChangeOwnersServ
 	private readonly _owners = new ChangeOwners();
 	/** every owned path's URI (keys are fsPath, as in _owners), so remote files keep their scheme */
 	private readonly _uris = new Map<string, URI>();
+	private readonly _inFlight = new Set<InFlightWrite>();
 	private readonly _onDidChange = this._register(new Emitter<void>());
 	readonly onDidChange = this._onDidChange.event;
 
@@ -107,10 +123,65 @@ export class ChangeOwnersService extends Disposable implements IChangeOwnersServ
 		return this._pendingFileOpsService.ops.some(op => isEqual(URI.parse(op.path), uri));
 	}
 
+	beginWrite(uri: URI, threadId: string, kind: WriteKind): IDisposable {
+		const conflict = this._conflictFor(uri, threadId);
+		if (conflict) {
+			throw new OwnershipConflictError(conflict.uri, conflict.owner);
+		}
+		if (!this.claim(uri, threadId).ok) {
+			this.transfer(uri, threadId); // the other owner has nothing pending here (else _conflictFor threw)
+		}
+		const write: InFlightWrite = { uri, threadId, kind };
+		this._inFlight.add(write);
+		return toDisposable(() => {
+			this._inFlight.delete(write);
+			this._releaseSettled(); // a write that failed leaves nothing pending, so no owner either
+		});
+	}
+
+	private _isInFlight(path: string): boolean {
+		for (const w of this._inFlight) {
+			if (w.uri.fsPath === path) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private _conflictFor(uri: URI, threadId: string): { uri: URI; owner: string } | undefined {
+		// another chat's pending or in-flight changes at or under uri (the file itself, or inside a folder op's path)
+		for (const [path, owned] of this._uris) {
+			const owner = this._owners.ownerOf(path);
+			if (owner === undefined || owner === threadId || !isEqualOrParent(owned, uri)) {
+				continue;
+			}
+			if (this._isInFlight(path) || this.hasPending(owned)) {
+				return { uri: owned, owner };
+			}
+		}
+		// another chat's folder delete above uri, pending or in flight
+		for (const op of this._pendingFileOpsService.ops) {
+			if (op.kind !== 'delete') {
+				continue;
+			}
+			const folder = URI.parse(op.path);
+			const owner = this.ownerOf(folder);
+			if (owner !== undefined && owner !== threadId && isEqualOrParent(uri, folder)) {
+				return { uri: folder, owner };
+			}
+		}
+		for (const w of this._inFlight) {
+			if (w.kind === 'delete' && w.threadId !== threadId && isEqualOrParent(uri, w.uri)) {
+				return { uri: w.uri, owner: w.threadId };
+			}
+		}
+		return undefined;
+	}
+
 	private _releaseSettled(): void {
 		let changed = false;
 		for (const [path, uri] of [...this._uris]) {
-			if (!this.hasPending(uri)) {
+			if (!this._isInFlight(path) && !this.hasPending(uri)) {
 				this._owners.release(path);
 				this._uris.delete(path);
 				changed = true;

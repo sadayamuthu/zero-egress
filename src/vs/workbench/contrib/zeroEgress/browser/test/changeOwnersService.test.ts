@@ -19,13 +19,15 @@ import { IFileService } from '../../../../../platform/files/common/files.js';
 import { TestInstantiationService } from '../../../../../platform/instantiation/test/common/instantiationServiceMock.js';
 import { IEditCodeService } from '../editCodeServiceInterface.js';
 import { IPendingFileOpsService, PendingFileOpsService } from '../pendingFileOpsService.js';
-import { ChangeOwnersService } from '../changeOwnersService.js';
+import { ChangeOwnersService, OwnershipConflictError } from '../changeOwnersService.js';
+import { VSBuffer } from '../../../../../base/common/buffer.js';
 
 suite('ChangeOwnersService', () => {
 	const store = ensureNoDisposablesAreLeakedInTestSuite();
 
 	let disposables: DisposableStore;
 	let diffZonesChanged: Emitter<{ uri: URI }>;
+	let files: FileService;
 	let diffAreasOfURI: Record<string, Set<string> | undefined>;
 	let pendingFileOps: PendingFileOpsService;
 	let service: ChangeOwnersService;
@@ -34,7 +36,7 @@ suite('ChangeOwnersService', () => {
 
 	setup(() => {
 		disposables = store.add(new DisposableStore());
-		const files = disposables.add(new FileService(new NullLogService()));
+		files = disposables.add(new FileService(new NullLogService()));
 		disposables.add(files.registerProvider('file', disposables.add(new InMemoryFileSystemProvider())));
 		diffZonesChanged = disposables.add(new Emitter<{ uri: URI }>());
 		diffAreasOfURI = {};
@@ -79,5 +81,58 @@ suite('ChangeOwnersService', () => {
 		diffZonesChanged.fire({ uri: a });
 		assert.strictEqual(service.ownerOf(a), 't1');
 		assert.deepStrictEqual(service.ownedUris('t1').map(u => u.toString()), [a.toString()]);
+	});
+
+	const conflictWith = (owner: string, uri: URI) => (e: unknown) =>
+		e instanceof OwnershipConflictError && e.owner === owner && e.uri.toString() === uri.toString();
+
+	test('another chat cannot write a path while a write there is in flight', () => {
+		const write = service.beginWrite(a, 't1', 'edit');
+		// nothing is pending yet (t1 is still awaiting before its write)
+		assert.throws(() => service.beginWrite(a, 't2', 'edit'), conflictWith('t1', a));
+		assert.strictEqual(service.ownerOf(a), 't1');
+		write.dispose();
+	});
+
+	test('a sweep during an in-flight write does not release it', () => {
+		const write = service.beginWrite(a, 't1', 'edit');
+		diffZonesChanged.fire({ uri: a }); // some other file's event: a has no zones yet
+		assert.strictEqual(service.ownerOf(a), 't1');
+		diffAreasOfURI[a.fsPath] = new Set(['1']);
+		write.dispose();
+		assert.strictEqual(service.ownerOf(a), 't1');
+	});
+
+	test('a write that leaves nothing pending releases its owner when it ends', () => {
+		service.beginWrite(a, 't1', 'edit').dispose();
+		assert.strictEqual(service.ownerOf(a), undefined);
+		service.beginWrite(a, 't2', 'edit').dispose(); // and the next chat gets no conflict
+	});
+
+	test('a folder delete or create conflicts with another chat\'s pending changes inside it', () => {
+		const inner = URI.parse('file:///w/d/x.ts');
+		service.beginWrite(inner, 't1', 'edit').dispose();
+		assert.strictEqual(service.ownerOf(inner), undefined);
+		const write = service.beginWrite(inner, 't1', 'edit');
+		diffAreasOfURI[inner.fsPath] = new Set(['1']);
+		write.dispose();
+		const folder = URI.parse('file:///w/d');
+		assert.throws(() => service.beginWrite(folder, 't2', 'delete'), conflictWith('t1', inner));
+		assert.throws(() => service.beginWrite(folder, 't2', 'create'), conflictWith('t1', inner));
+		assert.strictEqual(service.ownerOf(folder), undefined);
+		service.beginWrite(folder, 't1', 'delete').dispose(); // its own changes are no conflict
+	});
+
+	test('a path under another chat\'s pending folder delete conflicts', async () => {
+		const folder = URI.parse('file:///w/d');
+		const inner = URI.parse('file:///w/d/x.ts');
+		await files.writeFile(inner, VSBuffer.fromString('x'));
+		const write = service.beginWrite(folder, 't1', 'delete');
+		assert.throws(() => service.beginWrite(inner, 't2', 'edit'), conflictWith('t1', folder)); // in flight
+		await pendingFileOps.markDeleted(folder, true, 't1');
+		write.dispose();
+		assert.strictEqual(service.ownerOf(folder), 't1');
+		assert.throws(() => service.beginWrite(inner, 't2', 'edit'), conflictWith('t1', folder)); // pending
+		service.beginWrite(inner, 't1', 'edit').dispose();
 	});
 });
