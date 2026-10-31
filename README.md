@@ -8,9 +8,10 @@ An AI code editor that works offline. ZeroEgress has chat, an agent mode,
 background agents, quick edit and autocomplete, and talks only to model
 servers you run yourself: Ollama, vLLM, LM Studio or oMLX on your laptop,
 or one on your own network. It connects to loopback and to the servers you
-configure, and nothing else. Telemetry, auto-update, the online extension marketplace,
-analytics and cloud sign-in are removed. A runtime guard blocks every other
-connection and logs it, so you can see what was stopped.
+configure, and nothing else. Telemetry, auto-update, the online extension
+marketplace, analytics and cloud sign-in are removed. A runtime guard
+blocks every other connection and logs it, so you can see what was
+stopped.
 
 ![First run finds a local Ollama and recommends a model; the side bar's views on top with the rest under a menu; the Local pill; Quick Edit with Cmd+K, reviewed in place; agent mode with Cmd+L asks before it edits and every change waits for review; a background agent works in its own git worktree and its changes are accepted one by one; Settings shows the Egress Proof card](demo/demo.gif)
 
