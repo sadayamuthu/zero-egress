@@ -1,9 +1,14 @@
 name: Bump and release
 
-# After CI succeeds on a push to main, patch-bump product.json, push a
-# "chore: release vX.Y.Z" commit + tag, and dispatch the Release workflow
-# with publish=true. Tag pushes from GITHUB_TOKEN do not re-trigger workflows,
-# so Release is started explicitly.
+# After CI succeeds on a push to main, patch-bump product.json in a
+# "chore: release vX.Y.Z" commit, push only its tag, and dispatch the Release
+# workflow with publish=true on that tag. Tag pushes from GITHUB_TOKEN do not
+# re-trigger workflows, so Release is started explicitly.
+#
+# main is protected (changes only through pull requests), so the release
+# commit is never pushed to main: it lives on its tag, and main's product.json
+# stays behind. Each bump therefore starts from the newer of main's
+# product.json and the newest release tag's.
 #
 # Skips its own release commits (message prefix "chore: release ") so the
 # version bump does not loop. Skip a one-off with "[skip release]" in the
@@ -39,7 +44,7 @@ jobs:
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 0
-          # Default token can push commits/tags; Release is started via gh below.
+          # Default token can push tags; Release is started via gh below.
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Ensure tip of main still matches
@@ -59,12 +64,20 @@ jobs:
         id: bump
         run: |
           set -euo pipefail
-          version="$(node scripts/zero-egress/bump-version.mjs)"
+          # newest non-prerelease release tag (the version sort puts v0.1.10 after v0.1.9)
+          latest="$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | grep -v -- - | head -n1 || true)"
+          args=()
+          if [ -n "$latest" ]; then
+            git show "${latest}:product.json" > "$RUNNER_TEMP/latest-product.json"
+            args=(--latest "$RUNNER_TEMP/latest-product.json")
+            echo "Newest release tag: ${latest}"
+          fi
+          version="$(node scripts/zero-egress/bump-version.mjs "${args[@]}")"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
           echo "tag=v${version}" >> "$GITHUB_OUTPUT"
           echo "Bumped to ${version} (release counter $(node -p "require('./product.json').zeroEgressRelease"))"
 
-      - name: Commit, tag, push
+      - name: Commit, tag, push the tag
         if: env.still_tip == 'true'
         id: push
         env:
@@ -81,7 +94,7 @@ jobs:
           git add product.json
           git commit -m "chore: release ${TAG}"
           git tag -a "${TAG}" -m "ZeroEgress ${VERSION}"
-          git push origin HEAD:main
+          # Only the tag: the release commit is not pushed to (protected) main.
           git push origin "refs/tags/${TAG}"
           echo "pushed=true" >> "$GITHUB_OUTPUT"
 

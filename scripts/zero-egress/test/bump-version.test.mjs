@@ -55,4 +55,44 @@ function fail(msg) {
 	assert.equal(updated.nameShort, 'ZeroEgress');
 }
 
+// --latest: the newest release tag's product.json is ahead of main's; the bump starts from it.
+{
+	const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ze-bump-latest-'));
+	const scriptsDir = path.join(tmp, 'scripts', 'zero-egress');
+	fs.mkdirSync(scriptsDir, { recursive: true });
+	fs.copyFileSync(script, path.join(scriptsDir, 'bump-version.mjs'));
+	const write = (file, version, release) => fs.writeFileSync(file, JSON.stringify({ zeroEgressVersion: version, zeroEgressRelease: release }, null, '\t') + '\n');
+	const productPath = path.join(tmp, 'product.json');
+	const latestPath = path.join(tmp, 'latest.json');
+	const run = (...args) => spawnSync(process.execPath, [path.join(scriptsDir, 'bump-version.mjs'), ...args], { cwd: tmp, encoding: 'utf8' });
+
+	write(productPath, '0.1.0', '0001');
+	write(latestPath, '0.1.9', '0010');
+	let r = run('--latest', latestPath);
+	if (r.status !== 0) fail(`--latest exited ${r.status}: ${r.stderr}`);
+	assert.equal(r.stdout.trim(), '0.1.10');
+	let updated = JSON.parse(fs.readFileSync(productPath, 'utf8'));
+	assert.equal(updated.zeroEgressVersion, '0.1.10');
+	assert.equal(updated.zeroEgressRelease, '0011');
+
+	// main moved ahead of the tag (a manual minor bump): main wins; the counter still never goes back.
+	write(productPath, '0.2.0', '0003');
+	write(latestPath, '0.1.9', '0010');
+	r = run('--latest', latestPath, '--dry-run');
+	assert.equal(r.status, 0, r.stderr);
+	assert.equal(r.stdout.trim(), '0.2.1');
+	run('--latest', latestPath);
+	updated = JSON.parse(fs.readFileSync(productPath, 'utf8'));
+	assert.equal(updated.zeroEgressRelease, '0011');
+
+	// numeric, not string, comparison: 0.1.10 is newer than 0.1.9
+	write(productPath, '0.1.9', '0001');
+	write(latestPath, '0.1.10', '0002');
+	r = run('--latest', latestPath, '--dry-run');
+	assert.equal(r.stdout.trim(), '0.1.11');
+
+	r = run('--latest');
+	assert.notEqual(r.status, 0, '--latest without a path must fail');
+}
+
 console.log('bump-version tests OK');
