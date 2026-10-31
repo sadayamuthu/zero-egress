@@ -63,7 +63,20 @@ import './fileService.js'
 
 // register source control management
 import './zeroEgressSCMService.js'
+import './pendingFileOpsService.js'
+import './backgroundAgentsService.js'
+import './pendingDeleteDecorations.js'
+import './pendingChangeContextKeys.js'
 import './egressTargetsContribution.js'
+import './localStatusService.js'
+import './localStatusContribution.js'
+import './agentsViewContribution.js'
+
+// Home (empty window): clone command
+import './homeActions.js'
+
+// first-run detection of local model servers
+import './localModelDetectionService.js'
 
 // ---------- common (unclear if these actually need to be imported, because they're already imported wherever they're used) ----------
 

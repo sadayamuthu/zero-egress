@@ -44,6 +44,9 @@ import { ILanguageService } from '../../../../../../../editor/common/languages/l
 import { IZeroEgressModelService } from '../../../../common/zeroEgressModelService.js'
 import { IWorkspaceContextService } from '../../../../../../../platform/workspace/common/workspace.js'
 import { IZeroEgressCommandBarService } from '../../../zeroEgressCommandBarService.js'
+import { IPendingFileOpsService } from '../../../pendingFileOpsService.js'
+import { AgentSummary, IBackgroundAgentsService } from '../../../backgroundAgentsServiceInterface.js'
+import { PendingFileOp } from '../../../../common/pendingFileOps.js'
 import { INativeHostService } from '../../../../../../../platform/native/common/native.js';
 import { IEditCodeService } from '../../../editCodeServiceInterface.js'
 import { IToolsService } from '../../../toolsService.js'
@@ -52,7 +55,12 @@ import { ITerminalService } from '../../../../../terminal/browser/terminal.js'
 import { ISearchService } from '../../../../../../services/search/common/search.js'
 import { IExtensionManagementService } from '../../../../../../../platform/extensionManagement/common/extensionManagement.js'
 import { IMCPService } from '../../../../common/mcpService.js';
+import { ILocalModelDetectionService } from '../../../localModelDetectionService.js';
+import { ILocalStatusService } from '../../../localStatusService.js';
 import { IStorageService, StorageScope } from '../../../../../../../platform/storage/common/storage.js'
+import { IWorkspacesService } from '../../../../../../../platform/workspaces/common/workspaces.js'
+import { IHostService } from '../../../../../../services/host/browser/host.js'
+import { ILabelService } from '../../../../../../../platform/label/common/label.js'
 
 
 // normally to do this you'd use a useEffect that calls .onDidChangeState(), but useEffect mounts too late and misses initial state changes
@@ -81,6 +89,7 @@ const commandBarURIStateListeners: Set<(uri: URI) => void> = new Set();
 const activeURIListeners: Set<(uri: URI | null) => void> = new Set();
 
 const mcpListeners: Set<() => void> = new Set()
+const pendingFileOpsListeners: Set<() => void> = new Set()
 
 
 // must call this before you can use any of the hooks below
@@ -135,7 +144,7 @@ export const _registerServices = (accessor: ServicesAccessor) => {
 	refreshModelState = refreshModelService.state
 	disposables.push(
 		refreshModelService.onDidChangeState((providerName) => {
-			refreshModelState = refreshModelService.state
+			refreshModelState = { ...refreshModelService.state } // a new object, so React re-renders (the service mutates its state)
 			refreshModelStateListeners.forEach(l => l(refreshModelState))
 			refreshModelProviderListeners.forEach(l => l(providerName, refreshModelState)) // no state
 		})
@@ -172,6 +181,12 @@ export const _registerServices = (accessor: ServicesAccessor) => {
 	disposables.push(
 		mcpService.onDidChangeState(() => {
 			mcpListeners.forEach(l => l())
+		})
+	)
+
+	disposables.push(
+		accessor.get(IPendingFileOpsService).onDidChange(() => {
+			pendingFileOpsListeners.forEach(l => l())
 		})
 	)
 
@@ -226,8 +241,15 @@ const getReactAccessor = (accessor: ServicesAccessor) => {
 		IExtensionManagementService: accessor.get(IExtensionManagementService),
 		IExtensionTransferService: accessor.get(IExtensionTransferService),
 		IMCPService: accessor.get(IMCPService),
+		IPendingFileOpsService: accessor.get(IPendingFileOpsService),
+		IBackgroundAgentsService: accessor.get(IBackgroundAgentsService),
+		ILocalModelDetectionService: accessor.get(ILocalModelDetectionService),
+		ILocalStatusService: accessor.get(ILocalStatusService),
 
 		IStorageService: accessor.get(IStorageService),
+		IWorkspacesService: accessor.get(IWorkspacesService),
+		IHostService: accessor.get(IHostService),
+		ILabelService: accessor.get(ILabelService),
 
 	} as const
 	return reactAccessor
@@ -399,5 +421,59 @@ export const useMCPServiceState = () => {
 		mcpListeners.add(listener);
 		return () => { mcpListeners.delete(listener) };
 	}, []);
+	return s
+}
+
+// agent file creates and deletes waiting for review
+export const usePendingFileOps = (): readonly PendingFileOp[] => {
+	const accessor = useAccessor()
+	const pendingFileOpsService = accessor.get('IPendingFileOpsService')
+	const [s, ss] = useState(pendingFileOpsService.ops)
+	useEffect(() => {
+		const listener = () => { ss(pendingFileOpsService.ops) }
+		pendingFileOpsListeners.add(listener);
+		return () => { pendingFileOpsListeners.delete(listener) };
+	}, []);
+	return s
+}
+
+// background agents of this folder (Agents view), newest first
+export const useBackgroundAgents = (): readonly AgentSummary[] => {
+	const accessor = useAccessor()
+	const backgroundAgentsService = accessor.get('IBackgroundAgentsService')
+	const [s, ss] = useState(backgroundAgentsService.agents)
+	useEffect(() => {
+		ss(backgroundAgentsService.agents)
+		const d = backgroundAgentsService.onDidChange(() => { ss(backgroundAgentsService.agents) })
+		return () => { d.dispose() }
+	}, [backgroundAgentsService])
+	return s
+}
+
+// Local / LAN / Internet and the blocked count: the status bar's text, same source
+export const useLocalStatus = () => {
+	const accessor = useAccessor()
+	const localStatusService = accessor.get('ILocalStatusService')
+	const read = () => ({ ...localStatusService.formatted(), blocked: localStatusService.blocked, kind: localStatusService.status?.kind })
+	const [s, ss] = useState(read)
+	useEffect(() => {
+		const update = () => ss(read())
+		update()
+		const d = localStatusService.onDidChange(update)
+		return () => { d.dispose() }
+	}, [localStatusService])
+	return s
+}
+
+// a configuration value, kept current
+export const useConfigurationValue = <T,>(key: string): T | undefined => {
+	const accessor = useAccessor()
+	const configurationService = accessor.get('IConfigurationService')
+	const [s, ss] = useState(() => configurationService.getValue<T>(key))
+	useEffect(() => {
+		ss(configurationService.getValue<T>(key))
+		const d = configurationService.onDidChangeConfiguration(e => { if (e.affectsConfiguration(key)) { ss(configurationService.getValue<T>(key)) } })
+		return () => { d.dispose() }
+	}, [configurationService, key])
 	return s
 }

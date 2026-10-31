@@ -122,19 +122,29 @@ Local Ollama, in three steps:
    (**Ctrl+L** on Windows and Linux) to chat, and **Cmd+K** (**Ctrl+K**) to
    edit the selected code.
 
+**What the first run probes.** To find model servers, the first-run screen
+asks for a model list at three loopback addresses only: Ollama at
+`127.0.0.1:11434`, LM Studio at `localhost:1234`, and vLLM / oMLX at
+`localhost:8000` (one shared port, probed once). It also probes a URL you
+type under **Add URL**, once, because you typed it. It never scans your
+network or any other host. Each probe gives up after 2 seconds; a server
+that doesn't answer shows as "Not running". Detection fills in only
+providers and models you haven't set yet.
+
 vLLM (default `http://localhost:8000`), LM Studio (default
 `http://localhost:1234`) and oMLX (default `http://127.0.0.1:8000`) work the
 same way: start the server, and change the endpoint in ZeroEgress Settings
 if yours is different. If the server requires an API key (common with
 oMLX), enter it in the optional **API Key** field. Open Settings with the
 gear at the top of the chat panel, or run **ZeroEgress: Open Settings**
-from the Command Palette. Endpoints are under **Local Providers**.
-Autocomplete is off by default; turn it on under **Feature Options**.
+from the Command Palette. Endpoints are under **Models**,
+where **Use for** picks the model for chat, autocomplete and quick edit.
+Autocomplete is off by default; turn it on under **Editor**.
 
 ## Use a model server on your network
 
 Run the model on a bigger machine and point ZeroEgress at it. In
-ZeroEgress Settings, under **Local Providers**, set the endpoint to the
+ZeroEgress Settings, under **Models**, set the endpoint to the
 server's address, for example:
 
 - vLLM / oMLX: `http://192.168.1.50:8000`
@@ -213,6 +223,37 @@ Extensions you install run with the same rights as the editor. ZeroEgress
 checks the network calls they make through Node and Electron in the
 extension host, but not the programs they start. See
 [EGRESS.md](EGRESS.md#known-limits).
+
+## Background agents
+
+A background agent works on a task in its own git worktree, so it can run
+while you keep editing. The worktree lives under the app's data folder
+(`agent-worktrees/`), never inside your project, on a branch named
+`ze/agent-<id>`. It starts from your current HEAD plus a copy of your
+uncommitted changes. Start one from the Agents view (Shift+Cmd+A), or use
+the **Move to background** button in the chat panel to hand over the
+current conversation. They need a single folder inside a git repository.
+
+When an agent finishes, review its changes in the Agents view and accept
+or reject them. If you changed lines that a change touches, that change
+is a conflict and is never applied silently: choose **Keep mine** or
+**Use agent's**.
+
+To prepare a fresh worktree (for example to install dependencies), set
+`zeroEgress.agents.setupCommand`; it runs in the agent's folder after the
+worktree is created. You are asked before a new or changed command runs,
+and the setting is ignored in untrusted workspaces. Several agents can share one model server: raise
+**Parallel requests** for the provider, and `zeroEgress.agents.maxConcurrent`
+for the number of agents that run at once. The server must also run requests
+in parallel (Ollama: `OLLAMA_NUM_PARALLEL`).
+
+Background agents are confined by path checks on their file tools and
+terminal working directory: paths outside the agent's folder, and paths
+inside a `.git` folder, are refused, and before a file is written, created
+or deleted its real path (after symlinks) must still be inside the
+worktree. This is **not** an OS sandbox: a terminal command can still `cd`
+outside the worktree, which is why terminal commands ask first, unless you
+turned on auto-approve for terminal commands.
 
 ## Egress and security
 

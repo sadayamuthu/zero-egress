@@ -37,6 +37,7 @@ export const PastThreadsList = ({ className = '' }: { className?: string }) => {
 	const sortedThreadIds = Object.keys(allThreads ?? {})
 		.sort((threadId1, threadId2) => (allThreads[threadId1]?.lastModified ?? 0) > (allThreads[threadId2]?.lastModified ?? 0) ? -1 : 1)
 		.filter(threadId => (allThreads![threadId]?.messages.length ?? 0) !== 0)
+		.filter(threadId => !allThreads![threadId]?.agent) // background agents live in the Agents view
 
 	// Get only first 5 threads if not showing all
 	const hasMoreThreads = sortedThreadIds.length > numInitialThreads;
@@ -233,7 +234,7 @@ const PastThreadElement = ({ pastThread, idx, hoveredIdx, setHoveredIdx, isRunni
 	return <div
 		key={pastThread.id}
 		className={`
-			py-1 px-2 rounded text-sm bg-zinc-700/5 hover:bg-zinc-700/10 dark:bg-zinc-300/5 dark:hover:bg-zinc-300/10 cursor-pointer opacity-80 hover:opacity-100
+			py-1.5 px-2 rounded-[6px] text-sm text-ze-fg-1 hover:bg-ze-bg-2-hover cursor-pointer
 		`}
 		onClick={() => {
 			chatThreadsService.switchToThread(pastThread.id);
@@ -259,7 +260,7 @@ const PastThreadElement = ({ pastThread, idx, hoveredIdx, setHoveredIdx, isRunni
 				{/* <span className='opacity-60'>{`(${numMessages})`}</span> */}
 			</span>
 
-			<div className="flex items-center gap-x-1 opacity-60">
+			<div className="flex items-center gap-x-1 text-ze-fg-3">
 				{idx === hoveredIdx ?
 					<>
 						{/* trash icon */}

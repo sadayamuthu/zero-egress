@@ -4,27 +4,23 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { localize } from '../../../../nls.js';
-import { Disposable, DisposableStore, IDisposable } from '../../../../base/common/lifecycle.js';
-import { isMacintosh, isNative, OS } from '../../../../base/common/platform.js';
+import { Disposable, DisposableStore, IDisposable, MutableDisposable, toDisposable } from '../../../../base/common/lifecycle.js'; // ZeroEgress
+import { OS } from '../../../../base/common/platform.js'; // ZeroEgress
 import { IKeybindingService } from '../../../../platform/keybinding/common/keybinding.js';
 import { IWorkspaceContextService, WorkbenchState } from '../../../../platform/workspace/common/workspace.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { append, clearNode, $, h } from '../../../../base/browser/dom.js';
 import { KeybindingLabel } from '../../../../base/browser/ui/keybindingLabel/keybindingLabel.js';
-import { ICommandService } from '../../../../platform/commands/common/commands.js';
 import { defaultKeybindingLabelStyles } from '../../../../platform/theme/browser/defaultStyles.js';
 import { editorForeground, registerColor, transparent } from '../../../../platform/theme/common/colorRegistry.js';
 import { IThemeService } from '../../../../platform/theme/common/themeService.js';
-import { isRecentFolder, IWorkspacesService } from '../../../../platform/workspaces/common/workspaces.js';
-import { IHostService } from '../../../services/host/browser/host.js';
-import { ILabelService, Verbosity } from '../../../../platform/label/common/label.js';
+import { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js'; // ZeroEgress
+import { ILifecycleService, LifecyclePhase } from '../../../services/lifecycle/common/lifecycle.js'; // ZeroEgress
 import { ColorScheme } from '../../web.api.js';
-import { OpenFileFolderAction, OpenFolderAction } from '../../actions/workspaceActions.js';
-import { IWindowOpenable } from '../../../../platform/window/common/window.js';
-import { splitRecentLabel } from '../../../../base/common/labels.js';
 
 /* eslint-disable */ // ZeroEgress
 import { ZERO_EGRESS_CTRL_K_ACTION_ID, ZERO_EGRESS_CTRL_L_ACTION_ID } from '../../../contrib/zeroEgress/browser/actionIDs.js';
+import { mountHome } from '../../../contrib/zeroEgress/browser/react/out/home-tsx/index.js'; // ZeroEgress
 /* eslint-enable */
 
 // interface WatermarkEntry {
@@ -85,6 +81,9 @@ export class EditorGroupWatermark extends Disposable {
 	// private enabled: boolean = false;
 	private workbenchState: WorkbenchState;
 	private currentDisposables = new Set<IDisposable>();
+	private readonly root: HTMLElement; // ZeroEgress
+	/** Home (React), mounted while the workbench is EMPTY; one per watermark (= per editor group) */ // ZeroEgress
+	private readonly home = this._register(new MutableDisposable<DisposableStore>()); // ZeroEgress
 
 	constructor(
 		container: HTMLElement,
@@ -93,10 +92,8 @@ export class EditorGroupWatermark extends Disposable {
 		// @IContextKeyService private readonly contextKeyService: IContextKeyService,
 		@IConfigurationService private readonly configurationService: IConfigurationService,
 		@IThemeService private readonly themeService: IThemeService,
-		@IWorkspacesService private readonly workspacesService: IWorkspacesService,
-		@ICommandService private readonly commandService: ICommandService,
-		@IHostService private readonly hostService: IHostService,
-		@ILabelService private readonly labelService: ILabelService,
+		@IInstantiationService private readonly instantiationService: IInstantiationService, // ZeroEgress
+		@ILifecycleService private readonly lifecycleService: ILifecycleService, // ZeroEgress
 	) {
 		super();
 
@@ -106,6 +103,7 @@ export class EditorGroupWatermark extends Disposable {
 		]);
 
 		append(container, elements.root);
+		this.root = elements.root; // ZeroEgress
 		this.shortcuts = elements.shortcuts; // shortcuts div is modified on render()
 
 		// ZeroEgress watermark icon style
@@ -158,115 +156,23 @@ export class EditorGroupWatermark extends Disposable {
 	private render(): void {
 
 		this.clear();
+		const isEmpty = this.contextService.getWorkbenchState() === WorkbenchState.EMPTY; // ZeroEgress
+		this.root.classList.toggle('ze-home-active', isEmpty); // ZeroEgress
+		if (isEmpty) { // ZeroEgress
+			this.mountHome(); // ZeroEgress
+			return; // ZeroEgress
+		} // ZeroEgress
+		this.home.clear(); // ZeroEgress
 		const zeroEgressIconBox = append(this.shortcuts, $('.watermark-box'));
-		const recentsBox = append(this.shortcuts, $('div'));
-		recentsBox.style.display = 'flex'
-		recentsBox.style.flex = 'row'
-		recentsBox.style.justifyContent = 'center'
 
-
-		const update = async () => {
-
-			// put async at top so don't need to wait (this prevents a jitter on load)
-			const recentlyOpened = await this.workspacesService.getRecentlyOpened()
-				.catch(() => ({ files: [], workspaces: [] })).then(w => w.workspaces);
+		const update = () => { // ZeroEgress
 
 			clearNode(zeroEgressIconBox);
-			clearNode(recentsBox);
 
 			this.currentDisposables.forEach(label => label.dispose());
 			this.currentDisposables.clear();
 
-
-			// ZeroEgress - if the workbench is empty, show open
-			if (this.contextService.getWorkbenchState() === WorkbenchState.EMPTY) {
-
-				// Create a flex container for buttons with vertical direction
-				const buttonContainer = $('div');
-				buttonContainer.style.display = 'flex';
-				buttonContainer.style.flexDirection = 'column'; // Change to column for vertical stacking
-				buttonContainer.style.alignItems = 'center'; // Center the buttons horizontally
-				buttonContainer.style.gap = '8px'; // Reduce gap between buttons from 16px to 8px
-				buttonContainer.style.marginBottom = '16px';
-				zeroEgressIconBox.appendChild(buttonContainer);
-
-				// Open a folder
-				const openFolderButton = h('button')
-				openFolderButton.root.classList.add('ze-openfolder-button')
-				openFolderButton.root.style.display = 'block'
-				openFolderButton.root.style.width = '124px' // Set width to 124px as requested
-				openFolderButton.root.textContent = 'Open Folder'
-				openFolderButton.root.onclick = () => {
-					this.commandService.executeCommand(isMacintosh && isNative ? OpenFileFolderAction.ID : OpenFolderAction.ID)
-					// if (this.contextKeyService.contextMatchesRules(ContextKeyExpr.and(WorkbenchStateContext.isEqualTo('workspace')))) {
-					// 	this.commandService.executeCommand(OpenFolderViaWorkspaceAction.ID);
-					// } else {
-					// 	this.commandService.executeCommand(isMacintosh ? 'workbench.action.files.openFileFolder' : 'workbench.action.files.openFolder');
-					// }
-				}
-				buttonContainer.appendChild(openFolderButton.root);
-
-				// Recents
-				if (recentlyOpened.length !== 0) {
-
-					zeroEgressIconBox.append(
-						...recentlyOpened.map((w, i) => {
-
-							let fullPath: string;
-							let windowOpenable: IWindowOpenable;
-							if (isRecentFolder(w)) {
-								windowOpenable = { folderUri: w.folderUri };
-								fullPath = w.label || this.labelService.getWorkspaceLabel(w.folderUri, { verbose: Verbosity.LONG });
-							}
-							else {
-								return null
-								// fullPath = w.label || this.labelService.getWorkspaceLabel(w.workspace, { verbose: Verbosity.LONG });
-								// windowOpenable = { workspaceUri: w.workspace.configPath };
-							}
-
-
-							const { name, parentPath } = splitRecentLabel(fullPath);
-
-							const linkSpan = $('span');
-							linkSpan.classList.add('ze-link')
-							linkSpan.style.display = 'flex'
-							linkSpan.style.gap = '4px'
-							linkSpan.style.padding = '8px'
-
-							linkSpan.addEventListener('click', e => {
-								this.hostService.openWindow([windowOpenable], {
-									forceNewWindow: e.ctrlKey || e.metaKey,
-									remoteAuthority: w.remoteAuthority || null // local window if remoteAuthority is not set or can not be deducted from the openable
-								});
-								e.preventDefault();
-								e.stopPropagation();
-							});
-
-							const nameSpan = $('span');
-							nameSpan.innerText = name;
-							nameSpan.title = fullPath;
-							linkSpan.appendChild(nameSpan);
-
-							const dirSpan = $('span');
-							dirSpan.style.paddingLeft = '4px';
-							dirSpan.style.whiteSpace = 'nowrap';
-							dirSpan.style.overflow = 'hidden';
-							dirSpan.style.maxWidth = '300px';
-							dirSpan.innerText = parentPath;
-							dirSpan.title = fullPath;
-
-							linkSpan.appendChild(dirSpan);
-
-							return linkSpan
-						})
-							.filter(v => !!v)
-							.slice(0, 5) // take 5 most recent
-					)
-				}
-
-			}
-			else {
-
+			{ // ZeroEgress
 				// show them ZeroEgress keybindings
 				const keys = this.keybindingService.lookupKeybinding(ZERO_EGRESS_CTRL_L_ACTION_ID);
 				const dl = append(zeroEgressIconBox, $('dl'));
@@ -312,6 +218,20 @@ export class EditorGroupWatermark extends Disposable {
 		update();
 		this.transientDisposables.add(this.keybindingService.onDidUpdateKeybindings(update));
 	}
+
+	/** mounts Home once per watermark; React waits for the Restored phase so the services it reads aren't created mid editor-part setup */ // ZeroEgress
+	private mountHome(): void { // ZeroEgress
+		if (this.home.value) { return; } // ZeroEgress
+		const host = append(this.root, $('.ze-home-host')); // ZeroEgress
+		const store = new DisposableStore(); // ZeroEgress
+		this.home.value = store; // ZeroEgress
+		store.add(toDisposable(() => host.remove())); // ZeroEgress
+		this.lifecycleService.when(LifecyclePhase.Restored).then(() => { // ZeroEgress
+			if (store.isDisposed) { return; } // ZeroEgress
+			const mounted = this.instantiationService.invokeFunction(accessor => mountHome(host, accessor)); // ZeroEgress
+			store.add(toDisposable(() => mounted?.dispose())); // ZeroEgress
+		}); // ZeroEgress
+	} // ZeroEgress
 
 	private clear(): void {
 		clearNode(this.shortcuts);

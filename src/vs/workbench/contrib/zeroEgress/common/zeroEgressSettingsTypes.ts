@@ -40,7 +40,18 @@ export type ZeroEgressStatefulModelInfo = { // <-- STATEFUL
 type CommonProviderSettings = {
 	_didFillInProviderSettings: boolean | undefined, // undefined initially, computed when user types in all fields
 	models: ZeroEgressStatefulModelInfo[],
+	parallelRequests?: number, // how many LLM requests this provider runs at once (1-16); read with parallelRequestsOf
 }
+
+export const PARALLEL_REQUESTS_HINT = 'Only helps if the server also runs requests in parallel. Ollama: set OLLAMA_NUM_PARALLEL. LM Studio: raise parallel requests in its server settings.'
+
+/** clamps a concurrency setting to 1-16; anything missing or invalid reads as `fallback` */
+export const clampConcurrency = (n: unknown, fallback: number): number => {
+	if (typeof n !== 'number' || !Number.isFinite(n)) return fallback
+	return Math.min(16, Math.max(1, Math.floor(n)))
+}
+
+export const parallelRequestsOf = (settings: { parallelRequests?: number } | undefined): number => clampConcurrency(settings?.parallelRequests, 1)
 
 export type SettingsAtProvider<providerName extends ProviderName> = CustomProviderSettings<providerName> & CommonProviderSettings
 
@@ -120,6 +131,12 @@ export const displayInfoOfSettingName = (providerName: ProviderName, settingName
 		return {
 			title: '(never)',
 			placeholder: '(never)',
+		}
+	}
+	else if (settingName === 'parallelRequests') {
+		return {
+			title: 'Parallel requests',
+			placeholder: '1',
 		}
 	}
 

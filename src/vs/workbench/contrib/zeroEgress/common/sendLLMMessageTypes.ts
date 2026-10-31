@@ -196,6 +196,9 @@ export type OpenaiCompatibleModelResponse = {
 export type ModelListParams<ModelResponse> = {
 	providerName: ProviderName;
 	settingsOfProvider: SettingsOfProvider;
+	/** Lists from this URL instead of the provider's configured endpoint, for this one request. The main side
+	 *  leases this URL in the egress guard in place of the configured endpoint. Settings are not touched. */
+	endpointOverride?: string;
 	onSuccess: (param: { models: ModelResponse[] }) => void;
 	onError: (param: { error: string }) => void;
 }
@@ -203,6 +206,8 @@ export type ModelListParams<ModelResponse> = {
 // params to the service
 export type ServiceModelListParams<modelResponse> = {
 	providerName: RefreshableProviderName;
+	/** See ModelListParams.endpointOverride. */
+	endpointOverride?: string;
 	onSuccess: (param: { models: modelResponse[] }) => void;
 	onError: (param: { error: any }) => void;
 }

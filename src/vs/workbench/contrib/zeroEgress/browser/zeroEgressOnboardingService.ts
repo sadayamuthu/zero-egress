@@ -3,7 +3,7 @@
  *  Licensed under the Apache License, Version 2.0. See LICENSE.txt for more information.
  *--------------------------------------------------------------------------------------*/
 
-import { Disposable, toDisposable } from '../../../../base/common/lifecycle.js';
+import { Disposable, MutableDisposable, toDisposable } from '../../../../base/common/lifecycle.js';
 import { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
 import { IWorkbenchContribution, registerWorkbenchContribution2, WorkbenchPhase } from '../../../common/contributions.js';
 import { ServicesAccessor } from '../../../../editor/browser/editorExtensions.js';
@@ -53,9 +53,27 @@ export class OnboardingContribution extends Disposable implements IWorkbenchCont
 
 		if (settingsService.state.globalSettings.isOnboardingComplete) {
 			cover.remove();
+			// Mount later if the user redoes onboarding from Settings (it clears the flag).
+			const listener = this._register(new MutableDisposable());
+			listener.value = settingsService.onDidChangeState(() => {
+				if (!settingsService.state.globalSettings.isOnboardingComplete) {
+					listener.clear();
+					this.mount(targetWindow);
+				}
+			});
 			return;
 		}
 
+		this.mount(targetWindow);
+
+		// The splash is inline SVG/HTML (no image to decode): drop the cover on
+		// the next frame, once React has painted.
+		targetWindow.requestAnimationFrame(() => {
+			cover.remove();
+		});
+	}
+
+	private mount(targetWindow: CodeWindow): void {
 		// Prefer workbench if it exists by now; body is fine for a fixed overlay.
 		const parent = targetWindow.document.querySelector('.monaco-workbench') ?? targetWindow.document.body;
 		const onboardingContainer = h('div.ze-onboarding-container').root;
@@ -73,12 +91,6 @@ export class OnboardingContribution extends Disposable implements IWorkbenchCont
 				onboardingContainer.parentElement.removeChild(onboardingContainer);
 			}
 		}));
-
-		// The splash is inline SVG/HTML (no image to decode): drop the cover on
-		// the next frame, once React has painted.
-		targetWindow.requestAnimationFrame(() => {
-			cover.remove();
-		});
 	}
 }
 

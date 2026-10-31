@@ -103,6 +103,34 @@ suite('LLMMessageChannel endpoint leases', () => {
 		assert.strictEqual(events.filter(e => e.startsWith('release')).length, 1, 'released once');
 	});
 
+	test('a model list request with an endpoint override leases and dials exactly the override', async () => {
+		onRequest = (_req, res) => { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ object: 'list', data: [] })); };
+		const channel = new LLMMessageChannel(metrics, createDisabledAuditService(), identity, leases);
+		const override = `http://127.0.0.1:${port}`;
+		const configured = 'http://127.0.0.1:9'; // nothing listens here; it must be neither leased nor dialed
+		const done = next(channel.listen(undefined, 'onSuccess_list_openAICompatible'));
+		await channel.call('window:5', 'openAICompatibleList', { providerName: 'oMLX', settingsOfProvider: settingsWith('vLLM', configured), endpointOverride: override, requestId: 'r5' });
+		assert.deepStrictEqual(events, [`lease window:5 ${override}`]);
+		await done;
+		assert.deepStrictEqual(events, [`lease window:5 ${override}`, 'server GET /v1/models', `release window:5 ${override}`]);
+	});
+
+	test('an ollama list request with an endpoint override leases exactly the override, and without one the settings endpoint', async () => {
+		onRequest = (_req, res) => { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ models: [] })); };
+		const channel = new LLMMessageChannel(metrics, createDisabledAuditService(), identity, leases);
+		const override = `http://127.0.0.1:${port}`;
+		let done = next(channel.listen(undefined, 'onSuccess_list_ollama'));
+		await channel.call('window:6', 'ollamaList', { providerName: 'ollama', settingsOfProvider: settingsWith('ollama', 'http://127.0.0.1:9'), endpointOverride: override, requestId: 'r6' });
+		await done;
+		assert.deepStrictEqual(events, [`lease window:6 ${override}`, 'server GET /api/tags', `release window:6 ${override}`]);
+
+		events.length = 0;
+		done = next(channel.listen(undefined, 'onSuccess_list_ollama'));
+		await channel.call('window:6', 'ollamaList', { providerName: 'ollama', settingsOfProvider: settingsWith('ollama', override), requestId: 'r7' });
+		await done;
+		assert.deepStrictEqual(events, [`lease window:6 ${override}`, 'server GET /api/tags', `release window:6 ${override}`], 'unchanged without an override');
+	});
+
 	test('a request whose provider has no endpoint leases nothing', async () => {
 		const channel = new LLMMessageChannel(metrics, createDisabledAuditService(), identity, leases);
 		const done = next(channel.listen(undefined, 'onError_list_openAICompatible'));

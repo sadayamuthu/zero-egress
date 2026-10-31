@@ -36,7 +36,7 @@ user click -> error -> fire(error)
 		   \> success -> fire(success)
 	finally: keep polling
 
-poll -> do not fire
+poll -> no "refreshing"; fire only when the outcome changes (error <-> success)
 
 */
 export type RefreshModelStateOfProvider = Record<RefreshableProviderName, RefreshableState>
@@ -237,7 +237,9 @@ export class RefreshModelService extends Disposable implements IRefreshModelServ
 	}
 
 	private _setRefreshState(providerName: RefreshableProviderName, state: RefreshableState['state'], options?: { doNotFire: boolean }) {
-		if (options?.doNotFire) return
+		// automatic polls: record only an outcome that differs from the last one (no "refreshing" flicker every poll), so
+		// the provider status in Settings stays true without a refresh flash every few seconds
+		if (options?.doNotFire && (state === 'refreshing' || this.state[providerName].state === state)) return
 		this.state[providerName].state = state
 		this._onDidChangeState.fire(providerName)
 	}

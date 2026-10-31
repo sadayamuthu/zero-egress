@@ -1,5 +1,6 @@
 import { URI } from '../../../../base/common/uri.js'
 import { RawMCPToolCall } from './mcpServiceTypes.js';
+import { ToolRunContext } from './backgroundAgentTypes.js';
 import { builtinTools } from './prompt/prompts.js';
 import { RawToolParamsObj } from './sendLLMMessageTypes.js';
 
@@ -70,7 +71,8 @@ export type BuiltinToolResultType = {
 	'get_dir_tree': { str: string, },
 	'search_pathnames_only': { uris: URI[], hasNextPage: boolean },
 	'search_for_files': { uris: URI[], hasNextPage: boolean },
-	'search_in_file': { lines: number[]; },
+	/** `lineTexts` is set when the file was read from disk (background agents), aligned with `lines` */
+	'search_in_file': { lines: number[]; lineTexts?: string[] },
 	'read_lint_errors': { lintErrors: LintErrorItem[] | null },
 	// ---
 	'rewrite_file': Promise<{ lintErrors: LintErrorItem[] | null }>,
@@ -96,3 +98,7 @@ export type BuiltinToolParamName = { [T in BuiltinToolName]: BuiltinToolParamNam
 
 export type ToolName = BuiltinToolName | (string & {})
 export type ToolParamName<T extends ToolName> = T extends BuiltinToolName ? BuiltinToolParamNameOfTool<T> : string
+
+
+/** `ctx` says whose files the tool works on: the user's workspace (docked) or a background agent's worktree. */
+export type CallBuiltinTool = { [T in BuiltinToolName]: (p: BuiltinToolCallParams[T], ctx: ToolRunContext) => Promise<{ result: BuiltinToolResultType[T] | Promise<BuiltinToolResultType[T]>, interruptTool?: () => void }> }

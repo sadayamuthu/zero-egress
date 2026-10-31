@@ -165,7 +165,7 @@ export class LLMMessageService extends Disposable implements ILLMMessageService 
 
 
 	ollamaList = (params: ServiceModelListParams<OllamaModelResponse>) => {
-		const { onSuccess, onError, ...proxyParams } = params
+		const { onSuccess, onError, ...proxyParams } = params // proxyParams carries endpointOverride, if any, to the channel
 
 		const { settingsOfProvider } = this.zeroEgressSettingsService.state
 
@@ -184,7 +184,7 @@ export class LLMMessageService extends Disposable implements ILLMMessageService 
 
 
 	openAICompatibleList = (params: ServiceModelListParams<OpenaiCompatibleModelResponse>) => {
-		const { onSuccess, onError, ...proxyParams } = params
+		const { onSuccess, onError, ...proxyParams } = params // proxyParams carries endpointOverride, if any, to the channel
 
 		const { settingsOfProvider } = this.zeroEgressSettingsService.state
 

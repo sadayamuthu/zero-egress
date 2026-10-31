@@ -41,7 +41,7 @@ suite('RefreshModelService', () => {
 			if (providerName === 'vLLM') { onError({ error: 'unreachable' }); }
 		};
 		const llm = { ollamaList: list, openAICompatibleList: list } as unknown as ILLMMessageService;
-		disposables.add(new RefreshModelService(settings, llm));
+		const service = disposables.add(new RefreshModelService(settings, llm));
 		const type = async (text: string, msPerKey: number) => {
 			for (let i = 1; i <= text.length; i++) {
 				settingsOfProvider = { ...settingsOfProvider, vLLM: { ...settingsOfProvider.vLLM, endpoint: text.slice(0, i) } };
@@ -49,8 +49,24 @@ suite('RefreshModelService', () => {
 				await timeout(msPerKey);
 			}
 		};
-		return { probes, type, dispose: () => disposables.dispose() };
+		return { service, probes, type, dispose: () => disposables.dispose() };
 	}
+
+	test('automatic polls record a changed outcome without a refreshing state in between', async () => {
+		const { service, dispose } = createService();
+		try {
+		const fired: string[] = [];
+		const d = service.onDidChangeState(p => fired.push(`${p} ${service.state[p].state}`));
+		await timeout(0);
+		assert.strictEqual(service.state.vLLM.state, 'error', 'the first failed poll is recorded');
+		assert.strictEqual(service.state.ollama.state, 'init', 'no answer yet: still unknown');
+		await timeout(5100);
+		assert.deepStrictEqual(fired, ['vLLM error'], 'the same outcome again does not fire');
+		d.dispose();
+		} finally {
+			dispose();
+		}
+	});
 
 	test('typing an endpoint probes only the value it settles on, and polling waits meanwhile', async () => {
 		const { probes, type, dispose } = createService();

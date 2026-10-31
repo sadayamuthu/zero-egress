@@ -13,6 +13,7 @@ import { IZeroEgressSettingsService } from '../common/zeroEgressSettingsService.
 import { ChatMode, FeatureName, ModelSelection, ProviderName } from '../common/zeroEgressSettingsTypes.js';
 import { IDirectoryStrService } from '../common/directoryStrService.js';
 import { ITerminalToolService } from './terminalToolService.js';
+import { terminalIdsVisibleTo } from '../common/terminalOwnership.js';
 import { IZeroEgressModelService } from '../common/zeroEgressModelService.js';
 import { URI } from '../../../../base/common/uri.js';
 import { EndOfLinePreference } from '../../../../editor/common/model.js';
@@ -522,7 +523,8 @@ const prepareMessages = (params: {
 export interface IConvertToLLMMessageService {
 	readonly _serviceBrand: undefined;
 	prepareLLMSimpleMessages: (opts: { simpleMessages: SimpleLLMMessage[], systemMessage: string, modelSelection: ModelSelection | null, featureName: FeatureName }) => { messages: LLMChatMessage[], separateSystemMessage: string | undefined }
-	prepareLLMChatMessages: (opts: { chatMessages: ChatMessage[], chatMode: ChatMode, modelSelection: ModelSelection | null }) => Promise<{ messages: LLMChatMessage[], separateSystemMessage: string | undefined }>
+	/** `agentRoot`: set for background agents; the system message then describes only that folder. */
+	prepareLLMChatMessages: (opts: { chatMessages: ChatMessage[], chatMode: ChatMode, modelSelection: ModelSelection | null, agentRoot?: { folder: string, depsMayBeMissing: boolean, agentId: string } }) => Promise<{ messages: LLMChatMessage[], separateSystemMessage: string | undefined }>
 	prepareFIMMessage(opts: { messages: LLMFIMMessage, }): { prefix: string, suffix: string, stopTokens: string[] }
 }
 
@@ -576,24 +578,28 @@ class ConvertToLLMMessageService extends Disposable implements IConvertToLLMMess
 
 
 	// system message
-	private _generateChatMessagesSystemMessage = async (chatMode: ChatMode, specialToolFormat: 'openai-style' | 'anthropic-style' | 'gemini-style' | undefined) => {
-		const workspaceFolders = this.workspaceContextService.getWorkspace().folders.map(f => f.uri.fsPath)
+	private _generateChatMessagesSystemMessage = async (chatMode: ChatMode, specialToolFormat: 'openai-style' | 'anthropic-style' | 'gemini-style' | undefined, agentRoot: { folder: string, depsMayBeMissing: boolean, agentId: string } | undefined) => {
+		// a background agent works only in its worktree: describe that folder, not the user's workspace or editors
+		const workspaceFolders = agentRoot ? [agentRoot.folder] : this.workspaceContextService.getWorkspace().folders.map(f => f.uri.fsPath)
 
-		const openedURIs = this.modelService.getModels().filter(m => m.isAttachedToEditor()).map(m => m.uri.fsPath) || [];
-		const activeURI = this.editorService.activeEditor?.resource?.fsPath;
+		const openedURIs = agentRoot ? [] : this.modelService.getModels().filter(m => m.isAttachedToEditor()).map(m => m.uri.fsPath) || [];
+		const activeURI = agentRoot ? undefined : this.editorService.activeEditor?.resource?.fsPath;
 
-		const directoryStr = await this.directoryStrService.getAllDirectoriesStr({
-			cutOffMessage: chatMode === 'agent' || chatMode === 'gather' ?
-				`...Directories string cut off, use tools to read more...`
-				: `...Directories string cut off, ask user for more if necessary...`
-		})
+		const directoryStr = agentRoot ?
+			`Directory of ${agentRoot.folder}:\n` + await this.directoryStrService.getDirectoryStrTool(URI.file(agentRoot.folder)).catch(() => '(could not read the folder)')
+			: await this.directoryStrService.getAllDirectoriesStr({
+				cutOffMessage: chatMode === 'agent' || chatMode === 'gather' ?
+					`...Directories string cut off, use tools to read more...`
+					: `...Directories string cut off, ask user for more if necessary...`
+			})
 
 		const includeXMLToolDefinitions = !specialToolFormat
 
 		const mcpTools = this.mcpService.getMCPTools()
 
-		const persistentTerminalIDs = this.terminalToolService.listPersistentTerminalIds()
-		const systemMessage = chat_systemMessage({ workspaceFolders, openedURIs, directoryStr, activeURI, persistentTerminalIDs, chatMode, mcpTools, includeXMLToolDefinitions })
+		// each thread sees only its own persistent terminals (docked: the ones no background agent owns)
+		const persistentTerminalIDs = terminalIdsVisibleTo(this.terminalToolService.listPersistentTerminalIds(), id => this.terminalToolService.ownerOfPersistentTerminal(id), agentRoot?.agentId)
+		const systemMessage = chat_systemMessage({ workspaceFolders, openedURIs, directoryStr, activeURI, persistentTerminalIDs, chatMode, mcpTools, includeXMLToolDefinitions, depsMayBeMissing: agentRoot?.depsMayBeMissing ?? false })
 		return systemMessage
 	}
 
@@ -667,7 +673,7 @@ class ConvertToLLMMessageService extends Disposable implements IConvertToLLMMess
 		})
 		return { messages, separateSystemMessage };
 	}
-	prepareLLMChatMessages: IConvertToLLMMessageService['prepareLLMChatMessages'] = async ({ chatMessages, chatMode, modelSelection }) => {
+	prepareLLMChatMessages: IConvertToLLMMessageService['prepareLLMChatMessages'] = async ({ chatMessages, chatMode, modelSelection, agentRoot }) => {
 		if (modelSelection === null) return { messages: [], separateSystemMessage: undefined }
 
 		const { overridesOfModel } = this.zeroEgressSettingsService.state
@@ -680,7 +686,7 @@ class ConvertToLLMMessageService extends Disposable implements IConvertToLLMMess
 		} = getModelCapabilities(providerName, modelName, overridesOfModel)
 
 		const { disableSystemMessage } = this.zeroEgressSettingsService.state.globalSettings;
-		const fullSystemMessage = await this._generateChatMessagesSystemMessage(chatMode, specialToolFormat)
+		const fullSystemMessage = await this._generateChatMessagesSystemMessage(chatMode, specialToolFormat, agentRoot)
 		const systemMessage = disableSystemMessage ? '' : fullSystemMessage;
 
 		const modelSelectionOptions = this.zeroEgressSettingsService.state.optionsOfModelSelection['Chat'][modelSelection.providerName]?.[modelSelection.modelName]
