@@ -8,9 +8,18 @@
 import React, { useEffect, useRef, useState } from 'react';
 import type { LucideIcon } from 'lucide-react';
 
-export const SmallIconButton = ({ Icon, label, onClick, className = '' }: { Icon: LucideIcon; label: string; onClick: () => void; className?: string }) => {
+export const SmallIconButton = ({ Icon, label, onClick, className = '', buttonRef, expanded }: {
+	Icon: LucideIcon; label: string; onClick: () => void; className?: string;
+	/** for a button that anchors a Popover */
+	buttonRef?: React.Ref<HTMLButtonElement>;
+	/** for a button that opens a menu: whether it is open */
+	expanded?: boolean;
+}) => {
 	return <button
+		ref={buttonRef}
 		type='button'
+		aria-haspopup={expanded === undefined ? undefined : 'menu'}
+		aria-expanded={expanded}
 		aria-label={label}
 		data-tooltip-id='ze-tooltip'
 		data-tooltip-place='bottom'

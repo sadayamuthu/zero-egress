@@ -11,7 +11,7 @@
 import React, { useState } from 'react';
 import { Check, X } from 'lucide-react';
 // no runtime imports from vs/ here: the bundle flattens this folder, so a relative path one level deeper breaks
-import { ReviewFile, useThreadReview } from '../useThreadReview.js';
+import type { ReviewFile, ThreadReview } from '../useThreadReview.js';
 
 const basenameOf = (path: string) => path.split('/').filter(Boolean).pop() ?? path;
 
@@ -44,8 +44,8 @@ const FileRow = ({ file, onOpen, onResolve }: { file: ReviewFile; onOpen: () => 
 	</div>;
 };
 
-export const ReviewBar = ({ threadId }: { threadId: string }) => {
-	const review = useThreadReview(threadId);
+/** `review` is the caller's useThreadReview(threadId): the input box computes it for ⌘⏎ too, and shares it */
+export const ReviewBar = ({ threadId, review }: { threadId: string; review: ThreadReview }) => {
 	const [openList, setOpenList] = useState<'mine' | 'others' | null>(null);
 
 	if (review.mine.length === 0) {

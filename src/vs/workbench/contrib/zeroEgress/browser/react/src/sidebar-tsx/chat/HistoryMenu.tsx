@@ -5,13 +5,13 @@
 
 // Every docked chat, newest first, with a title filter. Clicking a row opens it as a tab; each row can be renamed or
 // deleted. Background agents live in the Agents view and are not listed.
-// TODO(Task 7): move onto the shared Popover; for now a plain absolutely positioned div.
 
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Check, Pencil, Trash2, X } from 'lucide-react';
 import { useAccessor, useChatThreadsState, useFullChatThreadsStreamState } from '../../util/services.js';
 // no runtime imports from vs/ here: the bundle flattens this folder, so a relative path one level deeper breaks
 import { threadTitleOf } from '../chatTitle.js';
+import { Popover } from './Popover.js';
 import { RenameInput, SmallIconButton } from './TabParts.js';
 
 const formatDate = (iso: string) => {
@@ -29,7 +29,7 @@ const formatDate = (iso: string) => {
 	return `${date.toLocaleString('default', { month: 'short' })} ${date.getDate()}`;
 };
 
-export const HistoryMenu = ({ onClose }: { onClose: () => void }) => {
+export const HistoryMenu = ({ anchor, onClose }: { anchor: HTMLElement | null; onClose: () => void }) => {
 	const accessor = useAccessor();
 	const chatThreadsService = accessor.get('IChatThreadService');
 	const { allThreads, currentThreadId } = useChatThreadsState();
@@ -38,17 +38,6 @@ export const HistoryMenu = ({ onClose }: { onClose: () => void }) => {
 	const [query, setQuery] = useState('');
 	const [renamingId, setRenamingId] = useState<string | null>(null);
 	const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
-
-	const ref = useRef<HTMLDivElement>(null);
-	useEffect(() => {
-		const onMouseDown = (e: MouseEvent) => {
-			if (ref.current && !ref.current.contains(e.target as Node)) {
-				onClose();
-			}
-		};
-		document.addEventListener('mousedown', onMouseDown);
-		return () => document.removeEventListener('mousedown', onMouseDown);
-	}, [onClose]);
 
 	const rows = useMemo(() => {
 		const q = query.trim().toLowerCase();
@@ -60,11 +49,10 @@ export const HistoryMenu = ({ onClose }: { onClose: () => void }) => {
 			.sort((a, b) => (a.thread.lastModified < b.thread.lastModified ? 1 : a.thread.lastModified > b.thread.lastModified ? -1 : 0));
 	}, [allThreads, currentThreadId, query]);
 
-	return <div
-		ref={ref}
-		className='absolute left-1 right-1 ml-auto max-w-72 top-full mt-1 z-[100] max-h-96 flex flex-col rounded border border-ze-border-3 bg-ze-bg-1 shadow-md text-root text-ze-fg-1'
-		onKeyDown={e => { if (e.key === 'Escape' && renamingId === null) { e.stopPropagation(); onClose(); } }}
-	>
+	const open = (threadId: string) => { chatThreadsService.switchToThread(threadId); onClose(); };
+
+	// the rename field stops its own keys, so Escape there cancels the rename and never reaches the Popover
+	return <Popover anchor={anchor} open={true} onClose={onClose} placement='bottom-end' className='w-72 max-w-[calc(100vw-16px)]' flush maxHeight={384} label='History' initialFocus='none'>
 		<div className='p-1.5 border-b border-ze-border-3'>
 			<input
 				autoFocus
@@ -74,15 +62,19 @@ export const HistoryMenu = ({ onClose }: { onClose: () => void }) => {
 				onChange={e => setQuery(e.target.value)}
 			/>
 		</div>
-		<div className='overflow-y-auto py-1'>
+		<div className='min-h-0 overflow-y-auto py-1'>
 			{rows.length === 0 ? <div className='px-2 py-1.5 text-sm text-ze-fg-3 select-none'>{query ? 'No matching chats' : 'No chats yet'}</div> : null}
 			{rows.map(({ thread, title }) => {
 				const isRunning = !!streamState[thread.id]?.isRunning;
 				const isCurrent = thread.id === currentThreadId;
 				return <div
 					key={thread.id}
-					className={`group flex items-center justify-between gap-2 px-2 py-1 mx-1 rounded cursor-pointer hover:bg-ze-bg-2-hover ${isCurrent ? 'bg-ze-bg-2' : ''}`}
-					onClick={() => { if (renamingId !== thread.id) { chatThreadsService.switchToThread(thread.id); onClose(); } }}
+					role='menuitem'
+					tabIndex={-1}
+					aria-current={isCurrent ? true : undefined}
+					className={`group flex items-center justify-between gap-2 px-2 py-1 mx-1 rounded-[6px] cursor-pointer outline-none hover:bg-[var(--vscode-list-hoverBackground)] focus:bg-[var(--vscode-list-hoverBackground)] ${isCurrent ? 'bg-[var(--vscode-list-inactiveSelectionBackground)]' : ''}`}
+					onClick={() => { if (renamingId !== thread.id) { open(thread.id); } }}
+					onKeyDown={e => { if (e.key === 'Enter' && e.target === e.currentTarget && renamingId !== thread.id) { e.preventDefault(); open(thread.id); } }}
 				>
 					<span className='flex items-center gap-1.5 min-w-0'>
 						{isRunning ? <span className='size-1.5 rounded-full bg-ze-accent shrink-0' /> : null}
@@ -110,5 +102,5 @@ export const HistoryMenu = ({ onClose }: { onClose: () => void }) => {
 				</div>;
 			})}
 		</div>
-	</div>;
+	</Popover>;
 };

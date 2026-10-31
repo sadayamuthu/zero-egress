@@ -13,26 +13,25 @@ import { ChatMarkdownRender, ChatMessageLocation, getApplyBoxId } from '../markd
 import { URI } from '../../../../../../../base/common/uri.js';
 import { IDisposable } from '../../../../../../../base/common/lifecycle.js';
 import { ErrorDisplay } from './ErrorDisplay.js';
-import { BlockCode, TextAreaFns, ZeroEgressCustomDropdownBox, ZeroEgressInputBox2, ZeroEgressSlider, ZeroEgressSwitch, ZeroEgressDiffEditor } from '../util/inputs.js';
-import { ModelDropdown, } from '../zero-egress-settings-tsx/ModelDropdown.js';
-import { ZERO_EGRESS_CTRL_L_ACTION_ID } from '../../../actionIDs.js';
+import { BlockCode, TextAreaFns, ZeroEgressInputBox2, ZeroEgressDiffEditor } from '../util/inputs.js';
 import { ZERO_EGRESS_OPEN_SETTINGS_ACTION_ID } from '../../../zeroEgressSettingsPane.js';
-import { ChatMode, displayInfoOfProviderName, FeatureName, isFeatureNameDisabled } from '../../../../../../../workbench/contrib/zeroEgress/common/zeroEgressSettingsTypes.js';
+import { FeatureName } from '../../../../../../../workbench/contrib/zeroEgress/common/zeroEgressSettingsTypes.js';
 import { ICommandService } from '../../../../../../../platform/commands/common/commands.js';
 import { WarningBox } from '../zero-egress-settings-tsx/WarningBox.js';
-import { getModelCapabilities, getIsReasoningEnabledState } from '../../../../common/modelCapabilities.js';
-import { AlertTriangle, File, Ban, ChevronRight, Dot, FileIcon, Pencil, Undo, Undo2, X, Flag, Copy as CopyIcon, Info, CirclePlus, Ellipsis, CircleEllipsis, CloudUpload, Folder, ALargeSmall, TypeOutline, Text } from 'lucide-react';
+import { AlertTriangle, File, Ban, ChevronRight, Dot, FileIcon, Pencil, Undo, Undo2, X, Flag, Copy as CopyIcon, Info, CirclePlus, Ellipsis, CircleEllipsis, Folder, ALargeSmall, TypeOutline, Text } from 'lucide-react';
 import { ChatMessage, CheckpointEntry, StagingSelectionItem, ToolMessage } from '../../../../common/chatThreadServiceTypes.js';
 import { approvalTypeOfBuiltinToolName, BuiltinToolCallParams, BuiltinToolName, ToolName, LintErrorItem, ToolApprovalType, toolApprovalTypes } from '../../../../common/toolsServiceTypes.js';
-import { CopyButton, EditToolAcceptRejectButtonsHTML, IconShell1, JumpToFileButton, JumpToTerminalButton, StatusIndicatorForApplyButton, useApplyStreamState, useEditToolStreamState } from '../markdown/ApplyBlockHoverButtons.js';
+import { CopyButton, EditToolAcceptRejectButtonsHTML, JumpToFileButton, JumpToTerminalButton, StatusIndicatorForApplyButton, useApplyStreamState, useEditToolStreamState } from '../markdown/ApplyBlockHoverButtons.js';
 import { IsRunningType } from '../../../chatThreadService.js';
 import { acceptAllBg, acceptBorder, buttonFontSize, buttonTextColor, rejectAllBg, rejectBg, rejectBorder } from '../../../../common/helpers/colors.js';
 import { builtinToolNames, isABuiltinToolName, MAX_FILE_CHARS_PAGE, MAX_TERMINAL_INACTIVE_TIME } from '../../../../common/prompt/prompts.js';
 import { RawToolCallObj } from '../../../../common/sendLLMMessageTypes.js';
 import ErrorBoundary from './ErrorBoundary.js';
 import { ConflictCard } from './chat/ConflictCard.js';
-import { ReviewBar } from './chat/ReviewBar.js';
 import { ChatTabs } from './chat/ChatTabs.js';
+import { Composer, ComposerApi } from './chat/Composer.js';
+import { ModeMenu } from './chat/ModeMenu.js';
+import { ModelMenu } from './chat/ModelMenu.js';
 import { useThreadReview } from './useThreadReview.js';
 import { ToolApprovalTypeSwitch } from '../zero-egress-settings-tsx/Settings.js';
 
@@ -160,146 +159,6 @@ export const IconLoading = ({ className = '' }: { className?: string }) => {
 
 
 
-// SLIDER ONLY:
-const ReasoningOptionSlider = ({ featureName }: { featureName: FeatureName }) => {
-	const accessor = useAccessor()
-
-	const zeroEgressSettingsService = accessor.get('IZeroEgressSettingsService')
-	const zeroEgressSettingsState = useSettingsState()
-
-	const modelSelection = zeroEgressSettingsState.modelSelectionOfFeature[featureName]
-	const overridesOfModel = zeroEgressSettingsState.overridesOfModel
-
-	if (!modelSelection) return null
-
-	const { modelName, providerName } = modelSelection
-	const { reasoningCapabilities } = getModelCapabilities(providerName, modelName, overridesOfModel)
-	const { canTurnOffReasoning, reasoningSlider: reasoningBudgetSlider } = reasoningCapabilities || {}
-
-	const modelSelectionOptions = zeroEgressSettingsState.optionsOfModelSelection[featureName][providerName]?.[modelName]
-	const isReasoningEnabled = getIsReasoningEnabledState(featureName, providerName, modelName, modelSelectionOptions, overridesOfModel)
-
-	if (canTurnOffReasoning && !reasoningBudgetSlider) { // if it's just a on/off toggle without a power slider
-		return <div className='flex items-center gap-x-2'>
-			<span className='text-ze-fg-3 text-xs pointer-events-none inline-block w-10 pr-1'>Thinking</span>
-			<ZeroEgressSwitch
-				size='xxs'
-				value={isReasoningEnabled}
-				onChange={(newVal) => {
-					const isOff = canTurnOffReasoning && !newVal
-					zeroEgressSettingsService.setOptionsOfModelSelection(featureName, modelSelection.providerName, modelSelection.modelName, { reasoningEnabled: !isOff })
-				}}
-			/>
-		</div>
-	}
-
-	if (reasoningBudgetSlider?.type === 'budget_slider') { // if it's a slider
-		const { min: min_, max, default: defaultVal } = reasoningBudgetSlider
-
-		const nSteps = 8 // only used in calculating stepSize, stepSize is what actually matters
-		const stepSize = Math.round((max - min_) / nSteps)
-
-		const valueIfOff = min_ - stepSize
-		const min = canTurnOffReasoning ? valueIfOff : min_
-		const value = isReasoningEnabled ? zeroEgressSettingsState.optionsOfModelSelection[featureName][modelSelection.providerName]?.[modelSelection.modelName]?.reasoningBudget ?? defaultVal
-			: valueIfOff
-
-		return <div className='flex items-center gap-x-2'>
-			<span className='text-ze-fg-3 text-xs pointer-events-none inline-block w-10 pr-1'>Thinking</span>
-			<ZeroEgressSlider
-				width={50}
-				size='xs'
-				min={min}
-				max={max}
-				step={stepSize}
-				value={value}
-				onChange={(newVal) => {
-					const isOff = canTurnOffReasoning && newVal === valueIfOff
-					zeroEgressSettingsService.setOptionsOfModelSelection(featureName, modelSelection.providerName, modelSelection.modelName, { reasoningEnabled: !isOff, reasoningBudget: newVal })
-				}}
-			/>
-			<span className='text-ze-fg-3 text-xs pointer-events-none'>{isReasoningEnabled ? `${value} tokens` : 'Thinking disabled'}</span>
-		</div>
-	}
-
-	if (reasoningBudgetSlider?.type === 'effort_slider') {
-
-		const { values, default: defaultVal } = reasoningBudgetSlider
-
-		const min = canTurnOffReasoning ? -1 : 0
-		const max = values.length - 1
-
-		const currentEffort = zeroEgressSettingsState.optionsOfModelSelection[featureName][modelSelection.providerName]?.[modelSelection.modelName]?.reasoningEffort ?? defaultVal
-		const valueIfOff = -1
-		const value = isReasoningEnabled && currentEffort ? values.indexOf(currentEffort) : valueIfOff
-
-		const currentEffortCapitalized = currentEffort.charAt(0).toUpperCase() + currentEffort.slice(1, Infinity)
-
-		return <div className='flex items-center gap-x-2'>
-			<span className='text-ze-fg-3 text-xs pointer-events-none inline-block w-10 pr-1'>Thinking</span>
-			<ZeroEgressSlider
-				width={30}
-				size='xs'
-				min={min}
-				max={max}
-				step={1}
-				value={value}
-				onChange={(newVal) => {
-					const isOff = canTurnOffReasoning && newVal === valueIfOff
-					zeroEgressSettingsService.setOptionsOfModelSelection(featureName, modelSelection.providerName, modelSelection.modelName, { reasoningEnabled: !isOff, reasoningEffort: values[newVal] ?? undefined })
-				}}
-			/>
-			<span className='text-ze-fg-3 text-xs pointer-events-none'>{isReasoningEnabled ? `${currentEffortCapitalized}` : 'Thinking disabled'}</span>
-		</div>
-	}
-
-	return null
-}
-
-
-
-const nameOfChatMode = {
-	'normal': 'Chat',
-	'gather': 'Gather',
-	'agent': 'Agent',
-}
-
-const detailOfChatMode = {
-	'normal': 'Normal chat',
-	'gather': 'Reads files, but can\'t edit',
-	'agent': 'Edits files and uses tools',
-}
-
-
-const ChatModeDropdown = ({ className }: { className: string }) => {
-	const accessor = useAccessor()
-
-	const zeroEgressSettingsService = accessor.get('IZeroEgressSettingsService')
-	const settingsState = useSettingsState()
-
-	const options: ChatMode[] = useMemo(() => ['normal', 'gather', 'agent'], [])
-
-	const onChangeOption = useCallback((newVal: ChatMode) => {
-		zeroEgressSettingsService.setGlobalSetting('chatMode', newVal)
-	}, [zeroEgressSettingsService])
-
-	return <ZeroEgressCustomDropdownBox
-		className={className}
-		options={options}
-		selectedOption={settingsState.globalSettings.chatMode}
-		onChangeOption={onChangeOption}
-		getOptionDisplayName={(val) => nameOfChatMode[val]}
-		getOptionDropdownName={(val) => nameOfChatMode[val]}
-		getOptionDropdownDetail={(val) => detailOfChatMode[val]}
-		getOptionsEqual={(a, b) => a === b}
-	/>
-
-}
-
-
-
-
-
 interface ZeroEgressChatAreaProps {
 	// Required
 	children: React.ReactNode; // This will be the input component
@@ -397,15 +256,11 @@ export const ZeroEgressChatArea: React.FC<ZeroEgressChatAreaProps> = ({
 			{/* Bottom row */}
 			<div className='flex flex-row justify-between items-end gap-1'>
 				{showModelDropdown && (
-					<div className='flex flex-col gap-y-1'>
-						<ReasoningOptionSlider featureName={featureName} />
-
-						<div className='flex items-center flex-wrap gap-x-2 gap-y-1 text-nowrap '>
-							{featureName === 'Chat' && (fixedModeLabel !== undefined
-								? <span className='text-xs text-ze-fg-3 bg-ze-bg-1 border border-ze-border-2 rounded py-0.5 px-1 select-none' data-fixed-mode>{fixedModeLabel}</span>
-								: <ChatModeDropdown className='text-xs text-ze-fg-3 bg-ze-bg-1 border border-ze-border-2 rounded py-0.5 px-1' />)}
-							<ModelDropdown featureName={featureName} className='text-xs text-ze-fg-3 bg-ze-bg-1 rounded' />
-						</div>
+					<div className='flex items-center flex-wrap gap-1 min-w-0'>
+						{featureName === 'Chat' && (fixedModeLabel !== undefined
+							? <span className='text-xs text-ze-fg-3 px-1.5 select-none' data-fixed-mode>{fixedModeLabel}</span>
+							: <ModeMenu variant='docked' />)}
+						<ModelMenu featureName={featureName} />
 					</div>
 				)}
 
@@ -691,16 +546,13 @@ export const SelectedFiles = (
 						<div
 							className={`
 								flex items-center gap-1 relative
-								px-1
+								px-1.5 py-px
 								w-fit h-fit
 								select-none
 								text-xs text-nowrap
-								border rounded-sm
-								${isThisSelectionProspective ? 'bg-ze-bg-1 text-ze-fg-3 opacity-80' : 'bg-ze-bg-1 hover:brightness-95 text-ze-fg-1'}
-								${isThisSelectionProspective
-									? 'border-ze-border-2'
-									: 'border-ze-border-1'
-								}
+								border rounded-[6px]
+								${isThisSelectionProspective ? 'bg-ze-bg-1 text-ze-fg-3 opacity-80 border-dashed' : 'bg-ze-bg-1 hover:brightness-95 text-ze-fg-1'}
+								border-ze-border-2
 								hover:border-ze-border-1
 								transition-all duration-150
 							`}
@@ -749,7 +601,7 @@ export const SelectedFiles = (
 								<div // box for making it easier to click
 									className='cursor-pointer z-1 self-stretch flex items-center justify-center'
 									onClick={(e) => {
-										e.stopPropagation(); // don't open/close selection
+										e.stopPropagation(); // don't open/close selection (or focus the input box)
 										if (type !== 'staging') return;
 										setSelections([...selections.slice(0, i), ...selections.slice(i + 1)])
 									}}
@@ -2654,13 +2506,11 @@ export const ChatThreadView = ({ threadId, variant, inputDisabledReason }: { thr
 
 const ChatThreadViewInner = ({ threadId, variant, inputDisabledReason }: { threadId: string, variant: 'docked' | 'agents', inputDisabledReason?: string }) => {
 	const textAreaRef = useRef<HTMLTextAreaElement | null>(null)
-	const textAreaFnsRef = useRef<TextAreaFns | null>(null)
 
 	const accessor = useAccessor()
 	const commandService = accessor.get('ICommandService')
 	const chatThreadsService = accessor.get('IChatThreadService')
 
-	const settingsState = useSettingsState()
 	// ----- HIGHER STATE -----
 
 	// threads state
@@ -2668,9 +2518,6 @@ const ChatThreadViewInner = ({ threadId, variant, inputDisabledReason }: { threa
 
 	const currentThread = chatThreadsState.allThreads[threadId]
 	const previousMessages = currentThread?.messages ?? []
-
-	const selections = currentThread?.state.stagingSelections ?? []
-	const setSelections = (s: StagingSelectionItem[]) => { chatThreadsService.setCurrentThreadState({ stagingSelections: s }, threadId) }
 
 	// stream state
 	const currThreadStreamState = useChatThreadsStreamState(threadId)
@@ -2681,91 +2528,15 @@ const ChatThreadViewInner = ({ threadId, variant, inputDisabledReason }: { threa
 	// this is just if it's currently being generated, NOT if it's currently running
 	const toolIsGenerating = toolCallSoFar && !toolCallSoFar.isDone // show loading for slow tools (right now just edit)
 
-	// ----- SIDEBAR CHAT state (local) -----
-
-	// state of current message
-	const initVal = ''
-	const [instructionsAreEmpty, setInstructionsAreEmpty] = useState(!initVal)
-
-	const isDisabled = instructionsAreEmpty || !!isFeatureNameDisabled('Chat', settingsState)
-
-	// ⌘⏎ with an empty input accepts this chat's pending changes (edits, creates, deletes), never another chat's
+	// ⌘⏎ outside the input box (e.g. after clicking the review bar) accepts this chat's changes only; the input box
+	// (Composer) handles its own ⌘⏎
 	const threadReview = useThreadReview(threadId)
 	const hasPendingChanges = variant === 'docked' && threadReview.mine.length > 0 // the Agents view has its own review column
 
-	// ----- Move to background (docked panel only) -----
-	const [bgAvailability, setBgAvailability] = useState<{ ok: true } | { ok: false; reason: string } | null>(null)
-	const [isMoving, setIsMoving] = useState(false)
-	useEffect(() => {
-		if (variant !== 'docked') return
-		let cancelled = false
-		accessor.get('IBackgroundAgentsService').availability().then(a => { if (!cancelled) setBgAvailability(a) }).catch(() => { })
-		return () => { cancelled = true }
-	}, [variant, accessor])
-	const hasUserMessage = previousMessages.some(m => m.role === 'user')
-	const moveDisabledReason: string | null = (
-		isRunning ? 'Stop the agent first.'
-			: !hasUserMessage ? 'Nothing to move yet.'
-				: threadReview.mine.length > 0 ? `Accept or reject this agent's pending changes first.`
-					: bgAvailability && !bgAvailability.ok ? bgAvailability.reason
-						: !bgAvailability ? 'Checking whether background agents are available.'
-							: null
-	)
-	const moveToBackground = async () => {
-		if (moveDisabledReason || isMoving) return
-		setIsMoving(true)
-		try {
-			await accessor.get('IBackgroundAgentsService').startAgent('', threadId)
-			chatThreadsService.openNewThread()
-			await commandService.executeCommand('zeroEgress.showAgents')
-		} catch (e) {
-			accessor.get('INotificationService').error(e instanceof Error ? e.message : String(e))
-		} finally {
-			setIsMoving(false)
-		}
-	}
-	const moveToBackgroundRow = variant === 'docked' && previousMessages.length > 0 ? <div className='flex justify-end px-4 pt-1'>
-		<span
-			data-tooltip-id='ze-tooltip'
-			data-tooltip-place='bottom'
-			data-tooltip-content={moveDisabledReason ?? 'Move to background'}
-		>
-			<IconShell1
-				Icon={CloudUpload}
-				disabled={!!moveDisabledReason || isMoving}
-				onClick={moveToBackground}
-				aria-label='Move to background'
-			/>
-		</span>
-	</div> : null
-
 	const sidebarRef = useRef<HTMLDivElement>(null)
 	const scrollContainerRef = useRef<HTMLDivElement | null>(null)
-	const onSubmit = useCallback(async (_forceSubmit?: string) => {
-
-		if (isDisabled && !_forceSubmit) return
-		if (isRunning) return
-
-		// send message to LLM
-		const userMessage = _forceSubmit || textAreaRef.current?.value || ''
-
-		try {
-			await chatThreadsService.addUserMessageAndStreamResponse({ userMessage, threadId })
-		} catch (e) {
-			console.error('Error while sending message in chat:', e)
-		}
-
-		setSelections([]) // clear staging
-		textAreaFnsRef.current?.setValue('')
-		textAreaRef.current?.focus() // focus input after submit
-
-	}, [chatThreadsService, threadId, isDisabled, isRunning, textAreaRef, textAreaFnsRef, setSelections, settingsState])
-
-	const onAbort = async () => {
-		await chatThreadsService.abortRunning(threadId)
-	}
-
-	const keybindingString = accessor.get('IKeybindingService').lookupKeybinding(ZERO_EGRESS_CTRL_L_ACTION_ID)?.getLabel()
+	const composerApiRef = useRef<ComposerApi | null>(null)
+	const onSubmit = (text: string) => { composerApiRef.current?.submit(text) }
 
 	const currCheckpointIdx = chatThreadsState.allThreads[threadId]?.state?.currCheckpointIdx ?? undefined  // if not exist, treat like checkpoint is last message (infinity)
 
@@ -2875,46 +2646,13 @@ const ChatThreadViewInner = ({ threadId, variant, inputDisabledReason }: { threa
 	</ScrollToBottomContainer>
 
 
-	const onChangeText = useCallback((newStr: string) => {
-		setInstructionsAreEmpty(!newStr)
-	}, [setInstructionsAreEmpty])
-	const onKeyDown = useCallback((e: KeyboardEvent<HTMLTextAreaElement>) => {
-		if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && instructionsAreEmpty && hasPendingChanges) {
-			e.preventDefault()
-			threadReview.acceptOrRejectMine('accept')
-		} else if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
-			onSubmit()
-		} else if (e.key === 'Escape' && isRunning) {
-			onAbort()
-		}
-	}, [onSubmit, onAbort, isRunning, instructionsAreEmpty, hasPendingChanges, threadReview])
-
-	const inputChatArea = <ZeroEgressChatArea
-		featureName='Chat'
-		fixedModeLabel={variant === 'agents' ? 'Agent' : undefined}
-		onSubmit={() => onSubmit()}
-		onAbort={onAbort}
-		isStreaming={!!isRunning}
-		isDisabled={isDisabled}
-		showSelections={true}
-		// showProspectiveSelections={previousMessagesHTML.length === 0}
-		selections={selections}
-		setSelections={setSelections}
-		onClickAnywhere={() => { textAreaRef.current?.focus() }}
-	>
-		<ZeroEgressInputBox2
-			enableAtToMention
-			className={`min-h-[81px] px-0.5 py-0.5`}
-			placeholder={`Ask, or @ a file…${keybindingString ? ` (${keybindingString} adds the selection)` : ''}`}
-			onChangeText={onChangeText}
-			onKeyDown={onKeyDown}
-			onFocus={() => { chatThreadsService.setCurrentlyFocusedMessageIdx(undefined, threadId) }}
-			ref={textAreaRef}
-			fnsRef={textAreaFnsRef}
-			multiline={true}
-		/>
-
-	</ZeroEgressChatArea>
+	const composer = <Composer
+		threadId={threadId}
+		variant={variant}
+		inputDisabledReason={inputDisabledReason}
+		textAreaRef={textAreaRef}
+		apiRef={composerApiRef}
+	/>
 
 
 	const isLandingPage = previousMessages.length === 0
@@ -2938,18 +2676,13 @@ const ChatThreadViewInner = ({ threadId, variant, inputDisabledReason }: { threa
 
 
 
-	const threadPageInput = <div key={'input' + threadId}>
-		{variant === 'agents' ? null : <div className='px-4'>
-			<ReviewBar threadId={threadId} />
-		</div>}
-		<div className='px-2 pb-2'>
-			{inputDisabledReason ? <div className='px-2 py-2 text-sm text-ze-fg-3 select-none'>{inputDisabledReason}</div> : inputChatArea}
-		</div>
+	const threadPageInput = <div key={'input' + threadId} className='px-2 pb-2'>
+		{composer}
 	</div>
 
 	const landingPageInput = <div>
 		<div className='pt-8'>
-			{inputChatArea}
+			{composer}
 		</div>
 	</div>
 
@@ -2998,7 +2731,6 @@ const ChatThreadViewInner = ({ threadId, variant, inputDisabledReason }: { threa
 		className='w-full h-full flex flex-col overflow-hidden'
 		onKeyDown={onThreadKeyDown}
 	>
-		{moveToBackgroundRow}
 		<ErrorBoundary>
 			{messagesHTML}
 		</ErrorBoundary>

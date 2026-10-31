@@ -13,44 +13,21 @@ import { useAccessor, useChatThreadsState, useFullChatThreadsStreamState } from 
 // no runtime imports from vs/ here: the bundle flattens this folder, so a relative path one level deeper breaks
 import { threadTitleOf } from '../chatTitle.js';
 import { HistoryMenu } from './HistoryMenu.js';
+import { MenuRow, Popover } from './Popover.js';
 import { RenameInput, SmallIconButton } from './TabParts.js';
 
-const useCloseOnOutsideClick = (open: boolean, onClose: () => void) => {
-	const ref = useRef<HTMLDivElement>(null);
-	useEffect(() => {
-		if (!open) {
-			return;
-		}
-		const onMouseDown = (e: MouseEvent) => {
-			if (ref.current && !ref.current.contains(e.target as Node)) {
-				onClose();
-			}
-		};
-		document.addEventListener('mousedown', onMouseDown);
-		return () => document.removeEventListener('mousedown', onMouseDown);
-	}, [open, onClose]);
-	return ref;
-};
-
-const MoreMenu = ({ threadId, onRename, onClose }: { threadId: string; onRename: () => void; onClose: () => void }) => {
+const MoreMenu = ({ anchor, threadId, onRename, onClose }: { anchor: HTMLElement | null; threadId: string; onRename: () => void; onClose: () => void }) => {
 	const accessor = useAccessor();
 	const chatThreadsService = accessor.get('IChatThreadService');
 	const [confirmDelete, setConfirmDelete] = useState(false);
-	const ref = useCloseOnOutsideClick(true, onClose);
 
-	const item = 'w-full text-left px-2 py-1 rounded text-sm hover:bg-ze-bg-2-hover';
-	return <div
-		ref={ref}
-		role='menu'
-		className='absolute right-1 top-full mt-1 z-[100] w-40 p-1 flex flex-col rounded border border-ze-border-3 bg-ze-bg-1 shadow-md text-ze-fg-1'
-		onKeyDown={e => { if (e.key === 'Escape') { e.stopPropagation(); onClose(); } }}
-	>
-		<button type='button' role='menuitem' className={item} onClick={() => { onClose(); onRename(); }}>Rename</button>
-		<button type='button' role='menuitem' className={item} onClick={() => { onClose(); chatThreadsService.duplicateThread(threadId); }}>Duplicate</button>
+	return <Popover anchor={anchor} open={true} onClose={onClose} placement='bottom-end' className='w-40' label='More actions'>
+		<MenuRow onSelect={() => { onClose(); onRename(); }}>Rename</MenuRow>
+		<MenuRow onSelect={() => { onClose(); chatThreadsService.duplicateThread(threadId); }}>Duplicate</MenuRow>
 		{confirmDelete
-			? <button type='button' role='menuitem' className={`${item} text-[var(--vscode-errorForeground)]`} onClick={() => { onClose(); chatThreadsService.deleteThread(threadId).catch(e => console.error('Error while deleting a chat:', e)); }}>Confirm delete</button>
-			: <button type='button' role='menuitem' className={item} onClick={() => setConfirmDelete(true)}>Delete</button>}
-	</div>;
+			? <MenuRow danger onSelect={() => { onClose(); chatThreadsService.deleteThread(threadId).catch(e => console.error('Error while deleting a chat:', e)); }}>Confirm delete</MenuRow>
+			: <MenuRow onSelect={() => setConfirmDelete(true)}>Delete</MenuRow>}
+	</Popover>;
 };
 
 export const ChatTabs = () => {
@@ -62,6 +39,8 @@ export const ChatTabs = () => {
 	const [renamingId, setRenamingId] = useState<string | null>(null);
 	const [openMenu, setOpenMenu] = useState<'history' | 'more' | null>(null);
 	const closeMenu = useCallback(() => setOpenMenu(null), []);
+	const [historyButton, setHistoryButton] = useState<HTMLButtonElement | null>(null);
+	const [moreButton, setMoreButton] = useState<HTMLButtonElement | null>(null);
 
 	// keep the current tab in view when it changes (new chat, history, keyboard)
 	const tabRefs = useRef<Map<string, HTMLDivElement>>(new Map());
@@ -108,10 +87,10 @@ export const ChatTabs = () => {
 		</div>
 		<div className='flex items-center gap-0.5 shrink-0'>
 			<SmallIconButton Icon={Plus} label='New chat' onClick={() => { setOpenMenu(null); chatThreadsService.openNewThread(); }} />
-			<SmallIconButton Icon={History} label='History' onClick={() => setOpenMenu(m => m === 'history' ? null : 'history')} />
-			<SmallIconButton Icon={Ellipsis} label='More actions' onClick={() => setOpenMenu(m => m === 'more' ? null : 'more')} />
+			<SmallIconButton Icon={History} label='History' buttonRef={setHistoryButton} expanded={openMenu === 'history'} onClick={() => setOpenMenu(m => m === 'history' ? null : 'history')} />
+			<SmallIconButton Icon={Ellipsis} label='More actions' buttonRef={setMoreButton} expanded={openMenu === 'more'} onClick={() => setOpenMenu(m => m === 'more' ? null : 'more')} />
 		</div>
-		{openMenu === 'history' ? <HistoryMenu onClose={closeMenu} /> : null}
-		{openMenu === 'more' ? <MoreMenu threadId={currentThreadId} onRename={() => setRenamingId(currentThreadId)} onClose={closeMenu} /> : null}
+		{openMenu === 'history' ? <HistoryMenu anchor={historyButton} onClose={closeMenu} /> : null}
+		{openMenu === 'more' ? <MoreMenu anchor={moreButton} threadId={currentThreadId} onRename={() => setRenamingId(currentThreadId)} onClose={closeMenu} /> : null}
 	</div>;
 };
