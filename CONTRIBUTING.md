@@ -121,13 +121,20 @@ The egress tests live in:
 
 After CI passes on a push to `main`, [Bump and release](.github/workflows/bump-release.yml)
 patch-bumps `product.json` (`zeroEgressVersion` 0.1.0 → 0.1.1, and the
-`zeroEgressRelease` counter), commits `chore: release vX.Y.Z`, pushes the
-tag, and starts the [Release](.github/workflows/release.yml) workflow with
+`zeroEgressRelease` counter), commits `chore: release vX.Y.Z`, pushes only
+the tag, and starts the [Release](.github/workflows/release.yml) workflow with
 `publish=true`. That builds the installers and publishes the GitHub Release.
 
+`main` only takes changes through pull requests, so the release commit is
+never pushed to it: it lives on its tag. `product.json` on `main` stays at an
+older version, and each bump starts from the newer of `main`'s version and the
+newest release tag's. To move to a new minor or major version, raise
+`zeroEgressVersion` on `main` in a pull request (e.g. to 0.2.0); the next
+release is then 0.2.1.
+
 To skip a bump for one merge, include `[skip release]` in the merge commit
-message. Manual tag pushes (`git tag vX.Y.Z && git push origin vX.Y.Z`) still
-work as before.
+message. A manual tag must point at a commit whose `product.json` says that
+version (Release checks it).
 
 ## The gates
 

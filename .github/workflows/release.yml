@@ -8,7 +8,7 @@ name: Release
 #
 # Bump and release (bump-release.yml) also starts this workflow after a green
 # CI on main, with publish=true on the new tag (GITHUB_TOKEN tag pushes do not
-# re-fire on.push).
+# re-fire on.push). That tag points at a release commit that is not on main.
 #
 # Before anything is published, smoke jobs install each package (silent Inno
 # Setup on Windows, apt for the .deb), launch it behind a logging proxy and
