@@ -538,9 +538,11 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
+      # Only the installers: the smoke jobs upload their logs as artifacts too (smoke-*).
       - uses: actions/download-artifact@v8
         with:
           path: dist
+          pattern: '{mac-*,win-*,linux-*}'
           merge-multiple: true
       - name: Check the artifact names
         env:
