@@ -13,3 +13,5 @@ export type { ChatMode, FeatureName, ModelSelection, ProviderName } from '../../
 export { modelFilterOfFeatureName } from '../../../../common/zeroEgressSettingsService.js';
 export type { ModelOption } from '../../../../common/zeroEgressSettingsService.js';
 export { getIsReasoningEnabledState, getModelCapabilities } from '../../../../common/modelCapabilities.js';
+export { promptWithContext } from '../../../../common/promptContext.js';
+export type { PromptContextItem } from '../../../../common/promptContext.js';

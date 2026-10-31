@@ -23,8 +23,10 @@ export const modeOptions: readonly { mode: ChatMode; label: string; detail: stri
 
 export type RunIn = 'folder' | 'background';
 
-/** The "Run in" section. Left out when the section is hidden (the Agents view, or background agents unavailable). */
+/** The "Run in" section (docked panel only; the Agents view leaves it out). */
 export interface RunInSection {
+	/** why no background agent can start here (checking, or not a git folder); null when they can */
+	readonly unavailableReason: string | null;
 	/** the chat has no user message yet: Background only changes where the first message goes */
 	readonly isEmptyChat: boolean;
 	readonly value: RunIn;
@@ -97,6 +99,8 @@ export const ModeMenu = ({ variant, runIn }: { variant: 'docked' | 'agents'; run
 				{runIn.isEmptyChat
 					? <MenuRow
 						checked={runIn.value === 'background'}
+						disabled={!!runIn.unavailableReason}
+						note={runIn.unavailableReason ?? undefined}
 						onSelect={() => { runIn.onChange('background'); close(); }}
 					>
 						<span>Background</span>
@@ -105,7 +109,8 @@ export const ModeMenu = ({ variant, runIn }: { variant: 'docked' | 'agents'; run
 					: <MenuRow
 						checked={false}
 						disabled={!!runIn.moveDisabledReason || runIn.isMoving}
-						tooltip={runIn.moveDisabledReason ?? 'Move this chat to a background agent'}
+						note={runIn.moveDisabledReason ?? undefined}
+						tooltip={runIn.moveDisabledReason ? undefined : 'Move this chat to a background agent'}
 						onSelect={() => { close(); runIn.onMove(); }}
 					>
 						<span>Background</span>

@@ -5,7 +5,7 @@
 
 // The one menu primitive of the chat panel: anchored to a button, positioned with fixed strategy (so a scrolling or
 // clipping parent never cuts it off), closed by Escape or a click outside it and its anchor, and navigable with the
-// arrow keys over its rows (anything with a menuitem role that isn't aria-disabled). It renders in place, not in a
+// arrow keys over its rows (anything with a menuitem role, disabled ones included). It renders in place, not in a
 // portal, so it stays inside the panel's style scope.
 
 import React, { useEffect, useRef } from 'react';
@@ -14,12 +14,14 @@ import type { Placement } from '@floating-ui/react';
 
 const ITEM_SELECTOR = '[role="menuitem"],[role="menuitemradio"],[role="menuitemcheckbox"]';
 
-const itemsOf = (root: HTMLElement) =>
-	Array.from(root.querySelectorAll<HTMLElement>(ITEM_SELECTOR)).filter(el => el.getAttribute('aria-disabled') !== 'true');
+// disabled rows stay reachable, so the keyboard can land on one and read why it is disabled (Enter does nothing there)
+const itemsOf = (root: HTMLElement) => Array.from(root.querySelectorAll<HTMLElement>(ITEM_SELECTOR));
 
 /** Menu rows for a Popover: a full-width button with the menu row look. `checked` makes it a radio row. */
-export const MenuRow = ({ children, onSelect, checked, disabled, danger, tooltip, className = '' }: {
+export const MenuRow = ({ children, onSelect, checked, disabled, danger, tooltip, note, className = '' }: {
 	children: React.ReactNode;
+	/** muted text on its own line under the row (e.g. why it is disabled), read with the row */
+	note?: string;
 	/** a destructive action (shown in the error color) */
 	danger?: boolean;
 	onSelect: () => void;
@@ -38,14 +40,16 @@ export const MenuRow = ({ children, onSelect, checked, disabled, danger, tooltip
 		data-tooltip-id={tooltip ? 'ze-tooltip' : undefined}
 		data-tooltip-content={tooltip}
 		data-tooltip-place='right'
-		className={`w-full flex items-baseline gap-2 px-2 py-1 rounded-[6px] text-left text-sm outline-none
-			${disabled ? 'text-ze-fg-3 opacity-70 cursor-default' : 'cursor-pointer hover:bg-[var(--vscode-list-hoverBackground)] focus:bg-[var(--vscode-list-hoverBackground)]'}
+		className={`w-full flex flex-wrap items-baseline gap-x-2 px-2 py-1 rounded-[6px] text-left text-sm outline-none
+			focus:bg-[var(--vscode-list-hoverBackground)]
+			${disabled ? 'text-ze-fg-3 cursor-default' : 'cursor-pointer hover:bg-[var(--vscode-list-hoverBackground)]'}
 			${disabled ? '' : danger ? 'text-[var(--vscode-errorForeground)]' : 'text-ze-fg-1'}
 			${checked ? 'bg-[var(--vscode-list-inactiveSelectionBackground)]' : ''}
 			${className}`}
 		onClick={e => { e.preventDefault(); if (!disabled) { onSelect(); } }}
 	>
 		{children}
+		{note ? <span className='basis-full text-xs text-ze-fg-3 whitespace-normal'>{note}</span> : null}
 	</button>;
 };
 

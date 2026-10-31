@@ -2647,6 +2647,7 @@ const ChatThreadViewInner = ({ threadId, variant, inputDisabledReason }: { threa
 
 
 	const composer = <Composer
+		key={threadId} // a new chat starts with fresh composer state (Run in, draft flags)
 		threadId={threadId}
 		variant={variant}
 		inputDisabledReason={inputDisabledReason}

@@ -12,9 +12,10 @@ import React, { KeyboardEvent, useCallback, useEffect, useState } from 'react';
 import { Settings } from 'lucide-react';
 import { useAccessor, useChatThreadsState, useChatThreadsStreamState, useSettingsState } from '../../util/services.js';
 import { TextAreaFns, ZeroEgressInputBox2 } from '../../util/inputs.js';
-import { ButtonStop, ButtonSubmit, SelectedFiles } from '../SidebarChat.js';
+import { ButtonStop, ButtonSubmit, getRelative, SelectedFiles } from '../SidebarChat.js';
 // no runtime imports from vs/ here: the bundle flattens this folder, so a relative path one level deeper breaks
-import { isFeatureNameDisabled, ZERO_EGRESS_CTRL_L_ACTION_ID, ZERO_EGRESS_SHOW_AGENTS_ACTION_ID } from '../composerDeps.js';
+import { isFeatureNameDisabled, promptWithContext, ZERO_EGRESS_CTRL_L_ACTION_ID, ZERO_EGRESS_SHOW_AGENTS_ACTION_ID } from '../composerDeps.js';
+import type { PromptContextItem } from '../composerDeps.js';
 import type { StagingSelectionItem } from '../../../../../common/chatThreadServiceTypes.js';
 import { useThreadReview } from '../useThreadReview.js';
 import { ModeMenu, RunIn, RunInSection } from './ModeMenu.js';
@@ -89,7 +90,11 @@ export const Composer = ({ threadId, variant, inputDisabledReason, textAreaRef, 
 			setIsMoving(false);
 		}
 	};
-	const runInSection: RunInSection | undefined = variant === 'docked' && bgAvailability?.ok ? {
+	const bgUnavailableReason = !bgAvailability ? 'Checking whether background agents are available.'
+		: !bgAvailability.ok ? bgAvailability.reason
+			: null;
+	const runInSection: RunInSection | undefined = variant === 'docked' ? {
+		unavailableReason: bgUnavailableReason,
 		isEmptyChat: !hasUserMessage,
 		value: runIn,
 		onChange: setRunIn,
@@ -113,9 +118,16 @@ export const Composer = ({ threadId, variant, inputDisabledReason, textAreaRef, 
 		if (startsInBackground) {
 			const prompt = userMessage.trim();
 			if (!prompt) { return; }
+			// the agent's first message is plain text: the staged chips go into it as workspace-relative paths
+			const context: PromptContextItem[] = selections.map(sel => {
+				const path = getRelative(sel.uri, accessor) ?? sel.uri.fsPath;
+				return sel.type === 'Folder' ? { kind: 'folder', path }
+					: sel.type === 'CodeSelection' ? { kind: 'selection', path, range: sel.range }
+						: { kind: 'file', path };
+			});
 			setIsStarting(true);
 			try {
-				await accessor.get('IBackgroundAgentsService').startAgent(prompt);
+				await accessor.get('IBackgroundAgentsService').startAgent(promptWithContext(prompt, context));
 				clearInput();
 				setRunIn('folder');
 				await commandService.executeCommand(ZERO_EGRESS_SHOW_AGENTS_ACTION_ID);
