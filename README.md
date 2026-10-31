@@ -5,17 +5,19 @@
 [![License](https://img.shields.io/github/license/sadayamuthu/zero-egress)](LICENSE.txt)
 
 An AI code editor that works offline. ZeroEgress has chat, an agent mode,
-quick edit and autocomplete, and talks only to model servers you run
-yourself: Ollama, vLLM, LM Studio or oMLX on your laptop, or one on your own
-network. It connects to loopback and to the servers you configure, and
-nothing else. Telemetry, auto-update, the online extension marketplace,
-analytics and cloud sign-in are removed. A runtime guard blocks every other
-connection and logs it, so you can see what was stopped.
+background agents, quick edit and autocomplete, and talks only to model
+servers you run yourself: Ollama, vLLM, LM Studio or oMLX on your laptop,
+or one on your own network. It connects to loopback and to the servers you
+configure, and nothing else. Telemetry, auto-update, the online extension
+marketplace, analytics and cloud sign-in are removed. A runtime guard
+blocks every other connection and logs it, so you can see what was
+stopped.
 
-![First run detects a local Ollama; chat with Cmd+L; Quick Edit with Cmd+K and accept the diff; Settings shows the internet-endpoint warning; an autocomplete suggestion accepted with Tab; a blocked request in the ZeroEgress: Network log](demo/demo.gif)
+![First run finds a local Ollama and recommends a model; the side bar's views on top with the rest under a menu; the Local pill; Quick Edit with Cmd+K, reviewed in place; agent mode with Cmd+L asks before it edits and every change waits for review; a background agent works in its own git worktree and its changes are accepted one by one; Settings shows the Egress Proof card](demo/demo.gif)
 
-[Full-quality video](demo/zero-egress-demo.mp4) (MP4, 86 s). The model is
-`qwen2.5-coder:7b` in Ollama on an M3 Max.
+[Full-quality video](demo/zero-egress-demo.mp4) (MP4, 85 s). The model is
+`qwen2.5-coder:14b` in Ollama on an M3 Max. Waits for the model are cut
+out, and the captions and pointer were added to the recording.
 
 ## What never leaves your machine
 
@@ -39,7 +41,7 @@ limits, and how to check it yourself.
 
 Download from the
 [latest release](https://github.com/sadayamuthu/zero-egress/releases/latest).
-`<v>` below is the version number, for example `0.1.0`.
+`<v>` below is the version number, for example `0.1.7`.
 
 **Homebrew** (macOS): coming soon. The `sadayamuthu/tap` cask does not exist
 yet; use the `.dmg` below.
@@ -60,8 +62,9 @@ sudo apt install ./zero-egress_<v>_amd64.deb
 
 Do not install the **0.1.0** `.deb`: it registers Microsoft's apt repository
 (see [the advisory](docs/release/v0.1.0-deb-advisory.md) for what it did and
-how to clean up). On Debian and Ubuntu, use the AppImage or the `.tar.gz`
-from 0.1.0 until a later release ships a fixed `.deb`.
+how to clean up). The `.deb` from 0.1.7 on is fixed: before each release is
+published, its smoke test installs the `.deb` and fails if a Microsoft apt
+source appears.
 
 **Fedora / RHEL** (`.rpm`, x86_64):
 
@@ -114,13 +117,21 @@ Local Ollama, in three steps:
 2. Pull a coding model:
 
    ```sh
-   ollama pull qwen2.5-coder:7b
+   ollama pull qwen2.5-coder:14b
    ```
 
-3. Open ZeroEgress. The first-run screen finds Ollama at
-   `http://127.0.0.1:11434` and lists its models. Press **Cmd+L**
-   (**Ctrl+L** on Windows and Linux) to chat, and **Cmd+K** (**Ctrl+K**) to
-   edit the selected code.
+   For agent mode and background agents, use 14B or larger. The agent edits
+   files through tool calls, and in our testing `qwen2.5-coder:7b` often
+   skipped the call or got the text it was replacing wrong. A 7B model is
+   enough for chat, Quick Edit and autocomplete (`qwen2.5-coder:7b`, 4.7 GB;
+   the 14B is 9 GB).
+
+3. Open ZeroEgress. The first run takes three steps: a welcome screen;
+   **Connect a model**, which finds Ollama at `http://127.0.0.1:11434`, lists
+   its models and recommends one for agent work; and an optional transfer of
+   settings from VS Code or Windsurf. Then press **Cmd+L** (**Ctrl+L** on
+   Windows and Linux) to chat, and **Cmd+K** (**Ctrl+K**) to edit the
+   selected code.
 
 **What the first run probes.** To find model servers, the first-run screen
 asks for a model list at three loopback addresses only: Ollama at
@@ -140,6 +151,25 @@ gear at the top of the chat panel, or run **ZeroEgress: Open Settings**
 from the Command Palette. Endpoints are under **Models**,
 where **Use for** picks the model for chat, autocomplete and quick edit.
 Autocomplete is off by default; turn it on under **Editor**.
+
+## The layout
+
+- **Title bar:** an **Editor** / **Agents** switch, the search box, and a
+  pill that shows where ZeroEgress may connect: **Local** (this machine
+  only), **LAN** or **Internet**. Click it for the details.
+- **Side bar:** Explorer, Search and Source Control sit as icons on top of
+  the side bar; the other views (Run and Debug, Extensions, …) are under the
+  **⌄** menu next to them.
+- **Chat panel** (right): **Agent** or **Chat** mode and the model picker
+  under the input. When the agent wants to edit a file or run a command, it
+  asks first (**Approve** / **Cancel**) unless you turned on auto-approve
+  for that kind of action.
+- **Review:** changes from the agent or Quick Edit show in the editor as a
+  diff, each with **Accept** and **Reject**, and the review bar above the
+  chat input has **Accept all** and **Reject all**. On macOS, Cmd+Y / Cmd+N
+  accept or reject one change and Option+Cmd+Y / Option+Cmd+N a whole file.
+- **Home:** with no folder open, a prompt box, **Open folder** and **Clone
+  repo**.
 
 ## Use a model server on your network
 
@@ -235,9 +265,16 @@ the **Move to background** button in the chat panel to hand over the
 current conversation. They need a single folder inside a git repository.
 
 When an agent finishes, review its changes in the Agents view and accept
-or reject them. If you changed lines that a change touches, that change
-is a conflict and is never applied silently: choose **Keep mine** or
-**Use agent's**.
+or reject them, one change at a time (**Accept ⌘Y** / **Reject ⌘N** on
+macOS), per file, or all at once (**Accept all**, Cmd+Enter or
+Ctrl+Enter). If you changed lines that a change touches, that change is a
+conflict and is never applied silently: choose **Keep mine** or **Use
+agent's**.
+
+![The Agents view: the agent list on the left, the agent's conversation in the middle, and its changes on the right, each with Accept and Reject](demo/agents-review.png)
+
+Background agents need a model that handles tool calls well; see the note
+under [Connect a model](#connect-a-model).
 
 To prepare a fresh worktree (for example to install dependencies), set
 `zeroEgress.agents.setupCommand`; it runs in the agent's folder after the
