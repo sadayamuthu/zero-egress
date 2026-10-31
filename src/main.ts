@@ -20,6 +20,7 @@ import { resolveNLSConfiguration } from './vs/base/node/nls.js';
 import { getUNCHost, addUNCHostToAllowlist } from './vs/base/node/unc.js';
 import { INLSConfiguration } from './vs/nls.js';
 import { NativeParsedArgs } from './vs/platform/environment/common/argv.js';
+import { seedSpellcheckOff } from './vs/workbench/contrib/zeroEgress/node/spellcheckPrefs.js'; // ZeroEgress
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -65,6 +66,14 @@ if (process.platform === 'win32') {
 	}
 }
 app.setPath('userData', userDataPath);
+
+// ZeroEgress: start Electron's built-in spell checker with no dictionaries, before the default session
+// (which reads this file) is created; otherwise it downloads one from redirector.gvt1.com at startup.
+try {
+	seedSpellcheckOff(path.join(userDataPath, 'Preferences'), fs);
+} catch (error) {
+	console.error('[ZeroEgress] could not seed spell-check preferences', error);
+}
 
 // Resolve code cache path
 const codeCachePath = getCodeCachePath();

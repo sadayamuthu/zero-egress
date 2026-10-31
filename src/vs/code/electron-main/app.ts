@@ -204,6 +204,10 @@ export class CodeApplication extends Disposable {
 		this.egressGuard = this._register(new EgressGuard(this.egressLedger.aggregator)); // ZeroEgress
 		this._register(this.egressGuard.installNodeHooks());
 		this._register(this.egressGuard.onDidBlock(e => this.logService.warn(`[ZeroEgress] blocked connection to ${describeDestination(e.url)} from ${e.origin}`)));
+		// ZeroEgress: the built-in spell checker downloads Hunspell dictionaries outside the webRequest filter.
+		// main.ts seeds it off before the session exists; this keeps it off, and any download pointed at nothing.
+		session.defaultSession.setSpellCheckerEnabled(false); // ZeroEgress
+		session.defaultSession.setSpellCheckerDictionaryDownloadURL('http://127.0.0.1:9/'); // ZeroEgress
 
 		this.configureSession();
 		this.registerListeners();
