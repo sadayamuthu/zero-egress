@@ -297,6 +297,9 @@ class ZeroEgressSettingsService extends Disposable implements IZeroEgressSetting
 			
 			// add autoAcceptLLMChanges feature
 			if (readS.globalSettings.autoAcceptLLMChanges === undefined) readS.globalSettings.autoAcceptLLMChanges = false;
+
+			// add useCommandAllowList feature (default on)
+			if (readS.globalSettings.useCommandAllowList === undefined) readS.globalSettings.useCommandAllowList = true;
 		}
 		catch (e) {
 			readS = defaultState()

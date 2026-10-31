@@ -19,6 +19,7 @@ import { IZeroEgressSettingsService } from '../common/zeroEgressSettingsService.
 import { approvalTypeOfBuiltinToolName, BuiltinToolCallParams, ToolCallParams, ToolName, ToolResult } from '../common/toolsServiceTypes.js';
 import { IToolsService } from './toolsService.js';
 import { IChangeOwnersService, OwnershipConflictError } from './changeOwnersService.js';
+import { ICommandAllowListService } from './commandAllowListService.js';
 import { restoreTargets } from '../common/reviewScope.js';
 import { basename } from '../../../../base/common/resources.js';
 import { IPendingFileOpsService } from './pendingFileOpsService.js';
@@ -365,6 +366,7 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 		@ITerminalToolService private readonly _terminalToolService: ITerminalToolService,
 		@IConfigurationService private readonly _configurationService: IConfigurationService,
 		@IChangeOwnersService private readonly _changeOwnersService: IChangeOwnersService,
+		@ICommandAllowListService private readonly _commandAllowListService: ICommandAllowListService,
 		@IPendingFileOpsService private readonly _pendingFileOpsService: IPendingFileOpsService,
 	) {
 		super()
@@ -702,6 +704,12 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 
 
 	/** the path a docked file tool writes, which another chat's unreviewed changes can block */
+	/** run_command / run_persistent_command only: the command is on this workspace's allow-list. */
+	private _isAllowListedCommand(toolName: ToolName, params: ToolCallParams<ToolName>): boolean {
+		if (toolName !== 'run_command' && toolName !== 'run_persistent_command') { return false }
+		return this._commandAllowListService.isAllowed((params as { command: string }).command)
+	}
+
 	private _writeTargetOf(toolName: ToolName, params: ToolCallParams<ToolName>): URI | undefined {
 		if (toolName === 'edit_file' || toolName === 'rewrite_file' || toolName === 'create_file_or_folder' || toolName === 'delete_file_or_folder') {
 			return (params as BuiltinToolCallParams['edit_file']).uri
@@ -775,6 +783,7 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 			if (approvalType) {
 				// background agents never ask for edits, creates and deletes: they land in the worktree and are reviewed later
 				const autoApprove = (toolCtx.kind === 'background' && approvalType === 'edits') || this._settingsService.state.globalSettings.autoApprove[approvalType]
+					|| (approvalType === 'terminal' && this._settingsService.state.globalSettings.useCommandAllowList && this._isAllowListedCommand(toolName, toolParams))
 				// add a tool_request because we use it for UI if a tool is loading (this should be improved in the future)
 				this._addMessageToThread(threadId, { role: 'tool', type: 'tool_request', content: '(Awaiting user permission...)', result: null, name: toolName, params: toolParams, id: toolId, rawParams: opts.unvalidatedToolParams, mcpServerName })
 				if (!autoApprove) {
