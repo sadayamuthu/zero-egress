@@ -349,6 +349,8 @@ jobs:
         run: bash build/zero-egress/build-linux.sh x64
         env:
           NODE_OPTIONS: --max-old-space-size=8192
+          # The .deb step fetches its sysroot through api.github.com, which rate-limits anonymous calls (403).
+          GITHUB_TOKEN: ${{ github.token }}   # see build-mac
       - uses: actions/upload-artifact@v7
         with:
           name: linux-x64
