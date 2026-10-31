@@ -17,7 +17,9 @@ import { Action2, registerAction2 } from '../../../../platform/actions/common/ac
 import { ContextKeyExpr, IContextKey, IContextKeyService, RawContextKey } from '../../../../platform/contextkey/common/contextkey.js';
 import { InputFocusedContext } from '../../../../platform/contextkey/common/contextkeys.js';
 import { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
+import { ServiceCollection } from '../../../../platform/instantiation/common/serviceCollection.js';
 import { KeybindingWeight } from '../../../../platform/keybinding/common/keybindingsRegistry.js';
+import { emptyProgressRunner, IEditorProgressService } from '../../../../platform/progress/common/progress.js';
 import { IWorkbenchContribution, registerWorkbenchContribution2, WorkbenchPhase } from '../../../common/contributions.js';
 import { NotificationsToastsVisibleContext } from '../../../common/contextkeys.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
@@ -110,7 +112,21 @@ class AgentsViewContribution extends Disposable implements IWorkbenchContributio
 		}
 		if (!this._mounted) {
 			this._mounted = true;
-			this._instantiationService.invokeFunction(accessor => {
+			// The overlay sits outside every composite part, so nothing provides
+			// IEditorProgressService to the code editors the agent thread renders
+			// (the side bar gets one from its composite part). Provide a no-op one.
+			const instantiationService = this._register(this._instantiationService.createChild(new ServiceCollection(
+				[IEditorProgressService, new class implements IEditorProgressService {
+					_serviceBrand: undefined;
+					show(_total: unknown, _delay?: unknown) {
+						return emptyProgressRunner;
+					}
+					async showWhile(promise: Promise<unknown>, _delay?: number): Promise<void> {
+						await promise;
+					}
+				}],
+			)));
+			instantiationService.invokeFunction(accessor => {
 				const mounted = mountAgentsView(this._root, accessor, { bridge: this._bridge });
 				this._register(toDisposable(() => mounted?.dispose()));
 			});
