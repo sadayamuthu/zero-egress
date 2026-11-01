@@ -10,9 +10,10 @@ import React, { useState } from 'react';
 import { Settings, X } from 'lucide-react';
 import { useAccessor, useCommandAllowList, useSettingsState } from '../../util/services.js';
 // no runtime imports from vs/ here: the bundle flattens this folder, so a relative path one level deeper breaks
-import { settingsForTerminalAutoRun, terminalAutoRunOf, ZERO_EGRESS_OPEN_SETTINGS_ACTION_ID } from '../composerDeps.js';
+import { contextPercent, contextWindowK, settingsForTerminalAutoRun, terminalAutoRunOf, ZERO_EGRESS_OPEN_SETTINGS_ACTION_ID } from '../composerDeps.js';
 import type { TerminalAutoRun } from '../composerDeps.js';
 import { MenuHeading, MenuRow, Popover } from './Popover.js';
+import { useContextUse } from './ContextMeter.js';
 import { Segmented } from './Segmented.js';
 
 const SettingRow = ({ label, children }: { label: string; children: React.ReactNode }) => {
@@ -29,7 +30,8 @@ const terminalOptions: readonly { value: TerminalAutoRun; label: string }[] = [
 ];
 const onOffOptions = [{ value: 'off', label: 'Off' }, { value: 'on', label: 'On' }] as const;
 
-export const AgentSettingsMenu = () => {
+export const AgentSettingsMenu = ({ threadId }: { threadId: string }) => {
+	const contextUse = useContextUse(threadId);
 	const accessor = useAccessor();
 	const settingsService = accessor.get('IZeroEgressSettingsService');
 	const commandAllowListService = accessor.get('ICommandAllowListService');
@@ -97,6 +99,13 @@ export const AgentSettingsMenu = () => {
 						><X size={11} /></button>
 					</div>)}
 			</div> : null}
+			{contextUse ? <>
+				<MenuHeading>Context</MenuHeading>
+				<div className='px-2 py-1 text-sm text-ze-fg-1'>{contextUse.estimated ? '≈' : ''}{contextPercent(contextUse)}% of {contextWindowK(contextUse)}k used</div>
+				<MenuRow disabled tooltip='Coming soon' onSelect={() => { /* wired with the Compact action */ }}>
+					<span>Compact</span>
+				</MenuRow>
+			</> : null}
 			<MenuRow onSelect={() => { close(); commandService.executeCommand(ZERO_EGRESS_OPEN_SETTINGS_ACTION_ID); }}>
 				<span>All settings…</span>
 			</MenuRow>

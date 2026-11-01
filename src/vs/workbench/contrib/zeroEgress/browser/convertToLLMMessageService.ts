@@ -1,4 +1,5 @@
 import { Disposable } from '../../../../base/common/lifecycle.js';
+import { CHARS_PER_TOKEN } from '../common/contextUse.js';
 import { deepClone } from '../../../../base/common/objects.js';
 import { IModelService } from '../../../../editor/common/services/model.js';
 import { registerSingleton, InstantiationType } from '../../../../platform/instantiation/common/extensions.js';
@@ -41,7 +42,6 @@ type SimpleLLMMessage = {
 
 
 
-const CHARS_PER_TOKEN = 4 // assume abysmal chars per token
 const TRIM_TO_LEN = 120
 
 

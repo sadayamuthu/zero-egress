@@ -14,6 +14,8 @@ export { modelFilterOfFeatureName } from '../../../../common/zeroEgressSettingsS
 export type { ModelOption } from '../../../../common/zeroEgressSettingsService.js';
 export { getIsReasoningEnabledState, getModelCapabilities } from '../../../../common/modelCapabilities.js';
 export { optionsForThinkingLevel, thinkingButtonLabel, thinkingLabel, thinkingLevelOf, thinkingLevelsOf } from '../../../../common/thinkingLevel.js';
+export { contextPercent, contextUseOf, contextWindowK, formatContextUse } from '../../../../common/contextUse.js';
+export type { ContextUse } from '../../../../common/contextUse.js';
 export { promptWithContext } from '../../../../common/promptContext.js';
 export type { PromptContextItem } from '../../../../common/promptContext.js';
 export { canAllowList, normalizeCommand, terminalAutoRunOf, settingsForTerminalAutoRun } from '../../../../common/commandAllowList.js';

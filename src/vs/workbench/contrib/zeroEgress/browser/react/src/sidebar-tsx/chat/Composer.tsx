@@ -18,6 +18,7 @@ import type { PromptContextItem } from '../composerDeps.js';
 import type { StagingSelectionItem } from '../../../../../common/chatThreadServiceTypes.js';
 import { useThreadReview } from '../useThreadReview.js';
 import { AgentSettingsMenu } from './AgentSettingsMenu.js';
+import { ContextMeter } from './ContextMeter.js';
 import { ModeMenu, RunIn, RunInSection } from './ModeMenu.js';
 import { ModelMenu } from './ModelMenu.js';
 import { ReviewBar } from './ReviewBar.js';
@@ -217,8 +218,8 @@ export const Composer = ({ threadId, variant, inputDisabledReason, textAreaRef, 
 					<ModelMenu featureName='Chat' />
 				</div>
 				<div className='flex items-center gap-1 shrink-0 ml-auto'>
-					<span data-slot='context-meter' />
-					<AgentSettingsMenu />
+					<ContextMeter threadId={threadId} />
+					<AgentSettingsMenu threadId={threadId} />
 					{isRunning
 						? <ButtonStop onClick={onAbort} aria-label='Stop' />
 						: startsInBackground
