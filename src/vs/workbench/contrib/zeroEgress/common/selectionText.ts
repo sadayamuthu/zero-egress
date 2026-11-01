@@ -30,6 +30,12 @@ export function imageExtOf(mime: string): 'png' | 'jpg' | 'webp' | 'gif' | null 
 	}
 }
 
+/** appends a chunk to `acc`, cutting at `max`; `full` means the cap was exceeded and reading can stop */
+export function appendCapped(acc: string, chunk: string, max: number): { text: string; full: boolean } {
+	const combined = acc + chunk;
+	return combined.length > max ? { text: combined.slice(0, max), full: true } : { text: combined, full: false };
+}
+
 const FENCE = '```';
 
 /** keeps the last `max` chars */

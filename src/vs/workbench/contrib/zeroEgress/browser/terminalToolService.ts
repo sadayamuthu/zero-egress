@@ -23,8 +23,9 @@ export function readXtermBuffer(instance: ITerminalInstance): string {
 	if (!instance.xterm) { return ''; }
 	const lines: string[] = [];
 	for (const line of instance.xterm.getBufferReverseIterator()) {
-		lines.unshift(line);
+		lines.push(line);
 	}
+	lines.reverse();
 	return removeAnsiEscapeCodes(lines.join('\n'));
 }
 

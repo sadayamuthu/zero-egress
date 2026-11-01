@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------*/
 
 import { VSBuffer } from '../../../../base/common/buffer.js';
-import { CancellationToken } from '../../../../base/common/cancellation.js';
+import { CancellationTokenSource } from '../../../../base/common/cancellation.js';
 import { basename, joinPath } from '../../../../base/common/resources.js';
 import { URI } from '../../../../base/common/uri.js';
 import { ProxyChannel } from '../../../../base/parts/ipc/common/ipc.js';
@@ -36,9 +36,11 @@ const SAVED_DOCS_KEY = 'zeroEgress.savedDocs';
 const MAX_SYMBOLS = 50;
 const XTERM_FALLBACK_CHARS = 4000;
 const IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'webp', 'gif'];
-const MIME_OF_EXT: Record<string, Sel<'Image'>['mime']> = {
-	png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', gif: 'image/gif',
-};
+const MIME_OF_EXT = new Map<string, Sel<'Image'>['mime']>([
+	['png', 'image/png'], ['jpg', 'image/jpeg'], ['jpeg', 'image/jpeg'], ['webp', 'image/webp'], ['gif', 'image/gif'],
+]);
+const SYMBOL_TIMEOUT_MS = 2000;
+const UNSUPPORTED_IMAGE = 'Only PNG, JPEG, WebP and GIF images are supported.';
 
 export interface IChatContextService {
 	readonly _serviceBrand: undefined;
@@ -81,16 +83,33 @@ class ChatContextService implements IChatContextService {
 		this.scm = ProxyChannel.toService<IZeroEgressSCMService>(mainProcessService.getChannel('zero-egress-channel-scm'));
 	}
 
+	private symbolSearch: CancellationTokenSource | undefined;
+
 	async searchSymbols(query: string): Promise<Sel<'Symbol'>[]> {
-		const items = await getWorkspaceSymbols(query, CancellationToken.None);
-		return items.slice(0, MAX_SYMBOLS).map(({ symbol }) => ({
-			type: 'Symbol' as const,
-			uri: symbol.location.uri,
-			range: [symbol.location.range.startLineNumber, symbol.location.range.endLineNumber] as [number, number],
-			name: symbol.name,
-			kind: symbolKindNames[symbol.kind] ?? 'unknown',
-			language: this.languageService.guessLanguageIdByFilepathOrFirstLine(symbol.location.uri) || '',
-		}));
+		// a new query cancels the previous in-flight one
+		this.symbolSearch?.cancel();
+		this.symbolSearch?.dispose();
+		const cts = this.symbolSearch = new CancellationTokenSource();
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const timedOut = new Promise<null>(resolve => {
+			timer = setTimeout(() => { cts.cancel(); resolve(null); }, SYMBOL_TIMEOUT_MS);
+		});
+		try {
+			const items = await Promise.race([getWorkspaceSymbols(query, cts.token).catch(() => null), timedOut]);
+			if (!items || cts.token.isCancellationRequested) { return []; }
+			return items.slice(0, MAX_SYMBOLS).map(({ symbol }) => ({
+				type: 'Symbol' as const,
+				uri: symbol.location.uri,
+				range: [symbol.location.range.startLineNumber, symbol.location.range.endLineNumber] as [number, number],
+				name: symbol.name,
+				kind: symbolKindNames[symbol.kind] ?? 'unknown',
+				language: this.languageService.guessLanguageIdByFilepathOrFirstLine(symbol.location.uri) || '',
+			}));
+		} finally {
+			clearTimeout(timer);
+			if (this.symbolSearch === cts) { this.symbolSearch = undefined; }
+			cts.dispose();
+		}
 	}
 
 	currentSelection(): Sel<'CodeSelection'> | null {
@@ -120,6 +139,7 @@ class ChatContextService implements IChatContextService {
 		if (!text) {
 			text = capTail(readXtermBuffer(instance), XTERM_FALLBACK_CHARS);
 		}
+		if (!text.trim()) { return null; }
 		return {
 			type: 'Terminal',
 			title: instance.title || 'Terminal',
@@ -142,6 +162,7 @@ class ChatContextService implements IChatContextService {
 	problems(uri?: URI): Sel<'Problems'> {
 		const markers = this.markerService.read(uri ? { resource: uri } : undefined)
 			.filter(m => m.severity === MarkerSeverity.Error || m.severity === MarkerSeverity.Warning)
+			.sort((a, b) => b.severity - a.severity) // errors before warnings
 			.slice(0, PROBLEMS_MAX);
 		return {
 			type: 'Problems',
@@ -163,15 +184,21 @@ class ChatContextService implements IChatContextService {
 	async gitBranches(): Promise<string[]> {
 		const path = this.gitRepoPath();
 		if (!path) { return []; }
-		return this.scm.gitBranches(path);
+		return (await this.scm.gitBranches(path)).filter(isValidBranchName);
 	}
 
 	async gitDiff(against: string | null): Promise<Sel<'GitDiff'> | null> {
 		if (against !== null && !isValidBranchName(against)) { throw new Error('Not a valid branch name.'); }
 		const path = this.gitRepoPath();
 		if (!path) { return null; }
-		const text = await this.scm.gitDiff(path, against);
-		return { type: 'GitDiff', against, text: capHead(text, DIFF_MAX_CHARS), truncated: text.length > DIFF_MAX_CHARS };
+		try {
+			const { text, truncated } = await this.scm.gitDiff(path, against);
+			return { type: 'GitDiff', against, text: capHead(text, DIFF_MAX_CHARS), truncated };
+		} catch (e) {
+			const first = (e instanceof Error ? e.message : String(e)).trim().split('\n')[0];
+			this.notificationService.notify({ severity: Severity.Warning, message: `Couldn't read the git diff: ${first}` });
+			return null;
+		}
 	}
 
 	savedDocs(): SavedDoc[] {
@@ -215,8 +242,8 @@ class ChatContextService implements IChatContextService {
 		const uri = picked?.[0];
 		if (!uri) { return null; }
 		const ext = uri.path.slice(uri.path.lastIndexOf('.') + 1).toLowerCase();
-		const mime = MIME_OF_EXT[ext];
-		if (!mime) { return null; }
+		const mime = MIME_OF_EXT.get(ext);
+		if (!mime) { this.notificationService.notify({ severity: Severity.Warning, message: UNSUPPORTED_IMAGE }); return null; }
 		const stat = await this.fileService.stat(uri);
 		if (stat.size > IMAGE_MAX_BYTES) { return this.tooBig(); }
 		return { type: 'Image', uri, name: basename(uri), mime, bytes: stat.size };
@@ -224,7 +251,7 @@ class ChatContextService implements IChatContextService {
 
 	async imageFromClipboard(data: Uint8Array, mime: string): Promise<Sel<'Image'> | null> {
 		const ext = imageExtOf(mime);
-		if (!ext) { return null; }
+		if (!ext) { this.notificationService.notify({ severity: Severity.Warning, message: UNSUPPORTED_IMAGE }); return null; }
 		if (data.byteLength > IMAGE_MAX_BYTES) { return this.tooBig(); }
 		// SHA-256 via crypto.subtle (same browser-safe hash base/browser/iframe.ts uses)
 		const hash = toHex(await crypto.subtle.digest('SHA-256', data as Uint8Array<ArrayBuffer>));

@@ -6,7 +6,7 @@
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { messageOfSelection } from '../prompt/prompts.js';
-import { DIFF_MAX_CHARS, TERMINAL_MAX_CHARS, textOfSnapshotSelection, isValidBranchName, imageExtOf } from '../selectionText.js';
+import { DIFF_MAX_CHARS, TERMINAL_MAX_CHARS, textOfSnapshotSelection, isValidBranchName, imageExtOf, appendCapped } from '../selectionText.js';
 
 suite('selectionText', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
@@ -48,5 +48,15 @@ suite('selectionText', () => {
 		assert.strictEqual(imageExtOf('image/jpeg'), 'jpg');
 		assert.strictEqual(imageExtOf('image/png'), 'png');
 		assert.strictEqual(imageExtOf('image/svg+xml'), null);
+	});
+
+	test('appendCapped accumulates under the cap', () => {
+		assert.deepStrictEqual(appendCapped('ab', 'cd', 10), { text: 'abcd', full: false });
+		assert.deepStrictEqual(appendCapped('ab', 'cd', 4), { text: 'abcd', full: false });
+	});
+
+	test('appendCapped stops and cuts at the cap', () => {
+		assert.deepStrictEqual(appendCapped('abc', 'defg', 5), { text: 'abcde', full: true });
+		assert.deepStrictEqual(appendCapped('abcde', 'f', 5), { text: 'abcde', full: true });
 	});
 });

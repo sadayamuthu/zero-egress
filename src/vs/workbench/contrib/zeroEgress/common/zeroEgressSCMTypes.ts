@@ -32,12 +32,12 @@ export interface IZeroEgressSCMService {
 	 */
 	gitLog(path: string): Promise<string>
 	/**
-	 * Get the full diff of the working tree against a branch (or HEAD when null)
+	 * Get the diff (capped in the main process) of the working tree against a branch (or HEAD when null)
 	 *
 	 * @param path Path to the git repository
 	 * @param against Branch name, or null for HEAD
 	 */
-	gitDiff(path: string, against: string | null): Promise<string>
+	gitDiff(path: string, against: string | null): Promise<{ text: string; truncated: boolean }>
 	/**
 	 * Get the local branch names
 	 *

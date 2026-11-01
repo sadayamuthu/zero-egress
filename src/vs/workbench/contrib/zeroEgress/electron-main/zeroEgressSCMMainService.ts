@@ -4,9 +4,9 @@
  *--------------------------------------------------------------------------------------*/
 
 import { promisify } from 'util'
-import { exec as _exec, execFile as _execFile } from 'child_process'
+import { exec as _exec, execFile as _execFile, spawn } from 'child_process'
 import { IZeroEgressSCMService } from '../common/zeroEgressSCMTypes.js'
-import { isValidBranchName } from '../common/selectionText.js'
+import { DIFF_MAX_CHARS, appendCapped, isValidBranchName } from '../common/selectionText.js'
 
 interface NumStat {
 	file: string
@@ -82,11 +82,29 @@ export class ZeroEgressSCMService implements IZeroEgressSCMService {
 		return git('git log --pretty=format:"%h|%s|%ad" --date=short --no-merges -n 5', path)
 	}
 
-	async gitDiff(path: string, against: string | null): Promise<string> {
+	async gitDiff(path: string, against: string | null): Promise<{ text: string; truncated: boolean }> {
 		if (against !== null && !isValidBranchName(against)) { throw new Error('Not a valid branch name.') }
-		// args array, never a shell string
-		const { stdout } = await execFile('git', ['diff', '--no-color', against ?? 'HEAD', '--'], { cwd: path, maxBuffer: 10 * 1024 * 1024 })
-		return stdout
+		// args array, never a shell string; stop reading and kill git once the cap is reached
+		return new Promise((resolve, reject) => {
+			const child = spawn('git', ['diff', '--no-color', against ?? 'HEAD', '--'], { cwd: path })
+			let text = ''
+			let stderr = ''
+			let truncated = false
+			child.stdout.setEncoding('utf8')
+			child.stderr.setEncoding('utf8')
+			child.stdout.on('data', (chunk: string) => {
+				if (truncated) { return }
+				const r = appendCapped(text, chunk, DIFF_MAX_CHARS)
+				text = r.text
+				if (r.full) { truncated = true; child.kill() }
+			})
+			child.stderr.on('data', (chunk: string) => { if (stderr.length < 4000) { stderr += chunk } })
+			child.on('error', e => reject(e))
+			child.on('close', code => {
+				if (truncated || code === 0) { resolve({ text, truncated }) }
+				else { reject(new Error(stderr.trim().split('\n')[0] || `git exited with code ${code}`)) }
+			})
+		})
 	}
 
 	async gitBranches(path: string): Promise<string[]> {
