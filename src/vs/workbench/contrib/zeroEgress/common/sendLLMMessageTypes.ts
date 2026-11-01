@@ -8,6 +8,7 @@ import { ToolName, ToolParamName } from './toolsServiceTypes.js'
 import { ChatMode, ModelSelection, ModelSelectionOptions, OverridesOfModel, ProviderName, RefreshableProviderName, SettingsOfProvider } from './zeroEgressSettingsTypes.js'
 import { AuditWorkspace } from './auditTypes.js'
 import { TokenUsage } from './tokenUsage.js'
+import { ToolPolicy } from './toolPolicy.js'
 
 
 export const errorDetails = (fullError: Error | null): string | null => {
@@ -106,11 +107,13 @@ type SendLLMType = {
 	messages: LLMChatMessage[]; // the type of raw chat messages that we send to Anthropic, OAI, etc
 	separateSystemMessage: string | undefined;
 	chatMode: ChatMode | null;
+	toolPolicy: ToolPolicy | null;
 } | {
 	messagesType: 'FIMMessage';
 	messages: LLMFIMMessage;
 	separateSystemMessage?: undefined;
 	chatMode?: undefined;
+	toolPolicy?: undefined;
 }
 export type ServiceSendLLMMessageParams = {
 	onText: OnText;

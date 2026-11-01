@@ -10,11 +10,12 @@ import OpenAI, { ClientOptions } from 'openai';
 /* eslint-enable */
 
 import { LLMChatMessage, LLMFIMMessage, ModelListParams, OllamaModelResponse, OnError, OnFinalMessage, OnText, RawToolCallObj, RawToolParamsObj } from '../../common/sendLLMMessageTypes.js';
-import { ChatMode, displayInfoOfProviderName, ModelSelectionOptions, OverridesOfModel, ProviderName, SettingsOfProvider } from '../../common/zeroEgressSettingsTypes.js';
+import { displayInfoOfProviderName, ModelSelectionOptions, OverridesOfModel, ProviderName, SettingsOfProvider } from '../../common/zeroEgressSettingsTypes.js';
 import { getModelCapabilities, getProviderCapabilities, defaultProviderSettings } from '../../common/modelCapabilities.js';
 import { reasoningBodyOf } from '../../common/thinkingLevel.js';
 import { TokenUsage, usageOfChunk } from '../../common/tokenUsage.js';
 import { extractReasoningWrapper, extractXMLToolsWrapper } from './extractGrammar.js';
+import { ToolPolicy } from '../../common/toolPolicy.js';
 import { availableTools, InternalToolInfo } from '../../common/prompt/prompts.js';
 
 type InternalCommonMessageParams = {
@@ -32,7 +33,7 @@ type InternalCommonMessageParams = {
 type SendChatParams_Internal = InternalCommonMessageParams & {
 	messages: LLMChatMessage[];
 	separateSystemMessage: string | undefined;
-	chatMode: ChatMode | null;
+	toolPolicy: ToolPolicy | null;
 	mcpTools: InternalToolInfo[] | undefined;
 }
 type SendFIMParams_Internal = InternalCommonMessageParams & { messages: LLMFIMMessage; separateSystemMessage: string | undefined; }
@@ -135,8 +136,8 @@ const toOpenAICompatibleTool = (toolInfo: InternalToolInfo) => {
 	} satisfies OpenAI.Chat.Completions.ChatCompletionTool
 }
 
-const openAITools = (chatMode: ChatMode | null, mcpTools: InternalToolInfo[] | undefined) => {
-	const allowedTools = availableTools(chatMode, mcpTools)
+const openAITools = (toolPolicy: ToolPolicy | null, mcpTools: InternalToolInfo[] | undefined) => {
+	const allowedTools = availableTools(toolPolicy, mcpTools)
 	if (!allowedTools || Object.keys(allowedTools).length === 0) return null
 
 	const openAITools: OpenAI.Chat.Completions.ChatCompletionTool[] = []
@@ -169,7 +170,7 @@ const isStreamOptionsRejection = (error: unknown) =>
 	error instanceof OpenAI.APIError && error.status === 400 && /stream_options/i.test(error.message ?? '')
 
 
-const _sendOpenAICompatibleChat = async ({ messages, onText, onFinalMessage, onError, settingsOfProvider, modelSelectionOptions, modelName: modelName_, _setAborter, providerName, chatMode, separateSystemMessage, overridesOfModel, mcpTools }: SendChatParams_Internal) => {
+const _sendOpenAICompatibleChat = async ({ messages, onText, onFinalMessage, onError, settingsOfProvider, modelSelectionOptions, modelName: modelName_, _setAborter, providerName, toolPolicy, separateSystemMessage, overridesOfModel, mcpTools }: SendChatParams_Internal) => {
 	const capabilities = getModelCapabilities(providerName, modelName_, overridesOfModel) // user's modelName_ here
 	const {
 		modelName,
@@ -186,7 +187,7 @@ const _sendOpenAICompatibleChat = async ({ messages, onText, onFinalMessage, onE
 	const reasoningBody = reasoningBodyOf(providerName, capabilities, modelSelectionOptions)
 
 	// tools
-	const potentialTools = openAITools(chatMode, mcpTools)
+	const potentialTools = openAITools(toolPolicy, mcpTools)
 	const nativeToolsObj = potentialTools && specialToolFormat === 'openai-style' ?
 		{ tools: potentialTools } as const
 		: {}
@@ -215,7 +216,7 @@ const _sendOpenAICompatibleChat = async ({ messages, onText, onFinalMessage, onE
 
 	// manually parse out tool results if XML
 	if (!specialToolFormat) {
-		const { newOnText, newOnFinalMessage } = extractXMLToolsWrapper(onText, onFinalMessage, chatMode, mcpTools)
+		const { newOnText, newOnFinalMessage } = extractXMLToolsWrapper(onText, onFinalMessage, toolPolicy, mcpTools)
 		onText = newOnText
 		onFinalMessage = newOnFinalMessage
 	}

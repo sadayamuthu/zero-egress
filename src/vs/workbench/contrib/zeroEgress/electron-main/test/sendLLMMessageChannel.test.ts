@@ -89,6 +89,7 @@ suite('LLMMessageChannel endpoint leases', () => {
 			settingsOfProvider: settingsWith('vLLM', endpoint),
 			logging: { loggingName: 'test' },
 			chatMode: 'normal',
+			toolPolicy: null,
 			separateSystemMessage: undefined,
 			mcpTools: undefined,
 		};

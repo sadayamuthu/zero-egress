@@ -1464,6 +1464,7 @@ class EditCodeService extends Disposable implements IEditCodeService {
 					overridesOfModel,
 					separateSystemMessage,
 					chatMode: null, // not chat
+					toolPolicy: null,
 					onText: (params) => {
 						const { fullText: fullText_ } = params
 						const newText_ = fullText_.substring(fullTextSoFar.length, Infinity)
@@ -1837,6 +1838,7 @@ class EditCodeService extends Disposable implements IEditCodeService {
 					overridesOfModel,
 					separateSystemMessage,
 					chatMode: null, // not chat
+					toolPolicy: null,
 					onText: (params) => {
 						onText(params)
 					},

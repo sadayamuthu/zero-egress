@@ -9,8 +9,9 @@ import { IDirectoryStrService } from '../directoryStrService.js';
 import { StagingSelectionItem } from '../chatThreadServiceTypes.js';
 import { os } from '../helpers/systemInfo.js';
 import { RawToolParamsObj } from '../sendLLMMessageTypes.js';
-import { approvalTypeOfBuiltinToolName, BuiltinToolCallParams, BuiltinToolName, BuiltinToolResultType, ToolName } from '../toolsServiceTypes.js';
+import { BuiltinToolCallParams, BuiltinToolName, BuiltinToolResultType, ToolName } from '../toolsServiceTypes.js';
 import { ChatMode } from '../zeroEgressSettingsTypes.js';
+import { policyAllows, ToolPolicy, toolGroupOf, toolPolicyOfMode } from '../toolPolicy.js';
 
 // Triple backtick wrapper used throughout the prompts for code blocks
 export const tripleTick = ['```', '```']
@@ -358,22 +359,15 @@ export const isABuiltinToolName = (toolName: string): toolName is BuiltinToolNam
 
 
 
-export const availableTools = (chatMode: ChatMode | null, mcpTools: InternalToolInfo[] | undefined) => {
+export const availableTools = (policy: ToolPolicy | null, mcpTools: InternalToolInfo[] | undefined) => {
+	if (!policy) return undefined
 
-	const builtinToolNames: BuiltinToolName[] | undefined = chatMode === 'normal' ? undefined
-		: chatMode === 'gather' ? (Object.keys(builtinTools) as BuiltinToolName[]).filter(toolName => !(toolName in approvalTypeOfBuiltinToolName))
-			: chatMode === 'agent' ? Object.keys(builtinTools) as BuiltinToolName[]
-				: undefined
+	const builtins = (Object.keys(builtinTools) as BuiltinToolName[])
+		.filter(toolName => policyAllows(policy, toolGroupOf(toolName, false)))
+		.map(toolName => builtinTools[toolName])
+	const mcp = policyAllows(policy, 'mcp') ? mcpTools ?? [] : []
 
-	const effectiveBuiltinTools = builtinToolNames?.map(toolName => builtinTools[toolName]) ?? undefined
-	const effectiveMCPTools = chatMode === 'agent' ? mcpTools : undefined
-
-	const tools: InternalToolInfo[] | undefined = !(builtinToolNames || mcpTools) ? undefined
-		: [
-			...effectiveBuiltinTools ?? [],
-			...effectiveMCPTools ?? [],
-		]
-
+	const tools: InternalToolInfo[] = [...builtins, ...mcp]
 	return tools
 }
 
@@ -399,8 +393,8 @@ export const reParsedToolXMLString = (toolName: ToolName, toolParams: RawToolPar
 
 /* We expect tools to come at the end - not a hard limit, but that's just how we process them, and the flow makes more sense that way. */
 // - You are allowed to call multiple tools by specifying them consecutively. However, there should be NO text or writing between tool calls or after them.
-const systemToolsXMLPrompt = (chatMode: ChatMode, mcpTools: InternalToolInfo[] | undefined) => {
-	const tools = availableTools(chatMode, mcpTools)
+const systemToolsXMLPrompt = (policy: ToolPolicy | null, mcpTools: InternalToolInfo[] | undefined) => {
+	const tools = availableTools(policy, mcpTools)
 	if (!tools || tools.length === 0) return null
 
 	const toolXMLDefinitions = (`\
@@ -461,7 +455,7 @@ ${directoryStr}
 </files_overview>`)
 
 
-	const toolDefinitions = includeXMLToolDefinitions ? systemToolsXMLPrompt(mode, mcpTools) : null
+	const toolDefinitions = includeXMLToolDefinitions ? systemToolsXMLPrompt(toolPolicyOfMode(mode), mcpTools) : null
 
 	const details: string[] = []
 

@@ -143,6 +143,7 @@ class GenerateCommitMessageService extends Disposable implements IGenerateCommit
 				messages,
 				separateSystemMessage,
 				chatMode: null,
+				toolPolicy: null,
 				modelSelection: modelOptions.modelSelection,
 				modelSelectionOptions: modelOptions.modelSelectionOptions,
 				overridesOfModel: modelOptions.overridesOfModel,
