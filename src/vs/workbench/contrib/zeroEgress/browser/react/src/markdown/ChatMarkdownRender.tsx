@@ -322,6 +322,7 @@ const RenderToken = ({ token, inPTag, codeURI, chatMessageLocation, tokenIdx, ..
 				codeStr={contents}
 				language={language}
 				uri={uri || 'current'}
+				threadId={chatMessageLocation.threadId}
 			>
 				<BlockCode
 					initValue={contents.trimEnd()} // \n\n adds a permanent newline which creates a flash
