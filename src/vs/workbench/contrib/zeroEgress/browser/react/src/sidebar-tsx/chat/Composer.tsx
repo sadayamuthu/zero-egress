@@ -13,9 +13,9 @@ import { useAccessor, useChatThreadsState, useChatThreadsStreamState, useSetting
 import { TextAreaFns, ZeroEgressInputBox2 } from '../../util/inputs.js';
 import { ButtonStop, ButtonSubmit, getRelative, SelectedFiles } from '../SidebarChat.js';
 // no runtime imports from vs/ here: the bundle flattens this folder, so a relative path one level deeper breaks
-import { isFeatureNameDisabled, promptWithContext, ZERO_EGRESS_CTRL_L_ACTION_ID, ZERO_EGRESS_SHOW_AGENTS_ACTION_ID } from '../composerDeps.js';
+import { isFeatureNameDisabled, promptContextOfSelection, promptWithContext, ZERO_EGRESS_CTRL_L_ACTION_ID, ZERO_EGRESS_SHOW_AGENTS_ACTION_ID } from '../composerDeps.js';
 import type { PromptContextItem } from '../composerDeps.js';
-import { selectionUri, type StagingSelectionItem } from '../../../../../common/chatThreadServiceTypes.js';
+import type { StagingSelectionItem } from '../../../../../common/chatThreadServiceTypes.js';
 import { useThreadReview } from '../useThreadReview.js';
 import { AgentSettingsMenu } from './AgentSettingsMenu.js';
 import { ContextMeter } from './ContextMeter.js';
@@ -120,17 +120,18 @@ export const Composer = ({ threadId, variant, inputDisabledReason, textAreaRef, 
 			const prompt = userMessage.trim();
 			if (!prompt) { return; }
 			// the agent's first message is plain text: the staged chips go into it as workspace-relative paths
-			// snapshot types (terminal, problems, diff, images) have no path: they are left out of the path list
+			// terminal output, problems and git diffs go in as text; images are not sent to background agents yet
+			if (selections.some(sel => sel.type === 'Image')) {
+				accessor.get('INotificationService').info("Images aren't sent to background agents yet.");
+			}
 			const context: PromptContextItem[] = selections.flatMap((sel): PromptContextItem[] => {
-				const selUri = selectionUri(sel);
-				if (!selUri || sel.type === 'Image') { return []; }
-				// getRelative gives back the fsPath itself for a file outside the workspace: that one stays absolute
-				const relative = getRelative(selUri, accessor);
-				const absolute = relative === undefined || relative === selUri.fsPath;
-				const path = absolute ? selUri.fsPath : relative;
-				return [sel.type === 'Folder' || (sel.type === 'Doc' && sel.isFolder) ? { kind: 'folder', path, absolute }
-					: sel.type === 'CodeSelection' || sel.type === 'Symbol' ? { kind: 'selection', path, range: sel.range, absolute }
-						: { kind: 'file', path, absolute }];
+				const item = promptContextOfSelection(sel, uri => {
+					// getRelative gives back the fsPath itself for a file outside the workspace: that one stays absolute
+					const relative = getRelative(uri as Parameters<typeof getRelative>[0], accessor);
+					const absolute = relative === undefined || relative === uri.fsPath;
+					return { path: absolute ? uri.fsPath : relative, absolute };
+				});
+				return item ? [item] : [];
 			});
 			setIsStarting(true);
 			try {

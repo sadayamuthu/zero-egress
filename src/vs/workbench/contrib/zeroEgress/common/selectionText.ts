@@ -3,7 +3,8 @@
  *  Licensed under the Apache License, Version 2.0. See LICENSE.txt for more information.
  *--------------------------------------------------------------------------------------*/
 
-import { StagingSelectionItem } from './chatThreadServiceTypes.js';
+import type { StagingSelectionItem } from './chatThreadServiceTypes.js';
+import type { PromptContextItem } from './promptContext.js';
 
 export const TERMINAL_MAX_CHARS = 20_000;
 export const DIFF_MAX_CHARS = 60_000;
@@ -40,4 +41,29 @@ export function textOfSnapshotSelection(s: StagingSelectionItem): string {
 		return `Symbol ${s.name} (${s.kind}) in ${s.uri.fsPath} (lines ${s.range[0]}:${s.range[1]}):`;
 	}
 	return '';
+}
+
+/**
+ * The chip a selection becomes in a background agent's plain-text first message. Terminal, Problems and GitDiff carry
+ * their text as a snapshot (never a file line, even a Problems selection that has a uri); Image has none (undefined).
+ * `pathOf` turns a uri into the path as shown and whether it is outside the workspace.
+ */
+export function promptContextOfSelection(
+	s: StagingSelectionItem,
+	pathOf: (uri: { fsPath: string }) => { path: string; absolute: boolean },
+): PromptContextItem | undefined {
+	if (s.type === 'Terminal' || s.type === 'Problems' || s.type === 'GitDiff') {
+		return { kind: 'snapshot', text: textOfSnapshotSelection(s) };
+	}
+	if (s.type === 'Image') {
+		return undefined;
+	}
+	const uri = (s as { uri?: { fsPath: string } }).uri;
+	if (!uri) {
+		return undefined;
+	}
+	const { path, absolute } = pathOf(uri);
+	return s.type === 'Folder' || (s.type === 'Doc' && s.isFolder) ? { kind: 'folder', path, absolute }
+		: s.type === 'CodeSelection' || s.type === 'Symbol' ? { kind: 'selection', path, range: s.range, absolute }
+			: { kind: 'file', path, absolute };
 }
