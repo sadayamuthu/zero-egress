@@ -8,7 +8,7 @@
 // reply they are an estimate from the text (marked ≈).
 
 import React, { useMemo, useState } from 'react';
-import { useChatThreadsState, useSettingsState } from '../../util/services.js';
+import { useAccessor, useChatThreadsState, useChatThreadsStreamState, useSettingsState } from '../../util/services.js';
 // no runtime imports from vs/ here: the bundle flattens this folder, so a relative path one level deeper breaks
 import { contextPercent, contextUseOf, contextWindowK, formatContextUse, getModelCapabilities } from '../composerDeps.js';
 import type { ContextUse } from '../composerDeps.js';
@@ -31,6 +31,8 @@ export const ContextMeter = ({ threadId }: { threadId: string }) => {
 	const use = useContextUse(threadId);
 	const [anchor, setAnchor] = useState<HTMLButtonElement | null>(null);
 	const [open, setOpen] = useState(false);
+	const chatThreadService = useAccessor().get('IChatThreadService');
+	const isRunning = !!useChatThreadsStreamState(threadId)?.isRunning;
 	if (!use) { return null; }
 
 	const label = formatContextUse(use);
@@ -58,7 +60,7 @@ export const ContextMeter = ({ threadId }: { threadId: string }) => {
 		<Popover anchor={anchor} open={open} onClose={() => setOpen(false)} placement='top-end' className='w-56' label='Context'>
 			<MenuHeading>Context</MenuHeading>
 			<div className='px-2 py-1 text-sm text-ze-fg-1'>{used}</div>
-			<MenuRow disabled tooltip='Coming soon' onSelect={() => { /* wired with the Compact action */ }}>
+			<MenuRow disabled={isRunning} onSelect={() => { setOpen(false); void chatThreadService.compactThread(threadId); }}>
 				<span>Compact this chat</span>
 			</MenuRow>
 		</Popover>

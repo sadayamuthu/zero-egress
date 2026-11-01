@@ -2549,8 +2549,9 @@ const ChatThreadViewInner = ({ threadId, variant, inputDisabledReason }: { threa
 	const previousMessagesHTML = useMemo(() => {
 		// const lastMessageIdx = previousMessages.findLastIndex(v => v.role !== 'checkpoint')
 		// tool request shows up as Editing... if in progress
+		const compaction = currentThread?.compaction
 		return previousMessages.map((message, i) => {
-			return <ChatBubble
+			const bubble = <ChatBubble
 				key={i}
 				currCheckpointIdx={currCheckpointIdx}
 				chatMessage={message}
@@ -2560,10 +2561,20 @@ const ChatThreadViewInner = ({ threadId, variant, inputDisabledReason }: { threa
 				threadId={threadId}
 				_scrollToBottom={() => scrollToBottom(scrollContainerRef)}
 			/>
+			// the divider sits where the summary ends; it expands to the summary
+			if (compaction && i === compaction.uptoIdx) {
+				return <React.Fragment key={i}>
+					<StepRow icon='think' label='Earlier turns summarized' className='my-2'>
+						<div className='whitespace-pre-wrap text-sm py-1'>{compaction.summary}</div>
+					</StepRow>
+					{bubble}
+				</React.Fragment>
+			}
+			return bubble
 		})
-	}, [previousMessages, threadId, currCheckpointIdx, isRunning])
+	}, [previousMessages, currentThread?.compaction, threadId, currCheckpointIdx, isRunning])
 
-	const streamingChatIdx = previousMessagesHTML.length
+	const streamingChatIdx = previousMessages.length
 	const currStreamingMessageHTML = reasoningSoFar || displayContentSoFar || isRunning ?
 		<ChatBubble
 			key={'curr-streaming-msg'}
