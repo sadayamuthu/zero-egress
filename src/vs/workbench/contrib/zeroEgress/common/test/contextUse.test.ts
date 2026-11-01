@@ -33,6 +33,29 @@ suite('contextUse', () => {
 		assert.strictEqual(u.estimated, true);
 	});
 
+	test('unknown window is never full', () => {
+		const u = contextUseOf([user(40)], 0, 0);
+		assert.strictEqual(u.fraction, 0);
+		assert.strictEqual(u.estimated, true);
+		assert.strictEqual(contextUseOf([user(40)], NaN, 0).fraction, 0);
+	});
+
+	test('counts a reply without usage after the last counted one', () => {
+		const u = contextUseOf([assistant(10, { promptTokens: 1000, completionTokens: 200 }), assistant(400)], 4000, 0);
+		assert.strictEqual(u.usedTokens, 1300);
+		assert.strictEqual(u.estimated, true);
+	});
+
+	test('empty chat', () => {
+		const u = contextUseOf([], 4000, 0);
+		assert.strictEqual(u.usedTokens, 0);
+		assert.strictEqual(u.estimated, true);
+	});
+
+	test('fraction is capped at 1', () => {
+		assert.strictEqual(contextUseOf([assistant(10, { promptTokens: 5000, completionTokens: 0 })], 4000, 0).fraction, 1);
+	});
+
 	test('format', () => {
 		assert.strictEqual(formatContextUse({ usedTokens: 20316, contextWindow: 32768, fraction: 0.62, estimated: false }), '62% of 32k');
 		assert.strictEqual(formatContextUse({ usedTokens: 20316, contextWindow: 32768, fraction: 0.62, estimated: true }), '≈62% of 32k');

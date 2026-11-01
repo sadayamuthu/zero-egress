@@ -7,7 +7,7 @@
 // that offers to compact the chat. The numbers come from the provider's counts on the last reply; before the first
 // reply they are an estimate from the text (marked ≈).
 
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { useChatThreadsState, useSettingsState } from '../../util/services.js';
 // no runtime imports from vs/ here: the bundle flattens this folder, so a relative path one level deeper breaks
 import { contextPercent, contextUseOf, contextWindowK, formatContextUse, getModelCapabilities } from '../composerDeps.js';
@@ -17,12 +17,14 @@ import { MenuHeading, MenuRow, Popover } from './Popover.js';
 /** the chat's context use against the selected Chat model's window; null when no model is selected */
 export const useContextUse = (threadId: string): ContextUse | null => {
 	const settingsState = useSettingsState();
-	const thread = useChatThreadsState().allThreads[threadId];
+	const messages = useChatThreadsState().allThreads[threadId]?.messages;
 	const sel = settingsState.modelSelectionOfFeature['Chat'];
-	if (!sel) { return null; }
-	const { contextWindow } = getModelCapabilities(sel.providerName, sel.modelName, settingsState.overridesOfModel);
-	// the system prompt is built asynchronously in the browser service, so 0 here: the meter stays ≈ until the first reply
-	return contextUseOf(thread?.messages ?? [], contextWindow, 0);
+	const contextWindow = sel ? getModelCapabilities(sel.providerName, sel.modelName, settingsState.overridesOfModel).contextWindow : undefined;
+	return useMemo(() => {
+		if (!(typeof contextWindow === 'number' && contextWindow > 0 && Number.isFinite(contextWindow))) { return null; }
+		// the system prompt is built asynchronously in the browser service, so 0 here: the meter stays ≈ until the first reply
+		return contextUseOf(messages ?? [], contextWindow, 0);
+	}, [messages, contextWindow]);
 };
 
 export const ContextMeter = ({ threadId }: { threadId: string }) => {
