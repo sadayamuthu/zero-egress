@@ -178,6 +178,14 @@ export const Composer = ({ threadId, variant, inputDisabledReason, textAreaRef, 
 		const images = Array.from(e.clipboardData?.files ?? []).filter(f => f.type.startsWith('image/'));
 		if (!images.length) return;
 		e.preventDefault();
+		// text that came with the images still goes in at the cursor
+		const text = e.clipboardData.getData('text/plain');
+		const ta = textAreaRef.current;
+		if (text && ta) {
+			const start = ta.selectionStart, end = ta.selectionEnd;
+			textAreaFnsRef.current?.setValue(ta.value.slice(0, start) + text + ta.value.slice(end));
+			ta.setSelectionRange(start + text.length, start + text.length);
+		}
 		const contextService = accessor.get('IChatContextService');
 		void (async () => {
 			for (const file of images) {

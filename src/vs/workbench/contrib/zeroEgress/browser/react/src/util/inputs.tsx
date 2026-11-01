@@ -19,6 +19,7 @@ import { useFloating, autoUpdate, offset, flip, shift, size, autoPlacement } fro
 import { URI } from '../../../../../../../base/common/uri.js';
 import { getBasename, getFolderName } from '../sidebar-tsx/SidebarChat.js';
 import { BookOpen, Braces, ChevronRight, File, Folder, FolderClosed, GitBranch, Image as ImageIcon, LucideProps, SquareTerminal, TextSelect, TriangleAlert } from 'lucide-react';
+import type { SavedDoc } from '../../../../common/selectionText.js';
 import { StagingSelectionItem } from '../../../../common/chatThreadServiceTypes.js';
 import { DiffEditorWidget } from '../../../../../../../editor/browser/widget/diffEditor/diffEditorWidget.js';
 import { extractSearchReplaceBlocks, ExtractedSearchReplaceBlock } from '../../../../common/helpers/extractCodeFromResult.js';
@@ -188,7 +189,7 @@ const getAbbreviatedName = (relativePath: string) => {
 	return getBasename(relativePath, 1)
 }
 
-const getOptionsAtPath = async (accessor: ReturnType<typeof useAccessor>, path: string[], optionText: string): Promise<Option[]> => {
+const getOptionsAtPath = async (accessor: ReturnType<typeof useAccessor>, path: string[], optionText: string, onLater?: (opts: Option[]) => void): Promise<Option[]> => {
 
 	const toolsService = accessor.get('IToolsService')
 
@@ -353,12 +354,14 @@ const getOptionsAtPath = async (accessor: ReturnType<typeof useAccessor>, path: 
 		]
 	}
 
+	const docSelectionOf = (d: SavedDoc): StagingSelectionItem => ({ type: 'Doc', uri: URI.file(d.path), name: d.name, isFolder: d.isFolder })
+
 	const savedDocOptions = (): Option[] => [
 		...contextService.savedDocs().map((d): Option => ({
 			fullName: d.name,
 			abbreviatedName: d.name,
 			iconInMenu: d.isFolder ? Folder : BookOpen,
-			pick: async () => ({ type: 'Doc', uri: URI.file(d.path), name: d.name, isFolder: d.isFolder }),
+			pick: async () => docSelectionOf(d),
 		})),
 		{
 			fullName: 'Add a doc…',
@@ -366,12 +369,13 @@ const getOptionsAtPath = async (accessor: ReturnType<typeof useAccessor>, path: 
 			iconInMenu: BookOpen,
 			pick: async () => {
 				const d = await contextService.addSavedDoc()
-				return d ? { type: 'Doc', uri: URI.file(d.path), name: d.name, isFolder: d.isFolder } : null
+				return d ? docSelectionOf(d) : null
 			},
 		},
 	]
 
-	const totalProblems = contextService.filesWithProblems().reduce((n, f) => n + f.count, 0)
+	// only the root list shows the total, so other levels skip the lookup
+	const totalProblems = path.length === 0 ? contextService.filesWithProblems().reduce((n, f) => n + f.count, 0) : 0
 
 	const allOptions: Option[] = [
 		{
@@ -403,7 +407,7 @@ const getOptionsAtPath = async (accessor: ReturnType<typeof useAccessor>, path: 
 			abbreviatedName: 'Problems',
 			iconInMenu: TriangleAlert,
 			note: String(totalProblems),
-			nextOptions: problemOptions(),
+			generateNextOptions: async () => problemOptions(),
 		},
 		{
 			fullName: 'Git diff · branch',
@@ -416,7 +420,7 @@ const getOptionsAtPath = async (accessor: ReturnType<typeof useAccessor>, path: 
 			abbreviatedName: 'Saved docs',
 			iconInMenu: BookOpen,
 			note: 'local only',
-			nextOptions: savedDocOptions(),
+			generateNextOptions: async () => savedDocOptions(),
 		},
 		{
 			fullName: 'Image',
@@ -431,6 +435,7 @@ const getOptionsAtPath = async (accessor: ReturnType<typeof useAccessor>, path: 
 
 	let nextOptionsAtPath = allOptions
 	let generateNextOptionsAtPath: GenerateNextOptions | undefined = undefined
+	let laterSymbols: Promise<Option[]> | undefined = undefined
 
 	for (const pn of path) {
 
@@ -449,11 +454,13 @@ const getOptionsAtPath = async (accessor: ReturnType<typeof useAccessor>, path: 
 		nextOptionsAtPath = await generateNextOptionsAtPath(optionText)
 	}
 	else if (path.length === 0 && optionText.trim().length > 0) { // (special case): directly search for both files and folders if optionsPath is empty and there's a search term
-		const [ff, symbols] = await Promise.all([filesAndFolders(optionText), symbolOptions(optionText)]);
-		nextOptionsAtPath = [...ff, ...symbols]
+		// files and folders show as soon as they arrive; symbols merge in through onLater
+		if (onLater) laterSymbols = symbolOptions(optionText)
+		nextOptionsAtPath = await filesAndFolders(optionText)
+		if (!onLater) nextOptionsAtPath = [...nextOptionsAtPath, ...await symbolOptions(optionText)]
 	}
 
-	const optionsAtPath = nextOptionsAtPath
+	const finalize = (list: Option[]) => list
 		.filter(o => isSubsequence(o.fullName, optionText))
 		.sort((a, b) => { // this is a hack but good for now
 			const scoreA = scoreSubsequence(a.fullName, optionText);
@@ -461,6 +468,12 @@ const getOptionsAtPath = async (accessor: ReturnType<typeof useAccessor>, path: 
 			return scoreB - scoreA;
 		})
 		.slice(0, numOptionsToShow) // should go last because sorting/filtering should happen on all datapoints
+
+	const optionsAtPath = finalize(nextOptionsAtPath)
+	if (laterSymbols) {
+		const ff = nextOptionsAtPath
+		laterSymbols.then(symbols => { if (symbols.length) onLater?.(finalize([...ff, ...symbols])) })
+	}
 
 	return optionsAtPath
 
@@ -508,6 +521,7 @@ export const ZeroEgressInputBox2 = forwardRef<HTMLTextAreaElement, InputBox2Prop
 	const [didLoadInitialOptions, setDidLoadInitialOptions] = useState(false);
 
 	const currentPathRef = useRef<string>(JSON.stringify([]));
+	const requestIdRef = useRef(0); // a newer fetch makes older, slower results stale
 
 	// dont show breadcrums if first page and user hasnt typed anything
 	const isTypingEnabled = true
@@ -588,8 +602,9 @@ export const ZeroEgressInputBox2 = forwardRef<HTMLTextAreaElement, InputBox2Prop
 
 
 			currentPathRef.current = JSON.stringify(newPath);
+			const reqId = ++requestIdRef.current
 			const newOpts = await getOptionsAtPath(accessor, newPath, '') || []
-			if (currentPathRef.current !== JSON.stringify(newPath)) { return; }
+			if (currentPathRef.current !== JSON.stringify(newPath) || reqId !== requestIdRef.current) { return; }
 			setOptionPath(newPath)
 			setOptionText('')
 			setOptionIdx(0)
@@ -601,8 +616,9 @@ export const ZeroEgressInputBox2 = forwardRef<HTMLTextAreaElement, InputBox2Prop
 	const onRemoveOption = async () => {
 		const newPath = [...optionPath.slice(0, optionPath.length - 1)]
 		currentPathRef.current = JSON.stringify(newPath);
+		const reqId = ++requestIdRef.current
 		const newOpts = await getOptionsAtPath(accessor, newPath, '') || []
-		if (currentPathRef.current !== JSON.stringify(newPath)) { return; }
+		if (currentPathRef.current !== JSON.stringify(newPath) || reqId !== requestIdRef.current) { return; }
 		setOptionPath(newPath)
 		setOptionText('')
 		setOptionIdx(0)
@@ -612,8 +628,9 @@ export const ZeroEgressInputBox2 = forwardRef<HTMLTextAreaElement, InputBox2Prop
 	const onOpenOptionMenu = async () => {
 		const newPath: [] = []
 		currentPathRef.current = JSON.stringify([]);
+		const reqId = ++requestIdRef.current
 		const newOpts = await getOptionsAtPath(accessor, [], '') || []
-		if (currentPathRef.current !== JSON.stringify([])) { return; }
+		if (currentPathRef.current !== JSON.stringify([]) || reqId !== requestIdRef.current) { return; }
 		setOptionPath(newPath)
 		setOptionText('')
 		setIsMenuOpen(true);
@@ -673,8 +690,12 @@ export const ZeroEgressInputBox2 = forwardRef<HTMLTextAreaElement, InputBox2Prop
 		currentPathRef.current = JSON.stringify(optionPath);
 
 		const fetchOptions = async () => {
-			const newOpts = await getOptionsAtPath(accessor, optionPath, newStr) || [];
-			if (currentPathRef.current !== JSON.stringify(optionPath)) { return; }
+			const reqId = ++requestIdRef.current
+			const isCurrent = () => currentPathRef.current === JSON.stringify(optionPath) && reqId === requestIdRef.current
+			const newOpts = await getOptionsAtPath(accessor, optionPath, newStr, later => {
+				if (isCurrent()) setOptions(later);
+			}) || [];
+			if (!isCurrent()) { return; }
 			setOptions(newOpts);
 			setOptionIdx(0);
 			debounceTimerRef.current = null;
