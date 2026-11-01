@@ -1,4 +1,5 @@
 import { Disposable } from '../../../../base/common/lifecycle.js';
+import { ToolPolicy } from '../common/toolPolicy.js';
 import { CHARS_PER_TOKEN } from '../common/contextUse.js';
 import { deepClone } from '../../../../base/common/objects.js';
 import { IModelService } from '../../../../editor/common/services/model.js';
@@ -525,7 +526,7 @@ export interface IConvertToLLMMessageService {
 	readonly _serviceBrand: undefined;
 	prepareLLMSimpleMessages: (opts: { simpleMessages: SimpleLLMMessage[], systemMessage: string, modelSelection: ModelSelection | null, featureName: FeatureName }) => { messages: LLMChatMessage[], separateSystemMessage: string | undefined }
 	/** `agentRoot`: set for background agents; the system message then describes only that folder. */
-	prepareLLMChatMessages: (opts: { chatMessages: ChatMessage[], chatMode: ChatMode, modelSelection: ModelSelection | null, agentRoot?: { folder: string, depsMayBeMissing: boolean, agentId: string }, compaction?: Compaction }) => Promise<{ messages: LLMChatMessage[], separateSystemMessage: string | undefined }>
+	prepareLLMChatMessages: (opts: { chatMessages: ChatMessage[], chatMode: ChatMode, toolPolicy: ToolPolicy | null, modelSelection: ModelSelection | null, agentRoot?: { folder: string, depsMayBeMissing: boolean, agentId: string }, compaction?: Compaction }) => Promise<{ messages: LLMChatMessage[], separateSystemMessage: string | undefined }>
 	prepareFIMMessage(opts: { messages: LLMFIMMessage, }): { prefix: string, suffix: string, stopTokens: string[] }
 }
 
@@ -579,7 +580,7 @@ class ConvertToLLMMessageService extends Disposable implements IConvertToLLMMess
 
 
 	// system message
-	private _generateChatMessagesSystemMessage = async (chatMode: ChatMode, specialToolFormat: 'openai-style' | 'anthropic-style' | 'gemini-style' | undefined, agentRoot: { folder: string, depsMayBeMissing: boolean, agentId: string } | undefined) => {
+	private _generateChatMessagesSystemMessage = async (chatMode: ChatMode, toolPolicy: ToolPolicy | null, specialToolFormat: 'openai-style' | 'anthropic-style' | 'gemini-style' | undefined, agentRoot: { folder: string, depsMayBeMissing: boolean, agentId: string } | undefined) => {
 		// a background agent works only in its worktree: describe that folder, not the user's workspace or editors
 		const workspaceFolders = agentRoot ? [agentRoot.folder] : this.workspaceContextService.getWorkspace().folders.map(f => f.uri.fsPath)
 
@@ -600,7 +601,7 @@ class ConvertToLLMMessageService extends Disposable implements IConvertToLLMMess
 
 		// each thread sees only its own persistent terminals (docked: the ones no background agent owns)
 		const persistentTerminalIDs = terminalIdsVisibleTo(this.terminalToolService.listPersistentTerminalIds(), id => this.terminalToolService.ownerOfPersistentTerminal(id), agentRoot?.agentId)
-		const systemMessage = chat_systemMessage({ workspaceFolders, openedURIs, directoryStr, activeURI, persistentTerminalIDs, chatMode, mcpTools, includeXMLToolDefinitions, depsMayBeMissing: agentRoot?.depsMayBeMissing ?? false })
+		const systemMessage = chat_systemMessage({ workspaceFolders, openedURIs, directoryStr, activeURI, persistentTerminalIDs, chatMode, toolPolicy, mcpTools, includeXMLToolDefinitions, depsMayBeMissing: agentRoot?.depsMayBeMissing ?? false })
 		return systemMessage
 	}
 
@@ -674,7 +675,7 @@ class ConvertToLLMMessageService extends Disposable implements IConvertToLLMMess
 		})
 		return { messages, separateSystemMessage };
 	}
-	prepareLLMChatMessages: IConvertToLLMMessageService['prepareLLMChatMessages'] = async ({ chatMessages, chatMode, modelSelection, agentRoot, compaction }) => {
+	prepareLLMChatMessages: IConvertToLLMMessageService['prepareLLMChatMessages'] = async ({ chatMessages, chatMode, toolPolicy, modelSelection, agentRoot, compaction }) => {
 		if (modelSelection === null) return { messages: [], separateSystemMessage: undefined }
 
 		const { overridesOfModel } = this.zeroEgressSettingsService.state
@@ -687,7 +688,7 @@ class ConvertToLLMMessageService extends Disposable implements IConvertToLLMMess
 		} = getModelCapabilities(providerName, modelName, overridesOfModel)
 
 		const { disableSystemMessage } = this.zeroEgressSettingsService.state.globalSettings;
-		const fullSystemMessage = await this._generateChatMessagesSystemMessage(chatMode, specialToolFormat, agentRoot)
+		const fullSystemMessage = await this._generateChatMessagesSystemMessage(chatMode, toolPolicy, specialToolFormat, agentRoot)
 		const systemMessage = disableSystemMessage ? '' : fullSystemMessage;
 
 		const modelSelectionOptions = this.zeroEgressSettingsService.state.optionsOfModelSelection['Chat'][modelSelection.providerName]?.[modelSelection.modelName]

@@ -32,3 +32,10 @@ export function policyAllows(p: ToolPolicy | null, group: ToolGroup): boolean {
 	if (!p) return false
 	return group === 'read' ? true : p[group]
 }
+
+export const TOOL_REFUSAL_MESSAGE = "This tool isn't available in this mode."
+
+/** the refusal copy when the policy does not allow this tool, else null */
+export function refusalOf(policy: ToolPolicy | null, toolName: string, isMCP: boolean): string | null {
+	return policyAllows(policy, toolGroupOf(toolName, isMCP)) ? null : TOOL_REFUSAL_MESSAGE
+}

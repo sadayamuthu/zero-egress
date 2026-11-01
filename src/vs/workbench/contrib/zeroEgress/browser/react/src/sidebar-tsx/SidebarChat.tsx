@@ -1594,13 +1594,16 @@ const EditToolHeaderButtons = ({ applyBoxId, uri, codeStr, toolName, threadId }:
 
 
 
-const InvalidTool = ({ toolName, message, mcpServerName }: { toolName: ToolName, message: string, mcpServerName: string | undefined }) => {
+const InvalidTool = ({ toolName, message, mcpServerName, refused }: { toolName: ToolName, message: string, mcpServerName: string | undefined, refused?: boolean }) => {
 	const accessor = useAccessor()
 	const title = getTitle({ name: toolName, type: 'invalid_params', mcpServerName })
-	const desc1 = 'Invalid parameters'
+	const desc1 = refused ? "isn't available in this mode" : 'Invalid parameters'
 	const icon: StepIcon = 'error'
 	const isError = true
 	const componentParams: ToolHeaderParams = { title, desc1, isError, icon }
+
+	// a refused tool reads no params and has nothing to apply: just the line
+	if (refused) return <ToolHeaderWrapper {...componentParams} />
 
 	componentParams.children = <ToolChildrenWrapper>
 		<CodeChildren className='bg-ze-bg-3'>
@@ -2393,7 +2396,7 @@ const _ChatBubble = ({ threadId, chatMessage, currCheckpointIdx, isCommitted, me
 
 		if (chatMessage.type === 'invalid_params') {
 			return <div className={`${isCheckpointGhost ? 'opacity-50' : ''}`}>
-				<InvalidTool toolName={chatMessage.name} message={chatMessage.content} mcpServerName={chatMessage.mcpServerName} />
+				<InvalidTool toolName={chatMessage.name} message={chatMessage.content} mcpServerName={chatMessage.mcpServerName} refused={chatMessage.refused} />
 			</div>
 		}
 

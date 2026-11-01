@@ -17,7 +17,7 @@ export type ToolMessage<T extends ToolName> = {
 	mcpServerName: string | undefined; // the server name at the time of the call
 } & (
 		// in order of events:
-		| { type: 'invalid_params', result: null, name: T, }
+		| { type: 'invalid_params', result: null, name: T, refused?: true } // `refused`: the run's tool policy disallows the tool; it carries no params
 
 		// params were validated, awaiting user. `conflict`: the path has another docked chat's unreviewed changes (shown as
 		// the conflict card, never auto-approved); `uri` is the tool's target, `ownerThreadId` the chat that owns those changes,

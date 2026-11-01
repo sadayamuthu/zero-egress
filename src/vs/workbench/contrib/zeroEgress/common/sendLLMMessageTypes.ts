@@ -106,6 +106,7 @@ type SendLLMType = {
 	messagesType: 'chatMessages';
 	messages: LLMChatMessage[]; // the type of raw chat messages that we send to Anthropic, OAI, etc
 	separateSystemMessage: string | undefined;
+	// for prompts, audit and logging only; tool gating uses `toolPolicy`
 	chatMode: ChatMode | null;
 	toolPolicy: ToolPolicy | null;
 } | {

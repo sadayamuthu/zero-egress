@@ -6,7 +6,7 @@
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { availableTools, InternalToolInfo } from '../prompt/prompts.js';
-import { toolGroupOf, toolPolicyOfMode } from '../toolPolicy.js';
+import { refusalOf, toolGroupOf, toolPolicyOfMode } from '../toolPolicy.js';
 
 suite('toolPolicy', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
@@ -34,5 +34,19 @@ suite('toolPolicy', () => {
 		assert.strictEqual(toolGroupOf('run_command', false), 'terminal');
 		assert.strictEqual(toolGroupOf('x', true), 'mcp');
 		assert.strictEqual(toolGroupOf('read_file', false), 'read');
+	});
+
+	test('refusalOf gates by policy', () => {
+		const copy = "This tool isn't available in this mode.";
+		const gather = toolPolicyOfMode('gather');
+		assert.strictEqual(refusalOf(gather, 'edit_file', false), copy);
+		assert.strictEqual(refusalOf(gather, 'run_command', false), copy);
+		assert.strictEqual(refusalOf(gather, 'mcp_thing', true), copy);
+		assert.strictEqual(refusalOf(gather, 'read_file', false), null);
+		assert.strictEqual(refusalOf(null, 'read_file', false), copy);
+		const agent = toolPolicyOfMode('agent');
+		for (const [n, mcp] of [['edit_file', false], ['run_command', false], ['mcp_thing', true], ['read_file', false]] as const) {
+			assert.strictEqual(refusalOf(agent, n, mcp), null);
+		}
 	});
 });

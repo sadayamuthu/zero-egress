@@ -60,7 +60,7 @@ import { IDisposable } from '../../../../base/common/lifecycle.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { AGENTS_MAX_CONCURRENT_DEFAULT, AGENTS_MAX_CONCURRENT_SETTING } from '../common/zeroEgressConfiguration.js';
 import { clampConcurrency, parallelRequestsOf } from '../common/zeroEgressSettingsTypes.js';
-import { policyAllows, ToolPolicy, toolGroupOf, toolPolicyOfMode } from '../common/toolPolicy.js';
+import { refusalOf, ToolPolicy, toolPolicyOfMode } from '../common/toolPolicy.js';
 
 
 // related to retrying when LLM message has error
@@ -747,7 +747,6 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 	private readonly toolErrMsgs = {
 		rejected: 'Tool call was rejected by the user.',
 		interrupted: 'Tool call was interrupted by the user.',
-		notInMode: "This tool isn't available in this mode.",
 		errWhenStringifying: (error: any) => `Tool call succeeded, but there was an error stringifying the output.\n${getErrorMessage(error)}`
 	}
 
@@ -816,10 +815,10 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 		const isBuiltInTool = isABuiltinToolName(toolName)
 
 		// the run's policy decides which tools may run, whatever the model asked for (also for a just-approved tool)
-		if (!policyAllows(toolPolicy, toolGroupOf(toolName, !isBuiltInTool))) {
-			const errorMessage = this.toolErrMsgs.notInMode
-			const params = (opts.preapproved ? opts.validatedParams : opts.unvalidatedToolParams) as ToolCallParams<ToolName>
-			this._addMessageToThread(threadId, { role: 'tool', type: 'tool_error', params, result: errorMessage, name: toolName, content: errorMessage, id: toolId, rawParams: opts.unvalidatedToolParams, mcpServerName })
+		const refusal = refusalOf(toolPolicy, toolName, !isBuiltInTool)
+		if (refusal) {
+			// replaces the pending request when the tool was just approved, else adds a message
+			this._updateLatestTool(threadId, { role: 'tool', type: 'invalid_params', refused: true, result: null, name: toolName, content: refusal, id: toolId, rawParams: opts.unvalidatedToolParams, mcpServerName })
 			return {}
 		}
 		const toolCtx = this._toolContextOf(threadId)
@@ -1066,6 +1065,7 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 					chatMessages,
 					modelSelection,
 					chatMode,
+					toolPolicy,
 					agentRoot,
 					compaction: this.state.allThreads[threadId]?.compaction,
 				})
