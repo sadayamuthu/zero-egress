@@ -248,6 +248,12 @@ const openSourceModelOptions_assumingOAICompat = {
 		reasoningCapabilities: { supportsReasoning: true, canTurnOffReasoning: true, canIOReasoning: true, openSourceThinkTags: ['<think>', '</think>'] },
 		contextWindow: 32_768, reservedOutputTokenSpace: 8_192,
 	},
+	'gpt-oss': {
+		supportsFIM: false,
+		supportsSystemMessage: 'system-role',
+		reasoningCapabilities: { supportsReasoning: true, canTurnOffReasoning: false, canIOReasoning: true, reasoningSlider: { type: 'effort_slider', values: ['low', 'medium', 'high'], default: 'medium' } },
+		contextWindow: 128_000, reservedOutputTokenSpace: 8_192,
+	},
 	// FIM only
 	'starcoder2': {
 		supportsFIM: true,
@@ -298,6 +304,7 @@ const extensiveModelOptionsFallback: ZeroEgressStaticProviderInfo['modelOptionsF
 		};
 	}
 
+	if (lower.includes('gpt-oss')) return toFallback(openSourceModelOptions_assumingOAICompat, 'gpt-oss')
 	if (lower.includes('deepseek-r1') || lower.includes('deepseek-reasoner')) return toFallback(openSourceModelOptions_assumingOAICompat, 'deepseekR1')
 	if (lower.includes('deepseek') && lower.includes('v2')) return toFallback(openSourceModelOptions_assumingOAICompat, 'deepseekCoderV2')
 	if (lower.includes('deepseek')) return toFallback(openSourceModelOptions_assumingOAICompat, 'deepseekCoderV3')
@@ -411,6 +418,15 @@ const ollamaModelOptions = {
 		supportsFIM: false,
 		supportsSystemMessage: 'system-role',
 		reasoningCapabilities: { supportsReasoning: true, canIOReasoning: false, canTurnOffReasoning: false, openSourceThinkTags: ['<think>', '</think>'] },
+	},
+	'gpt-oss:20b': {
+		contextWindow: 128_000,
+		reservedOutputTokenSpace: 8_192,
+		cost: { input: 0, output: 0 },
+		downloadable: { sizeGb: 14 },
+		supportsFIM: false,
+		supportsSystemMessage: 'system-role',
+		reasoningCapabilities: { supportsReasoning: true, canTurnOffReasoning: false, canIOReasoning: true, reasoningSlider: { type: 'effort_slider', values: ['low', 'medium', 'high'], default: 'medium' } },
 	},
 	'devstral:latest': {
 		contextWindow: 131_000,

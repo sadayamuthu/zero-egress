@@ -11,7 +11,8 @@ import OpenAI, { ClientOptions } from 'openai';
 
 import { LLMChatMessage, LLMFIMMessage, ModelListParams, OllamaModelResponse, OnError, OnFinalMessage, OnText, RawToolCallObj, RawToolParamsObj } from '../../common/sendLLMMessageTypes.js';
 import { ChatMode, displayInfoOfProviderName, ModelSelectionOptions, OverridesOfModel, ProviderName, SettingsOfProvider } from '../../common/zeroEgressSettingsTypes.js';
-import { getSendableReasoningInfo, getModelCapabilities, getProviderCapabilities, defaultProviderSettings } from '../../common/modelCapabilities.js';
+import { getModelCapabilities, getProviderCapabilities, defaultProviderSettings } from '../../common/modelCapabilities.js';
+import { reasoningBodyOf } from '../../common/thinkingLevel.js';
 import { extractReasoningWrapper, extractXMLToolsWrapper } from './extractGrammar.js';
 import { availableTools, InternalToolInfo } from '../../common/prompt/prompts.js';
 
@@ -174,12 +175,8 @@ const _sendOpenAICompatibleChat = async ({ messages, onText, onFinalMessage, onE
 
 	// reasoning
 	const { canIOReasoning, openSourceThinkTags } = reasoningCapabilities || {}
-	const reasoningInfo = getSendableReasoningInfo('Chat', providerName, modelName_, modelSelectionOptions, overridesOfModel) // user's modelName_ here
-
-	const includeInPayload = {
-		...providerReasoningIOSettings?.input?.includeInPayload?.(reasoningInfo),
-		...additionalOpenAIPayload
-	}
+	// the thinking level goes in the request body (not the client options)
+	const reasoningBody = reasoningBodyOf(getModelCapabilities(providerName, modelName_, overridesOfModel), modelSelectionOptions) // user's modelName_ here
 
 	// tools
 	const potentialTools = openAITools(chatMode, mcpTools)
@@ -188,12 +185,13 @@ const _sendOpenAICompatibleChat = async ({ messages, onText, onFinalMessage, onE
 		: {}
 
 	// instance
-	const openai: OpenAI = await newOpenAICompatibleSDK({ providerName, settingsOfProvider, includeInPayload })
+	const openai: OpenAI = await newOpenAICompatibleSDK({ providerName, settingsOfProvider })
 	const options: OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming = {
 		model: modelName,
 		messages: messages as any,
 		stream: true,
 		...nativeToolsObj,
+		...reasoningBody,
 		...additionalOpenAIPayload
 		// max_completion_tokens: maxTokens,
 	}
