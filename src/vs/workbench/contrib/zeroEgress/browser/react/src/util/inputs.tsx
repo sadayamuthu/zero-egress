@@ -189,7 +189,14 @@ const getAbbreviatedName = (relativePath: string) => {
 	return getBasename(relativePath, 1)
 }
 
-const getOptionsAtPath = async (accessor: ReturnType<typeof useAccessor>, path: string[], optionText: string, onLater?: (opts: Option[]) => void): Promise<Option[]> => {
+const getOptionsAtPath = async (accessor: ReturnType<typeof useAccessor>, path: string[], optionText: string): Promise<Option[]> => {
+	const { now, later } = await getStagedOptionsAtPath(accessor, path, optionText)
+	if (!later) return now
+	return (await later) ?? now
+}
+
+/** `now` is what is ready first (files and folders); `later` resolves to the full list once symbols arrive */
+const getStagedOptionsAtPath = async (accessor: ReturnType<typeof useAccessor>, path: string[], optionText: string): Promise<{ now: Option[], later?: Promise<Option[] | undefined> }> => {
 
 	const toolsService = accessor.get('IToolsService')
 
@@ -441,7 +448,7 @@ const getOptionsAtPath = async (accessor: ReturnType<typeof useAccessor>, path: 
 
 		const selectedOption = nextOptionsAtPath.find(o => o.fullName.toLowerCase() === pn.toLowerCase())
 
-		if (!selectedOption) return [];
+		if (!selectedOption) return { now: [] };
 
 		nextOptionsAtPath = selectedOption.nextOptions! // assume nextOptions exists until we hit the very last option (the path will never contain the last possible option)
 		generateNextOptionsAtPath = selectedOption.generateNextOptions
@@ -455,9 +462,8 @@ const getOptionsAtPath = async (accessor: ReturnType<typeof useAccessor>, path: 
 	}
 	else if (path.length === 0 && optionText.trim().length > 0) { // (special case): directly search for both files and folders if optionsPath is empty and there's a search term
 		// files and folders show as soon as they arrive; symbols merge in through onLater
-		if (onLater) laterSymbols = symbolOptions(optionText)
+		laterSymbols = symbolOptions(optionText).catch(() => [] as Option[])
 		nextOptionsAtPath = await filesAndFolders(optionText)
-		if (!onLater) nextOptionsAtPath = [...nextOptionsAtPath, ...await symbolOptions(optionText)]
 	}
 
 	const finalize = (list: Option[]) => list
@@ -470,12 +476,13 @@ const getOptionsAtPath = async (accessor: ReturnType<typeof useAccessor>, path: 
 		.slice(0, numOptionsToShow) // should go last because sorting/filtering should happen on all datapoints
 
 	const optionsAtPath = finalize(nextOptionsAtPath)
+	let later: Promise<Option[] | undefined> | undefined
 	if (laterSymbols) {
 		const ff = nextOptionsAtPath
-		laterSymbols.then(symbols => { if (symbols.length) onLater?.(finalize([...ff, ...symbols])) })
+		later = laterSymbols.then(symbols => symbols.length ? finalize([...ff, ...symbols]) : undefined)
 	}
 
-	return optionsAtPath
+	return { now: optionsAtPath, later }
 
 }
 
@@ -692,13 +699,15 @@ export const ZeroEgressInputBox2 = forwardRef<HTMLTextAreaElement, InputBox2Prop
 		const fetchOptions = async () => {
 			const reqId = ++requestIdRef.current
 			const isCurrent = () => currentPathRef.current === JSON.stringify(optionPath) && reqId === requestIdRef.current
-			const newOpts = await getOptionsAtPath(accessor, optionPath, newStr, later => {
-				if (isCurrent()) setOptions(later);
-			}) || [];
+			const { now, later } = await getStagedOptionsAtPath(accessor, optionPath, newStr);
 			if (!isCurrent()) { return; }
-			setOptions(newOpts);
+			setOptions(now); // files and folders first; the symbol merge below always lands after this
 			setOptionIdx(0);
 			debounceTimerRef.current = null;
+			if (later) {
+				const merged = await later.catch(() => undefined);
+				if (merged && isCurrent()) setOptions(merged);
+			}
 		};
 
 		// If text is empty, run immediately without debouncing
