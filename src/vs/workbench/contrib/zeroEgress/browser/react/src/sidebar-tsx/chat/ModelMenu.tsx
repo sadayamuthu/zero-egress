@@ -11,7 +11,7 @@ import { ChevronDown } from 'lucide-react';
 import { useAccessor, useSettingsState } from '../../util/services.js';
 import { ModelDropdown } from '../../zero-egress-settings-tsx/ModelDropdown.js';
 // no runtime imports from vs/ here: the bundle flattens this folder, so a relative path one level deeper breaks
-import { displayInfoOfProviderName, getModelCapabilities, isFeatureNameDisabled, modelFilterOfFeatureName, modelSelectionsEqual, optionsForThinkingLevel, thinkingLabel, thinkingLevelOf, thinkingLevelsOf } from '../composerDeps.js';
+import { displayInfoOfProviderName, getModelCapabilities, isFeatureNameDisabled, modelFilterOfFeatureName, modelSelectionsEqual, optionsForThinkingLevel, thinkingButtonLabel, thinkingLabel, thinkingLevelOf, thinkingLevelsOf } from '../composerDeps.js';
 import type { FeatureName, ModelOption, ProviderName } from '../composerDeps.js';
 import { MenuButton } from './ModeMenu.js';
 import { MenuHeading, MenuRow, Popover } from './Popover.js';
@@ -31,7 +31,7 @@ const useThinking = (featureName: FeatureName) => {
 	const options = settingsState.optionsOfModelSelection[featureName][providerName]?.[modelName]
 	const level = thinkingLevelOf(caps, options)
 	if (!level) return null
-	return { modelSelection, caps, levels, level }
+	return { modelSelection, caps, levels, level, options }
 }
 
 const ThinkingRow = ({ featureName }: { featureName: FeatureName }) => {
@@ -109,7 +109,7 @@ export const ModelMenu = ({ featureName }: { featureName: FeatureName }) => {
 
 	const close = () => { setOpen(false); anchor?.focus({ preventScroll: true }); };
 	const label = (selected ?? options[0]).selection.modelName;
-	const level = thinking ? thinkingLabel[thinking.level] : null;
+	const level = thinking ? thinkingButtonLabel(thinking.caps, thinking.options) : null;
 
 	return <>
 		<MenuButton buttonRef={setAnchor} open={open} label={`Model: ${label}${level ? ` · ${level}` : ''}`} onToggle={() => setOpen(o => !o)} shrinks>

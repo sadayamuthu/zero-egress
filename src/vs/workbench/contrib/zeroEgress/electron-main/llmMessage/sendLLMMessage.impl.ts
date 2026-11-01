@@ -164,19 +164,20 @@ const rawToolCallObjOfParamsStr = (name: string, toolParamsStr: string, id: stri
 
 
 const _sendOpenAICompatibleChat = async ({ messages, onText, onFinalMessage, onError, settingsOfProvider, modelSelectionOptions, modelName: modelName_, _setAborter, providerName, chatMode, separateSystemMessage, overridesOfModel, mcpTools }: SendChatParams_Internal) => {
+	const capabilities = getModelCapabilities(providerName, modelName_, overridesOfModel) // user's modelName_ here
 	const {
 		modelName,
 		specialToolFormat,
 		reasoningCapabilities,
 		additionalOpenAIPayload,
-	} = getModelCapabilities(providerName, modelName_, overridesOfModel)
+	} = capabilities
 
 	const { providerReasoningIOSettings } = getProviderCapabilities(providerName)
 
 	// reasoning
 	const { canIOReasoning, openSourceThinkTags } = reasoningCapabilities || {}
 	// the thinking level goes in the request body (not the client options)
-	const reasoningBody = reasoningBodyOf(getModelCapabilities(providerName, modelName_, overridesOfModel), modelSelectionOptions) // user's modelName_ here
+	const reasoningBody = reasoningBodyOf(providerName, capabilities, modelSelectionOptions)
 
 	// tools
 	const potentialTools = openAITools(chatMode, mcpTools)

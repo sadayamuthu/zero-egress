@@ -6,7 +6,7 @@
 // The chat panel's "Thinking" control as one level per model, and the request-body field that carries it.
 
 import type { ZeroEgressStaticModelInfo } from './modelCapabilities.js';
-import type { ModelSelectionOptions } from './zeroEgressSettingsTypes.js';
+import type { ModelSelectionOptions, ProviderName } from './zeroEgressSettingsTypes.js';
 
 export type ThinkingLevel = 'off' | 'low' | 'med' | 'high';
 
@@ -61,20 +61,34 @@ export function optionsForThinkingLevel(caps: ZeroEgressStaticModelInfo, level: 
 	return { reasoningEnabled: true };
 }
 
+// "· <Level>" on the model button: the same words the Thinking row shows. Nothing for a model that can't reason or always does.
+export function thinkingButtonLabel(caps: ZeroEgressStaticModelInfo, opts: ModelSelectionOptions | undefined): string | null {
+	const levels = thinkingLevelsOf(caps);
+	const level = thinkingLevelOf(caps, opts);
+	if (!level || levels.length < 2) {
+		return null;
+	}
+	if (!effortSliderOf(caps)) {
+		return level === 'off' ? 'Off' : 'On';
+	}
+	return thinkingLabel[level];
+}
+
 // Probed against Ollama 0.40.11 (/v1/chat/completions, qwen3:0.6b, "What is 17*23?"):
 //   {reasoning_effort:'none'} -> message.content only, no `reasoning` text
 //   {reasoning_effort:'high'} -> message.reasoning present
 //   {think:false}             -> ignored on /v1 (reasoning still came back)
-// so `reasoning_effort` is honored by Ollama's OpenAI-compatible endpoint and no provider-specific branch is needed.
-export function reasoningBodyOf(caps: ZeroEgressStaticModelInfo, opts: ModelSelectionOptions | undefined): Record<string, string> {
+// so for `ollama` off is 'none'. 'none' is unverified on vLLM / LM Studio / oMLX (it could be a 400), so they send
+// reasoning_effort only for low / medium / high and nothing for off.
+export function reasoningBodyOf(providerName: ProviderName, caps: ZeroEgressStaticModelInfo, opts: ModelSelectionOptions | undefined): Record<string, string> {
 	const reasoning = reasoningOf(caps);
 	if (!reasoning) {
 		return {};
 	}
 	if (reasoning.canTurnOffReasoning && opts?.reasoningEnabled === false) {
-		return { reasoning_effort: 'none' };
+		return providerName === 'ollama' ? { reasoning_effort: 'none' } : {};
 	}
 	const slider = effortSliderOf(caps);
-	const effort = opts?.reasoningEffort ?? slider?.default;
+	const effort = opts?.reasoningEffort ?? slider?.default; // the default is what the row shows, so it is what is sent
 	return slider && effort ? { reasoning_effort: effort } : {};
 }

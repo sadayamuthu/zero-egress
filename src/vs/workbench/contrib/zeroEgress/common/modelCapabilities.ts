@@ -475,9 +475,10 @@ const ollamaSettings: ZeroEgressStaticProviderInfo = {
 	modelOptionsFallback: (modelName) => extensiveModelOptionsFallback(modelName, { downloadable: { sizeGb: 'not-known' } }),
 	modelOptions: ollamaModelOptions,
 	providerReasoningIOSettings: {
-		// reasoning: we need to filter out reasoning <think> tags manually
+		// reasoning: Ollama's /v1 streams it in delta.reasoning (verified on qwen3:0.6b). The <think>-tag parser can't run
+		// alongside: its wrapper replaces fullReasoning, which would drop the delta text.
 		input: { includeInPayload: openAICompatIncludeInPayloadReasoning },
-		output: { needsManualParse: true },
+		output: { nameOfFieldInDelta: 'reasoning' },
 	},
 }
 
