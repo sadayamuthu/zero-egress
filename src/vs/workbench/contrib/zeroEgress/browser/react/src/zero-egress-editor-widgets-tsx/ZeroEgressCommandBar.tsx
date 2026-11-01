@@ -158,13 +158,13 @@ export const ZeroEgressCommandBar = ({ uri, editor }: ZeroEgressCommandBarProps)
 	}
 
 	const onAcceptAll = () => {
-		commandBarService.acceptOrRejectAllFiles({ behavior: 'accept' });
+		commandBarService.acceptOrRejectAllFiles({ behavior: 'accept' }).catch(e => console.error('Error while resolving all pending changes:', e));
 		metricsService.capture('Accept All', {})
 		setShowAcceptRejectAllButtons(false);
 	}
 
 	const onRejectAll = () => {
-		commandBarService.acceptOrRejectAllFiles({ behavior: 'reject' });
+		commandBarService.acceptOrRejectAllFiles({ behavior: 'reject' }).catch(e => console.error('Error while resolving all pending changes:', e));
 		metricsService.capture('Reject All', {})
 		setShowAcceptRejectAllButtons(false);
 	}

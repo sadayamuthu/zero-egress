@@ -45,6 +45,8 @@ import { IZeroEgressModelService } from '../../../../common/zeroEgressModelServi
 import { IWorkspaceContextService } from '../../../../../../../platform/workspace/common/workspace.js'
 import { IZeroEgressCommandBarService } from '../../../zeroEgressCommandBarService.js'
 import { IPendingFileOpsService } from '../../../pendingFileOpsService.js'
+import { IChangeOwnersService } from '../../../changeOwnersService.js'
+import { ICommandAllowListService } from '../../../commandAllowListService.js'
 import { AgentSummary, IBackgroundAgentsService } from '../../../backgroundAgentsServiceInterface.js'
 import { PendingFileOp } from '../../../../common/pendingFileOps.js'
 import { INativeHostService } from '../../../../../../../platform/native/common/native.js';
@@ -243,6 +245,8 @@ const getReactAccessor = (accessor: ServicesAccessor) => {
 		IExtensionTransferService: accessor.get(IExtensionTransferService),
 		IMCPService: accessor.get(IMCPService),
 		IPendingFileOpsService: accessor.get(IPendingFileOpsService),
+		IChangeOwnersService: accessor.get(IChangeOwnersService),
+		ICommandAllowListService: accessor.get(ICommandAllowListService),
 		IBackgroundAgentsService: accessor.get(IBackgroundAgentsService),
 		ILocalModelDetectionService: accessor.get(ILocalModelDetectionService),
 		ILocalStatusService: accessor.get(ILocalStatusService),
@@ -436,6 +440,32 @@ export const usePendingFileOps = (): readonly PendingFileOp[] => {
 		pendingFileOpsListeners.add(listener);
 		return () => { pendingFileOpsListeners.delete(listener) };
 	}, []);
+	return s
+}
+
+// which docked chat owns each file's pending changes; re-renders when an owner changes
+export const useChangeOwners = () => {
+	const accessor = useAccessor()
+	const changeOwnersService = accessor.get('IChangeOwnersService')
+	const [, setVersion] = useState(0)
+	useEffect(() => {
+		setVersion(v => v + 1)
+		const d = changeOwnersService.onDidChange(() => { setVersion(v => v + 1) })
+		return () => { d.dispose() }
+	}, [changeOwnersService])
+	return changeOwnersService
+}
+
+// this workspace's allowed terminal commands; re-renders when the list changes
+export const useCommandAllowList = (): readonly string[] => {
+	const accessor = useAccessor()
+	const commandAllowListService = accessor.get('ICommandAllowListService')
+	const [s, ss] = useState(commandAllowListService.list)
+	useEffect(() => {
+		ss(commandAllowListService.list)
+		const d = commandAllowListService.onDidChange(() => { ss(commandAllowListService.list) })
+		return () => { d.dispose() }
+	}, [commandAllowListService])
 	return s
 }
 

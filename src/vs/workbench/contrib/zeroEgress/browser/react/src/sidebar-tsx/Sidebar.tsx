@@ -4,7 +4,6 @@
  *--------------------------------------------------------------------------------------*/
 
 import { useIsDark } from '../util/services.js';
-// import { SidebarThreadSelector } from './SidebarThreadSelector.js';
 // import { SidebarChat } from './SidebarChat.js';
 
 import '../styles.css'

@@ -28,17 +28,18 @@ export const ErrorDisplay = ({
 	const message = message_ + ''
 
 	return (
-		<div className={`rounded-lg border border-red-200 bg-red-50 p-4 overflow-auto`}>
+		// theme colors only: the error foreground, mixed into the panel background (no fixed reds, which glare in dark themes)
+		<div className='rounded-[10px] border border-[color-mix(in_srgb,var(--vscode-errorForeground)_45%,transparent)] bg-[color-mix(in_srgb,var(--vscode-errorForeground)_10%,var(--ze-bg-2))] text-ze-fg-1 p-3 overflow-auto'>
 			{/* Header */}
 			<div className='flex items-start justify-between'>
 				<div className='flex gap-3'>
-					<AlertCircle className='h-5 w-5 text-red-600 mt-0.5' />
+					<AlertCircle className='h-5 w-5 text-[var(--vscode-errorForeground)] mt-0.5 shrink-0' />
 					<div className='flex-1'>
-						<h3 className='font-semibold text-red-800'>
+						<h3 className='font-semibold text-[var(--vscode-errorForeground)]'>
 							{/* eg Error */}
 							Error
 						</h3>
-						<p className='text-red-700 mt-1'>
+						<p className='text-ze-fg-1 mt-1'>
 							{/* eg Something went wrong */}
 							{message}
 						</p>
@@ -47,7 +48,7 @@ export const ErrorDisplay = ({
 
 				<div className='flex gap-2'>
 					{isExpandable && (
-						<button className='text-red-600 hover:text-red-800 p-1 rounded'
+						<button className='text-ze-fg-3 hover:text-ze-fg-1 hover:bg-ze-bg-2-hover p-1 rounded'
 							onClick={() => setIsExpanded(!isExpanded)}
 						>
 							{isExpanded ? (
@@ -58,7 +59,7 @@ export const ErrorDisplay = ({
 						</button>
 					)}
 					{showDismiss && onDismiss && (
-						<button className='text-red-600 hover:text-red-800 p-1 rounded'
+						<button className='text-ze-fg-3 hover:text-ze-fg-1 hover:bg-ze-bg-2-hover p-1 rounded'
 							onClick={onDismiss}
 						>
 							<X className='h-5 w-5' />
@@ -69,10 +70,10 @@ export const ErrorDisplay = ({
 
 			{/* Expandable Details */}
 			{isExpanded && details && (
-				<div className='mt-4 space-y-3 border-t border-red-200 pt-3 overflow-auto'>
+				<div className='mt-4 space-y-3 border-t border-[color-mix(in_srgb,var(--vscode-errorForeground)_30%,transparent)] pt-3 overflow-auto'>
 					<div>
-						<span className='font-semibold text-red-800'>Full Error: </span>
-						<pre className='text-red-700'>{details}</pre>
+						<span className='font-semibold text-[var(--vscode-errorForeground)]'>Full Error: </span>
+						<pre className='text-ze-fg-2 whitespace-pre-wrap'>{details}</pre>
 					</div>
 				</div>
 			)}

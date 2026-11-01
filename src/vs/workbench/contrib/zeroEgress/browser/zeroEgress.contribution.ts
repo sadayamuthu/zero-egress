@@ -64,12 +64,15 @@ import './fileService.js'
 // register source control management
 import './zeroEgressSCMService.js'
 import './pendingFileOpsService.js'
+import './changeOwnersService.js'
+import './commandAllowListService.js'
 import './backgroundAgentsService.js'
 import './pendingDeleteDecorations.js'
 import './pendingChangeContextKeys.js'
 import './egressTargetsContribution.js'
 import './localStatusService.js'
 import './localStatusContribution.js'
+import './modelSlotsStatusContribution.js'
 import './agentsViewContribution.js'
 
 // Home (empty window): clone command

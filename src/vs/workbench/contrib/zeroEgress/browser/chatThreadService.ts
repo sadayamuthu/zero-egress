@@ -18,6 +18,12 @@ import { FeatureName, ModelSelection, ModelSelectionOptions } from '../common/ze
 import { IZeroEgressSettingsService } from '../common/zeroEgressSettingsService.js';
 import { approvalTypeOfBuiltinToolName, BuiltinToolCallParams, ToolCallParams, ToolName, ToolResult } from '../common/toolsServiceTypes.js';
 import { IToolsService } from './toolsService.js';
+import { IChangeOwnersService, OwnershipConflictError } from './changeOwnersService.js';
+import { UNOWNED } from '../common/changeOwners.js';
+import { ICommandAllowListService } from './commandAllowListService.js';
+import { restoreTargets } from '../common/reviewScope.js';
+import { basename } from '../../../../base/common/resources.js';
+import { IPendingFileOpsService } from './pendingFileOpsService.js';
 import { CancellationToken } from '../../../../base/common/cancellation.js';
 import { ILanguageFeaturesService } from '../../../../editor/common/services/languageFeatures.js';
 import { ChatMessage, CheckpointEntry, CodespanLocationLink, StagingSelectionItem, ToolMessage } from '../common/chatThreadServiceTypes.js';
@@ -30,7 +36,8 @@ import { IEditCodeService } from './editCodeServiceInterface.js';
 import { ZeroEgressFileSnapshot } from '../common/editCodeServiceTypes.js';
 import { INotificationService, Severity } from '../../../../platform/notification/common/notification.js';
 import { truncate } from '../../../../base/common/strings.js';
-import { THREAD_STORAGE_KEY } from '../common/storageKeys.js';
+import { CHAT_OPEN_TABS_STORAGE_KEY, THREAD_STORAGE_KEY } from '../common/storageKeys.js';
+import { closeTab as closeTabOf, openTab, restoreTabs } from '../common/chatTabs.js';
 import { IConvertToLLMMessageService } from './convertToLLMMessageService.js';
 import { timeout } from '../../../../base/common/async.js';
 import { deepClone } from '../../../../base/common/objects.js';
@@ -128,6 +135,9 @@ export type ThreadType = {
 	createdAt: string; // ISO string
 	lastModified: string; // ISO string
 
+	/** set by the user (rename); otherwise the title comes from the first message (threadTitleOf) */
+	title?: string;
+
 	messages: ChatMessage[];
 	filesWithUserChanges: Set<string>;
 
@@ -166,6 +176,8 @@ type ChatThreads = {
 export type ThreadsState = {
 	allThreads: ChatThreads;
 	currentThreadId: string; // intended for internal use only
+	/** the docked panel's tabs, left to right (persisted); background-agent threads never get one */
+	openTabIds: string[];
 }
 
 // 'LLM' | 'tool' | 'awaiting_user' | 'idle' | 'waiting_for_model' | undefined (see RunPhase)
@@ -258,8 +270,13 @@ export interface IChatThreadService {
 	openNewThread(): void;
 	switchToThread(threadId: string): void;
 
-	// thread selector
-	deleteThread(threadId: string): void;
+	// tabs and history
+	/** an empty or blank title clears it, so the thread falls back to its first message */
+	renameThread(threadId: string, title: string): void;
+	/** closes the tab only: the thread stays in history and keeps its changes */
+	closeTab(threadId: string): void;
+	/** stops the thread first if it is running (its tool calls and model slot), then deletes it */
+	deleteThread(threadId: string): Promise<void>;
 	duplicateThread(threadId: string): void;
 
 	// background agents (never the current thread)
@@ -310,6 +327,11 @@ export interface IChatThreadService {
 	// approve/reject
 	approveLatestToolRequest(threadId: string): void;
 	rejectLatestToolRequest(threadId: string): void;
+	/**
+	 * For a tool_request with a `conflict`: accepts or rejects the other chat's changes that block its path, gives the
+	 * path to this chat, then runs the tool. To stop instead, use rejectLatestToolRequest.
+	 */
+	resolveConflictAndContinue(threadId: string, choice: 'accept' | 'reject'): Promise<void>;
 
 	// jump to history
 	jumpToCheckpointBeforeMessageIdx(opts: { threadId: string, messageIdx: number, jumpToUserModified: boolean }): void;
@@ -355,20 +377,29 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 		@IMCPService private readonly _mcpService: IMCPService,
 		@ITerminalToolService private readonly _terminalToolService: ITerminalToolService,
 		@IConfigurationService private readonly _configurationService: IConfigurationService,
+		@IChangeOwnersService private readonly _changeOwnersService: IChangeOwnersService,
+		@ICommandAllowListService private readonly _commandAllowListService: ICommandAllowListService,
+		@IPendingFileOpsService private readonly _pendingFileOpsService: IPendingFileOpsService,
 	) {
 		super()
-		this.state = { allThreads: {}, currentThreadId: null as unknown as string } // default state
+		this.state = { allThreads: {}, currentThreadId: null as unknown as string, openTabIds: [] } // default state
 
 		const readThreads = this._readAllThreads() || {}
 
 		const allThreads = readThreads
+		const restored = this._readOpenTabs(allThreads)
 		this.state = {
 			allThreads: allThreads,
-			currentThreadId: null as unknown as string, // gets set in startNewThread()
+			currentThreadId: null as unknown as string, // set just below
+			openTabIds: restored.tabs,
 		}
 
-		// always be in a thread
-		this.openNewThread()
+		// always be in a thread: the chat that was current when the tabs were last stored, else a new one
+		if (restored.current !== undefined) {
+			this._setState({ currentThreadId: restored.current })
+		} else {
+			this.openNewThread()
+		}
 
 
 		// keep track of user-modified files
@@ -413,7 +444,7 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 		this._onDidChangeCurrentThread.fire()
 	}
 	resetState = () => {
-		this.state = { allThreads: {}, currentThreadId: null as unknown as string } // see constructor
+		this.state = { allThreads: {}, currentThreadId: null as unknown as string, openTabIds: [] } // see constructor
 		this.openNewThread()
 		this._onDidChangeCurrentThread.fire()
 	}
@@ -450,6 +481,39 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 	}
 
 
+	/** the stored tabs and current chat, minus threads that no longer exist and background agents (see restoreTabs) */
+	private _readOpenTabs(threads: ChatThreads): { tabs: string[]; current: string | undefined } {
+		let stored: unknown = undefined
+		try {
+			const str = this._storageService.get(CHAT_OPEN_TABS_STORAGE_KEY, StorageScope.APPLICATION)
+			stored = str ? JSON.parse(str) : undefined
+		} catch {
+			stored = undefined
+		}
+		return restoreTabs(stored, id => !!threads[id], id => !!threads[id]?.agent)
+	}
+
+	private _storeOpenTabs(tabs: string[], current: string) {
+		this._storageService.store(CHAT_OPEN_TABS_STORAGE_KEY, JSON.stringify({ tabs, current }), StorageScope.APPLICATION, StorageTarget.USER)
+	}
+
+	/** an existing empty docked thread, else a new one added to `threads` */
+	private _emptyThreadIn(threads: ChatThreads): { threads: ChatThreads; id: string; created: boolean } {
+		for (const threadId in threads) {
+			if (threads[threadId] && threads[threadId]!.messages.length === 0 && !threads[threadId]!.agent) {
+				return { threads, id: threadId, created: false }
+			}
+		}
+		const newThread = newThreadObject()
+		return { threads: { ...threads, [newThread.id]: newThread }, id: newThread.id, created: true }
+	}
+
+	/** the tabs with `threadId` added (the cap drops the oldest idle tab); background agents get none */
+	private _tabsWith(threadId: string, threads: ChatThreads = this.state.allThreads): string[] {
+		if (!threads[threadId] || threads[threadId]?.agent) return this.state.openTabIds
+		return openTab(this.state.openTabIds, threadId, id => !!this.streamState[id]?.isRunning)
+	}
+
 	// this should be the only place this.state = ... appears besides constructor
 	private _setState(state: Partial<ThreadsState>, doNotRefreshMountInfo?: boolean) {
 		const newState = {
@@ -457,7 +521,9 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 			...state
 		}
 
+		const tabsChanged = newState.openTabIds !== this.state.openTabIds || newState.currentThreadId !== this.state.currentThreadId
 		this.state = newState
+		if (tabsChanged && newState.currentThreadId) this._storeOpenTabs(newState.openTabIds, newState.currentThreadId)
 
 		this._onDidChangeCurrentThread.fire()
 
@@ -559,6 +625,49 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 			, threadId
 		)
 	}
+	async resolveConflictAndContinue(threadId: string, choice: 'accept' | 'reject') {
+		const thread = this.state.allThreads[threadId]
+		if (!thread) return
+		const lastMsg = thread.messages[thread.messages.length - 1]
+		if (!(lastMsg?.role === 'tool' && lastMsg.type === 'tool_request' && lastMsg.conflict)) return
+		const { uri } = lastMsg.conflict
+		// a chat deleted since the card was shown no longer owns anything: its changes are unowned now (the card already
+		// says "made outside this chat"), so resolve them without another click
+		const ownerThreadId = this.state.allThreads[lastMsg.conflict.ownerThreadId] ? lastMsg.conflict.ownerThreadId : UNOWNED
+
+		// only the named chat's changes that block this path: its files at or under it, and its folder ops above it.
+		// If resolving them would also touch a third chat's changes, the card names that chat instead and nothing is resolved
+		const blocking = this._changeOwnersService.changesBlocking(uri, threadId, ownerThreadId)
+		if (blocking && blocking.owner !== ownerThreadId) {
+			this._updateLatestTool(threadId, { ...lastMsg, conflict: { uri, ownerThreadId: blocking.owner } })
+			return
+		}
+		// the blocker can be UNOWNED (changes no chat owns): those are resolved the same way
+		if (blocking) {
+			try {
+				for (const owned of blocking.uris) {
+					await this._editCodeService.acceptOrRejectAllDiffAreas({ uri: owned, behavior: choice, removeCtrlKs: false })
+					await this._pendingFileOpsService.resolveAll(choice, owned)
+				}
+				for (const id of blocking.opIds) {
+					await this._pendingFileOpsService.resolve(id, choice)
+				}
+			} catch (e) {
+				// the card stays (nothing continues): say why instead of leaving it to the console
+				this._notificationService.error(`Could not ${choice} the other changes: ${getErrorMessage(e)}`)
+				return
+			}
+		}
+		// the thread may have moved on (deleted, or stopped) while the review ran
+		const messages = this.state.allThreads[threadId]?.messages
+		const latest = messages?.[messages.length - 1]
+		if (!(latest?.role === 'tool' && latest.type === 'tool_request' && latest.id === lastMsg.id)) return
+
+		// if something still blocks it (another chat's write in flight, or a second chat), the tool call shows the card again
+		if (!this._changeOwnersService.conflictFor(uri, threadId)) this._changeOwnersService.transfer(uri, threadId)
+		this.approveLatestToolRequest(threadId)
+	}
+
 	rejectLatestToolRequest(threadId: string) {
 		const thread = this.state.allThreads[threadId]
 		if (!thread) return // should never happen
@@ -635,7 +744,7 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 	/** whose files this thread's tools work on */
 	private _toolContextOf(threadId: string): ToolRunContext {
 		const agent = this.state.allThreads[threadId]?.agent
-		return agent ? { kind: 'background', agent } : { kind: 'docked' }
+		return agent ? { kind: 'background', agent } : { kind: 'docked', threadId }
 	}
 
 	/** maps every path param into the agent's root, or throws (`Path is outside this agent's worktree: ...`) */
@@ -656,6 +765,20 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 		return confined as ToolCallParams<ToolName>
 	}
 
+
+	/** run_command / run_persistent_command only: the command is on this workspace's allow-list. */
+	private _isAllowListedCommand(toolName: ToolName, params: ToolCallParams<ToolName>): boolean {
+		if (toolName !== 'run_command' && toolName !== 'run_persistent_command') { return false }
+		return this._commandAllowListService.isAllowed((params as { command: string }).command)
+	}
+
+	/** the path a docked file tool writes, which another chat's unreviewed changes can block */
+	private _writeTargetOf(toolName: ToolName, params: ToolCallParams<ToolName>): URI | undefined {
+		if (toolName === 'edit_file' || toolName === 'rewrite_file' || toolName === 'create_file_or_folder' || toolName === 'delete_file_or_folder') {
+			return (params as BuiltinToolCallParams['edit_file']).uri
+		}
+		return undefined
+	}
 
 	// returns true when the tool call is waiting for user approval
 	private _runToolCall = async (
@@ -711,10 +834,19 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 
 			// 2. if tool requires approval, break from the loop, awaiting approval
 
+			// another docked chat has unreviewed changes there: ask with the conflict card, even when edits are auto-approved
+			const conflictUri = toolCtx.kind === 'docked' ? this._writeTargetOf(toolName, toolParams) : undefined
+			const conflict = conflictUri && this._changeOwnersService.changesBlocking(conflictUri, threadId)
+			if (conflictUri && conflict) {
+				this._addMessageToThread(threadId, { role: 'tool', type: 'tool_request', content: '(Awaiting user permission...)', result: null, name: toolName, params: toolParams, id: toolId, rawParams: opts.unvalidatedToolParams, mcpServerName, conflict: { uri: conflictUri, ownerThreadId: conflict.owner } })
+				return { awaitingUserApproval: true }
+			}
+
 			const approvalType = isBuiltInTool ? approvalTypeOfBuiltinToolName[toolName] : 'MCP tools'
 			if (approvalType) {
 				// background agents never ask for edits, creates and deletes: they land in the worktree and are reviewed later
 				const autoApprove = (toolCtx.kind === 'background' && approvalType === 'edits') || this._settingsService.state.globalSettings.autoApprove[approvalType]
+					|| (approvalType === 'terminal' && this._settingsService.state.globalSettings.useCommandAllowList && this._isAllowListedCommand(toolName, toolParams))
 				// add a tool_request because we use it for UI if a tool is loading (this should be improved in the future)
 				this._addMessageToThread(threadId, { role: 'tool', type: 'tool_request', content: '(Awaiting user permission...)', result: null, name: toolName, params: toolParams, id: toolId, rawParams: opts.unvalidatedToolParams, mcpServerName })
 				if (!autoApprove) {
@@ -774,6 +906,13 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 		catch (error) {
 			resolveInterruptor(() => { }) // resolve for the sake of it
 			if (interrupted) { return { interrupted: true } } // the tool result is added where we interrupt, not here
+
+			// race guard: another chat claimed the path after the check above (or while this call awaited approval)
+			const conflictUri = error instanceof OwnershipConflictError && toolCtx.kind === 'docked' ? this._writeTargetOf(toolName, toolParams) : undefined
+			if (conflictUri && error instanceof OwnershipConflictError) {
+				this._updateLatestTool(threadId, { role: 'tool', type: 'tool_request', content: '(Awaiting user permission...)', result: null, name: toolName, params: toolParams, id: toolId, rawParams: opts.unvalidatedToolParams, mcpServerName, conflict: { uri: conflictUri, ownerThreadId: this._changeOwnersService.changesBlocking(conflictUri, threadId)?.owner ?? error.owner } })
+				return { awaitingUserApproval: true }
+			}
 
 			const errorMessage = getErrorMessage(error)
 			this._updateLatestTool(threadId, { role: 'tool', type: 'tool_error', params: toolParams, result: errorMessage, name: toolName, content: errorMessage, id: toolId, rawParams: opts.unvalidatedToolParams, mcpServerName })
@@ -871,11 +1010,16 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 
 			// before enter loop, call tool
 			if (callThisToolFirst) {
-				const { interrupted } = await this._runToolCall(threadId, callThisToolFirst.name, callThisToolFirst.id, callThisToolFirst.mcpServerName, { preapproved: true, unvalidatedToolParams: callThisToolFirst.rawParams, validatedParams: callThisToolFirst.params })
+				const { interrupted, awaitingUserApproval } = await this._runToolCall(threadId, callThisToolFirst.name, callThisToolFirst.id, callThisToolFirst.mcpServerName, { preapproved: true, unvalidatedToolParams: callThisToolFirst.rawParams, validatedParams: callThisToolFirst.params })
 				if (interrupted) {
 					this._setStreamState(threadId, undefined)
 					this._addUserCheckpoint({ threadId })
 
+				}
+				// the approved write hit another chat's changes (the race guard): it waits on the conflict card again
+				if (awaitingUserApproval) {
+					this._setStreamState(threadId, { isRunning: 'awaiting_user' })
+					return
 				}
 			}
 			this._setStreamState(threadId, { isRunning: 'idle', interrupt: 'not_needed' })  // just decorative, for clarity
@@ -933,6 +1077,9 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 					}
 					const releaseModelSlot = () => modelSlot?.dispose() // idempotent
 
+					// how long the model reasoned, shown as "Thought for <n>s"
+					let reasoningStartedAt: number | undefined = undefined
+					let reasoningEndedAt: number | undefined = undefined
 					try {
 						llmCancelToken = this._llmMessageService.sendLLMMessage({
 							messagesType: 'chatMessages',
@@ -944,6 +1091,8 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 							logging: { loggingName: `Chat - ${chatMode}`, loggingExtras: { threadId, nMessagesSent, chatMode } },
 							separateSystemMessage: separateSystemMessage,
 							onText: ({ fullText, fullReasoning, toolCall }) => {
+								if (fullReasoning && reasoningStartedAt === undefined) reasoningStartedAt = Date.now()
+								if ((fullText || toolCall) && reasoningStartedAt !== undefined && reasoningEndedAt === undefined) reasoningEndedAt = Date.now()
 								this._setStreamState(threadId, { isRunning: 'LLM', llmInfo: { displayContentSoFar: fullText, reasoningSoFar: fullReasoning, toolCallSoFar: toolCall ?? null }, interrupt: Promise.resolve(() => { if (llmCancelToken) this._llmMessageService.abort(llmCancelToken) }) })
 							},
 							onFinalMessage: async ({ fullText, fullReasoning, toolCall, anthropicReasoning, }) => {
@@ -1015,7 +1164,8 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 					// llm res success
 					const { toolCall, info } = llmRes
 
-					this._addMessageToThread(threadId, { role: 'assistant', displayContent: info.fullText, reasoning: info.fullReasoning, anthropicReasoning: info.anthropicReasoning })
+					const reasoningMs = reasoningStartedAt !== undefined && info.fullReasoning ? (reasoningEndedAt ?? Date.now()) - reasoningStartedAt : undefined
+					this._addMessageToThread(threadId, { role: 'assistant', displayContent: info.fullText, reasoning: info.fullReasoning, anthropicReasoning: info.anthropicReasoning, reasoningMs })
 
 					this._setStreamState(threadId, { isRunning: 'idle', interrupt: 'not_needed' }) // just decorative for clarity
 
@@ -1243,6 +1393,19 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 		// update the user's checkpoint
 		this._addUserModificationsToCurrCheckpoint({ threadId })
 
+		// never overwrite unreviewed changes that are not this chat's (another chat's, or unowned): those files keep their contents (one notification below)
+		const skippedPaths: string[] = []
+		const restoreFilter = (fsPaths: string[]) => {
+			const { restore, skipped } = restoreTargets(
+				fsPaths,
+				p => this._changeOwnersService.ownerOf(URI.file(p)),
+				p => this._changeOwnersService.hasPending(URI.file(p)),
+				threadId,
+			)
+			skippedPaths.push(...skipped)
+			return restore
+		}
+
 		/*
 if undoing
 
@@ -1275,7 +1438,7 @@ We only need to do it for files that were edited since `to`, ie files between to
 				}
 			}
 
-			for (const fsPath in lastIdxOfURI) {
+			for (const fsPath of restoreFilter(Object.keys(lastIdxOfURI))) {
 				// find the first instance of this file starting at toIdx (go up to latest file; if there is none, go down)
 				for (const k of idxes()) {
 					const message = thread.messages[k]
@@ -1309,7 +1472,7 @@ We only need to do it for files that were edited since `from`, ie files between 
 */
 		if (toIdx > fromIdx) {
 			const { lastIdxOfURI } = this._getCheckpointsBetween({ threadId, loIdx: fromIdx + 1, hiIdx: toIdx })
-			for (const fsPath in lastIdxOfURI) {
+			for (const fsPath of restoreFilter(Object.keys(lastIdxOfURI))) {
 				// apply lowest down content for each uri
 				for (let k = toIdx; k >= fromIdx + 1; k -= 1) {
 					const message = thread.messages[k]
@@ -1325,6 +1488,13 @@ We only need to do it for files that were edited since `from`, ie files between 
 		}
 
 		this._setThreadState(threadId, { currCheckpointIdx: toIdx })
+
+		if (skippedPaths.length) {
+			this._notificationService.notify({
+				severity: Severity.Warning,
+				message: `Restore skipped ${skippedPaths.length} file(s) with unreviewed changes from other chats: ${skippedPaths.map(p => basename(URI.file(p))).join(', ')}.`,
+			})
+		}
 	}
 
 
@@ -1769,43 +1939,71 @@ We only need to do it for files that were edited since `from`, ie files between 
 
 	switchToThread(threadId: string) {
 		if (this.state.allThreads[threadId]?.agent) return // background agents are never the docked thread
-		this._setState({ currentThreadId: threadId })
+		this._setState({ currentThreadId: threadId, openTabIds: this._tabsWith(threadId) })
 	}
 
 
 	openNewThread() {
-		// if a thread with 0 messages already exists, switch to it
-		const { allThreads: currentThreads } = this.state
-		for (const threadId in currentThreads) {
-			if (currentThreads[threadId]!.messages.length === 0 && !currentThreads[threadId]!.agent) {
-				// switch to the existing empty thread and exit
-				this.switchToThread(threadId)
-				return
-			}
+		// if a thread with 0 messages already exists, switch to it; otherwise start a new thread
+		const { threads, id, created } = this._emptyThreadIn(this.state.allThreads)
+		if (!created) {
+			this.switchToThread(id)
+			return
 		}
-		// otherwise, start a new thread
-		const newThread = newThreadObject()
-
-		// update state
-		const newThreads: ChatThreads = {
-			...currentThreads,
-			[newThread.id]: newThread
-		}
-		this._storeAllThreads(newThreads)
-		this._setState({ allThreads: newThreads, currentThreadId: newThread.id })
+		this._storeAllThreads(threads)
+		this._setState({ allThreads: threads, currentThreadId: id, openTabIds: this._tabsWith(id, threads) })
 	}
 
 
-	deleteThread(threadId: string): void {
-		const { allThreads: currentThreads } = this.state
+	renameThread(threadId: string, title: string): void {
+		const thread = this.state.allThreads[threadId]
+		if (!thread) return
+		const trimmed = title.trim()
+		const { title: _previous, ...rest } = thread
+		const newThread: ThreadType = trimmed ? { ...rest, title: trimmed } : rest
+		const newThreads: ChatThreads = { ...this.state.allThreads, [threadId]: newThread }
+		this._storeAllThreads(newThreads)
+		this._setState({ allThreads: newThreads })
+	}
+
+
+	closeTab(threadId: string): void {
+		const { tabs, next } = closeTabOf(this.state.openTabIds, threadId, this.state.currentThreadId)
+		this._setState({ openTabIds: tabs })
+		if (next === undefined) {
+			this.openNewThread()
+		} else if (next !== this.state.currentThreadId) {
+			this.switchToThread(next)
+		}
+	}
+
+
+	async deleteThread(threadId: string): Promise<void> {
+		// a running chat stops first: its tool calls end and its model slot (or queued wait) is freed
+		if (this.streamState[threadId]?.isRunning) {
+			await this.abortRunning(threadId)
+		}
+		if (!this.state.allThreads[threadId]) return // deleted meanwhile
 
 		// delete the thread
-		const newThreads = { ...currentThreads };
+		let newThreads: ChatThreads = { ...this.state.allThreads };
 		delete newThreads[threadId];
 
-		// store the updated threads
+		// its tab goes too; if it was the docked thread, move to a neighbouring tab, else to an empty or new chat,
+		// in the same update, so the docked thread is never a deleted one
+		let { tabs, next } = closeTabOf(this.state.openTabIds, threadId, this.state.currentThreadId)
+		if (next === undefined) {
+			const empty = this._emptyThreadIn(newThreads)
+			newThreads = empty.threads
+			next = empty.id
+			tabs = openTab(tabs, next, id => !!this.streamState[id]?.isRunning)
+		}
+
 		this._storeAllThreads(newThreads);
-		this._setState({ ...this.state, allThreads: newThreads })
+		this._setState({ allThreads: newThreads, openTabIds: tabs, currentThreadId: next })
+
+		// its unreviewed changes stay, now owned by no chat (every tab shows them as from other chats)
+		this._changeOwnersService.releaseThread(threadId)
 	}
 
 	startBackgroundThread(agent: BackgroundAgentInfo, messages: ChatMessage[], prompt: string): string {
@@ -1850,6 +2048,7 @@ We only need to do it for files that were edited since `from`, ie files between 
 		}
 		this._storeAllThreads(newThreads)
 		this._setState({ allThreads: newThreads })
+		this.switchToThread(newThread.id) // the copy opens in its own tab
 	}
 
 

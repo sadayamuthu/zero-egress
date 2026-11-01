@@ -4,7 +4,8 @@
  *--------------------------------------------------------------------------------------*/
 
 import { useState, useEffect, useCallback, useRef, Fragment } from 'react'
-import { useAccessor, useChatThreadsState, useChatThreadsStreamState, useCommandBarState, useCommandBarURIListener, useSettingsState } from '../util/services.js'
+import { useAccessor, useChangeOwners, useChatThreadsState, useChatThreadsStreamState, useCommandBarState, useCommandBarURIListener, useSettingsState } from '../util/services.js'
+import { threadTitleOf } from '../sidebar-tsx/chatTitle.js'
 import { usePromise, useRefState } from '../util/helpers.js'
 import { isFeatureNameDisabled } from '../../../../common/zeroEgressSettingsTypes.js'
 import { URI } from '../../../../../../../base/common/uri.js'
@@ -321,16 +322,22 @@ const ApplyButtonsForEdit = ({
 	applyBoxId,
 	uri,
 	language,
+	threadId,
 }: {
 	codeStr: string,
 	applyBoxId: string,
 	language?: string,
 	uri: URI | 'current';
+	/** the chat whose message holds this code block */
+	threadId?: string;
 }) => {
 	const accessor = useAccessor()
 	const editCodeService = accessor.get('IEditCodeService')
 	const metricsService = accessor.get('IMetricsService')
 	const notificationService = accessor.get('INotificationService')
+	const codeEditorService = accessor.get('ICodeEditorService')
+	const changeOwners = useChangeOwners()
+	const { allThreads } = useChatThreadsState()
 
 	const settingsState = useSettingsState()
 	const isDisabled = !!isFeatureNameDisabled('Apply', settingsState) || !applyBoxId
@@ -340,6 +347,20 @@ const ApplyButtonsForEdit = ({
 	const onClickSubmit = useCallback(async () => {
 		if (currStreamStateRef.current === 'streaming') return
 
+		// Apply rejects the file's pending diffs first ('reject-conflicts'): never another chat's, or changes no chat owns.
+		// The same rule as a docked write (conflictFor); this chat's own pending changes are replaced as before
+		const target = uri === 'current' ? codeEditorService.getActiveCodeEditor()?.getModel()?.uri : uri
+		const blocker = target && (threadId !== undefined ? changeOwners.conflictFor(target, threadId)?.owner
+			: changeOwners.hasPending(target) ? (changeOwners.ownerOf(target) ?? '') : undefined)
+		if (target && blocker !== undefined) {
+			const name = target.path.split('/').filter(Boolean).pop() ?? target.path
+			const owner = allThreads[blocker]
+			notificationService.warn(owner
+				? `${name} has unreviewed changes from “${threadTitleOf(owner)}”. Review them first.`
+				: `${name} has unreviewed changes made outside this chat. Review them first.`)
+			return
+		}
+
 		await editCodeService.callBeforeApplyOrEdit(uri)
 
 		const [newApplyingUri, applyDonePromise] = editCodeService.startApplying({
@@ -348,6 +369,8 @@ const ApplyButtonsForEdit = ({
 			uri: uri,
 			startBehavior: 'reject-conflicts',
 		}) ?? []
+		// the Apply's diffs belong to this chat: its review bar shows them, and another chat's write asks first
+		if (newApplyingUri && threadId !== undefined) changeOwners.claim(newApplyingUri, threadId)
 		setApplying(newApplyingUri)
 
 		if (!applyDonePromise) {
@@ -363,7 +386,7 @@ const ApplyButtonsForEdit = ({
 		})
 		metricsService.capture('Apply Code', { length: codeStr.length }) // capture the length only
 
-	}, [setApplying, currStreamStateRef, editCodeService, codeStr, uri, applyBoxId, metricsService, notificationService])
+	}, [setApplying, currStreamStateRef, editCodeService, codeStr, uri, applyBoxId, metricsService, notificationService, codeEditorService, changeOwners, allThreads, threadId])
 
 
 	const onClickStop = useCallback(() => {
@@ -375,15 +398,17 @@ const ApplyButtonsForEdit = ({
 		metricsService.capture('Stop Apply', {})
 	}, [currStreamStateRef, applyBoxId, editCodeService, metricsService])
 
+	// Keep / Remove resolve every diff in the file: only while this chat still owns it
+	const ownsApplied = (u: URI | null): u is URI => !!u && (threadId === undefined || changeOwners.ownerOf(u) === threadId)
 	const onAccept = useCallback(() => {
 		const uri = getUriBeingApplied(applyBoxId)
-		if (uri) editCodeService.acceptOrRejectAllDiffAreas({ uri: uri, behavior: 'accept', removeCtrlKs: false })
-	}, [uri, applyBoxId, editCodeService])
+		if (ownsApplied(uri)) editCodeService.acceptOrRejectAllDiffAreas({ uri: uri, behavior: 'accept', removeCtrlKs: false })
+	}, [uri, applyBoxId, editCodeService, changeOwners, threadId])
 
 	const onReject = useCallback(() => {
 		const uri = getUriBeingApplied(applyBoxId)
-		if (uri) editCodeService.acceptOrRejectAllDiffAreas({ uri: uri, behavior: 'reject', removeCtrlKs: false })
-	}, [uri, applyBoxId, editCodeService])
+		if (ownsApplied(uri)) editCodeService.acceptOrRejectAllDiffAreas({ uri: uri, behavior: 'reject', removeCtrlKs: false })
+	}, [uri, applyBoxId, editCodeService, changeOwners, threadId])
 
 	const currStreamState = currStreamStateRef.current
 	if (currStreamState === 'streaming') {
@@ -404,6 +429,7 @@ const ApplyButtonsForEdit = ({
 		/>
 	}
 	if (currStreamState === 'idle-has-changes') {
+		if (!ownsApplied(getUriBeingApplied(applyBoxId))) return null
 		return <Fragment>
 			<IconShell1
 				Icon={X}
@@ -428,6 +454,7 @@ export const ApplyButtonsHTML = (params: {
 	applyBoxId: string,
 	language?: string,
 	uri: URI | 'current';
+	threadId?: string;
 }) => {
 	const { language } = params
 	const isShellLanguage = !!language && terminalLanguages.has(language)
@@ -471,13 +498,20 @@ export const EditToolAcceptRejectButtonsHTML = ({
 
 	const isDisabled = !!isFeatureNameDisabled('Chat', settingsState) || !applyBoxId
 
+	// Keep / Remove resolve every diff in the file, so they belong to the chat that owns it: another chat's (or no
+	// chat's) pending changes in this file are never touched from here, and the buttons are not shown
+	const changeOwners = useChangeOwners()
+	const ownsFile = changeOwners.ownerOf(uri) === threadId
+
 	const onAccept = useCallback(() => {
+		if (changeOwners.ownerOf(uri) !== threadId) return
 		editCodeService.acceptOrRejectAllDiffAreas({ uri, behavior: 'accept', removeCtrlKs: false })
-	}, [uri, applyBoxId, editCodeService])
+	}, [uri, applyBoxId, editCodeService, changeOwners, threadId])
 
 	const onReject = useCallback(() => {
+		if (changeOwners.ownerOf(uri) !== threadId) return
 		editCodeService.acceptOrRejectAllDiffAreas({ uri, behavior: 'reject', removeCtrlKs: false })
-	}, [uri, applyBoxId, editCodeService])
+	}, [uri, applyBoxId, editCodeService, changeOwners, threadId])
 
 	if (isDisabled) return null
 
@@ -487,6 +521,7 @@ export const EditToolAcceptRejectButtonsHTML = ({
 
 	if (streamState === 'idle-has-changes') {
 		if (isRunning === 'LLM' || isRunning === 'tool') return null
+		if (!ownsFile) return null
 
 		return <>
 			<IconShell1
@@ -511,6 +546,7 @@ export const BlockCodeApplyWrapper = ({
 	language,
 	canApply,
 	uri,
+	threadId,
 }: {
 	codeStr: string;
 	children: React.ReactNode;
@@ -518,6 +554,7 @@ export const BlockCodeApplyWrapper = ({
 	canApply: boolean;
 	language: string;
 	uri: URI | 'current',
+	threadId?: string,
 }) => {
 	const accessor = useAccessor()
 	const commandService = accessor.get('ICommandService')
@@ -547,7 +584,7 @@ export const BlockCodeApplyWrapper = ({
 			<div className={`${canApply ? '' : 'hidden'} flex items-center gap-1`}>
 				<JumpToFileButton uri={uri} />
 				{currStreamState === 'idle-no-changes' && <CopyButton codeStr={codeStr} toolTipName='Copy' />}
-				<ApplyButtonsHTML uri={uri} applyBoxId={applyBoxId} codeStr={codeStr} language={language} />
+				<ApplyButtonsHTML uri={uri} applyBoxId={applyBoxId} codeStr={codeStr} language={language} threadId={threadId} />
 			</div>
 		</div>
 

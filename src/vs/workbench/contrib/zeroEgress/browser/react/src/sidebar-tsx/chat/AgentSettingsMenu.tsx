@@ -1,0 +1,129 @@
+/*--------------------------------------------------------------------------------------
+ *  Copyright 2025 Glass Devtools, Inc. All rights reserved.
+ *  Licensed under the Apache License, Version 2.0. See LICENSE.txt for more information.
+ *--------------------------------------------------------------------------------------*/
+
+// The input box's ⚙ button and its "Agent settings" menu. All of it is app-wide (globalSettings), the same values the
+// full Settings page shows. Allowed commands are this workspace's list.
+
+import React, { useState } from 'react';
+import { Settings, X } from 'lucide-react';
+import { useAccessor, useCommandAllowList, useSettingsState } from '../../util/services.js';
+// no runtime imports from vs/ here: the bundle flattens this folder, so a relative path one level deeper breaks
+import { settingsForTerminalAutoRun, terminalAutoRunOf, ZERO_EGRESS_OPEN_SETTINGS_ACTION_ID } from '../composerDeps.js';
+import type { TerminalAutoRun } from '../composerDeps.js';
+import { MenuHeading, MenuRow, onRadioGroupKeyDown, Popover } from './Popover.js';
+
+const Segmented = <T extends string>({ label, value, options, onChange }: {
+	label: string;
+	value: T;
+	options: readonly { value: T; label: string }[];
+	onChange: (v: T) => void;
+}) => {
+	// one row for the menu's ↑/↓ (Popover); ←/→ change the selection, as in a radio group. No radio is a Tab stop:
+	// Tab leaves the menu
+	return <div role='radiogroup' aria-label={label} className='flex rounded-[6px] border border-ze-border-2 overflow-hidden shrink-0'
+		onKeyDown={e => onRadioGroupKeyDown(e, i => { if (options[i] && options[i].value !== value) { onChange(options[i].value); } })}
+	>
+		{options.map(o => <button
+			key={o.value}
+			type='button'
+			role='radio'
+			tabIndex={-1}
+			aria-checked={o.value === value}
+			className={`px-2 py-0.5 text-xs outline-none focus-visible:bg-[var(--vscode-list-hoverBackground)] ${o.value === value
+				? 'bg-[var(--vscode-list-inactiveSelectionBackground)] text-ze-fg-1'
+				: 'text-ze-fg-3 hover:text-ze-fg-1 hover:bg-[var(--vscode-list-hoverBackground)]'}`}
+			onClick={e => { e.stopPropagation(); onChange(o.value); }}
+		>{o.label}</button>)}
+	</div>;
+};
+
+const SettingRow = ({ label, children }: { label: string; children: React.ReactNode }) => {
+	return <div className='flex items-center justify-between gap-2 px-2 py-1 text-sm text-ze-fg-1'>
+		<span>{label}</span>
+		{children}
+	</div>;
+};
+
+const terminalOptions: readonly { value: TerminalAutoRun; label: string }[] = [
+	{ value: 'off', label: 'Off' },
+	{ value: 'allowList', label: 'Allow-list' },
+	{ value: 'all', label: 'All' },
+];
+const onOffOptions = [{ value: 'off', label: 'Off' }, { value: 'on', label: 'On' }] as const;
+
+export const AgentSettingsMenu = () => {
+	const accessor = useAccessor();
+	const settingsService = accessor.get('IZeroEgressSettingsService');
+	const commandAllowListService = accessor.get('ICommandAllowListService');
+	const commandService = accessor.get('ICommandService');
+	const globalSettings = useSettingsState().globalSettings;
+	const allowed = useCommandAllowList();
+
+	const [anchor, setAnchor] = useState<HTMLButtonElement | null>(null);
+	const [open, setOpen] = useState(false);
+	const [showList, setShowList] = useState(false);
+	const close = () => { setOpen(false); setShowList(false); };
+
+	const terminal = terminalAutoRunOf(globalSettings);
+	const setApprove = (key: 'edits' | 'MCP tools', on: boolean) => {
+		// keep the other keys of autoApprove, as the full Settings page does
+		settingsService.setGlobalSetting('autoApprove', { ...settingsService.state.globalSettings.autoApprove, [key]: on });
+	};
+	const setTerminal = (v: TerminalAutoRun) => {
+		const next = settingsForTerminalAutoRun(v);
+		settingsService.setGlobalSetting('autoApprove', { ...settingsService.state.globalSettings.autoApprove, terminal: next.terminal });
+		settingsService.setGlobalSetting('useCommandAllowList', next.useCommandAllowList);
+	};
+
+	return <>
+		<span data-tooltip-id='ze-tooltip' data-tooltip-content='Agent settings' data-tooltip-place='top'>
+			<button
+				ref={setAnchor}
+				type='button'
+				aria-haspopup='menu'
+				aria-expanded={open}
+				aria-label='Agent settings'
+				className='size-[22px] flex items-center justify-center rounded-[6px] text-ze-fg-3 hover:text-ze-fg-1 hover:bg-ze-bg-2-hover'
+				onClick={e => { e.stopPropagation(); if (open) { close(); } else { setOpen(true); } }}
+			>
+				<Settings size={13} />
+			</button>
+		</span>
+		<Popover anchor={anchor} open={open} onClose={close} placement='top-end' className='w-72' label='Agent settings'>
+			<MenuHeading>Agent settings</MenuHeading>
+			<SettingRow label='Auto-run terminal'>
+				<Segmented label='Auto-run terminal' value={terminal} options={terminalOptions} onChange={setTerminal} />
+			</SettingRow>
+			<SettingRow label='Auto-accept edits'>
+				<Segmented label='Auto-accept edits' value={globalSettings.autoApprove.edits ? 'on' : 'off'} options={onOffOptions} onChange={v => setApprove('edits', v === 'on')} />
+			</SettingRow>
+			<SettingRow label='Auto-approve MCP tools'>
+				<Segmented label='Auto-approve MCP tools' value={globalSettings.autoApprove['MCP tools'] ? 'on' : 'off'} options={onOffOptions} onChange={v => setApprove('MCP tools', v === 'on')} />
+			</SettingRow>
+			<MenuRow onSelect={() => setShowList(s => !s)}>
+				<span>Allowed commands ({allowed.length})</span>
+				<span className='ml-auto text-xs text-ze-fg-3'>{showList ? 'hide' : 'show'}</span>
+			</MenuRow>
+			{showList ? <div className='px-2 pb-1'>
+				{allowed.length === 0
+					? <div className='text-xs text-ze-fg-3'>No allowed commands yet. Use “Always allow” on a command to add one.</div>
+					: allowed.map(cmd => <div key={cmd} className='flex items-center gap-1 py-0.5'>
+						<code className='flex-1 min-w-0 truncate text-xs text-ze-fg-2' title={cmd}>{cmd}</code>
+						<button
+							type='button'
+							role='menuitem'
+							tabIndex={-1}
+							aria-label={`Remove ${cmd}`}
+							className='shrink-0 size-4 flex items-center justify-center rounded text-ze-fg-3 hover:text-ze-fg-1 hover:bg-[var(--vscode-list-hoverBackground)]'
+							onClick={e => { e.stopPropagation(); commandAllowListService.remove(cmd); }}
+						><X size={11} /></button>
+					</div>)}
+			</div> : null}
+			<MenuRow onSelect={() => { close(); commandService.executeCommand(ZERO_EGRESS_OPEN_SETTINGS_ACTION_ID); }}>
+				<span>All settings…</span>
+			</MenuRow>
+		</Popover>
+	</>;
+};

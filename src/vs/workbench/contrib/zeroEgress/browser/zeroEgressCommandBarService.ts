@@ -16,7 +16,6 @@ import { deepClone } from '../../../../base/common/objects.js';
 import { InstantiationType, registerSingleton } from '../../../../platform/instantiation/common/extensions.js';
 import { IEditCodeService } from './editCodeServiceInterface.js';
 import { ContextKeyExpr } from '../../../../platform/contextkey/common/contextkey.js';
-import { InputFocusedContext } from '../../../../platform/contextkey/common/contextkeys.js';
 import { EditorContextKeys } from '../../../../editor/common/editorContextKeys.js';
 import { diffAtLine } from '../common/diffAtLine.js';
 import { CURSOR_ON_PENDING_CHANGE, FILE_HAS_PENDING_CHANGES, pendingDiffsOf } from './pendingChangeContextKeys.js';
@@ -35,6 +34,8 @@ import { KeyMod } from '../../../../editor/common/services/editorBaseApi.js';
 import { KeyCode } from '../../../../base/common/keyCodes.js';
 import { ScrollType } from '../../../../editor/common/editorCommon.js';
 import { IZeroEgressModelService } from '../common/zeroEgressModelService.js';
+import { IDialogService } from '../../../../platform/dialogs/common/dialogs.js';
+import { IChangeOwnersService } from './changeOwnersService.js';
 
 
 
@@ -55,7 +56,11 @@ export interface IZeroEgressCommandBarService {
 	goToDiffIdx(idx: number | null): void;
 	goToURIIdx(idx: number | null): Promise<void>;
 
-	acceptOrRejectAllFiles(opts: { behavior: 'reject' | 'accept' }): void;
+	/**
+	 * Every file's pending changes, whichever chat made them. When they come from more than one source (each owning chat,
+	 * plus one for changes no chat owns), asks first; with a single source it does not ask.
+	 */
+	acceptOrRejectAllFiles(opts: { behavior: 'reject' | 'accept' }): Promise<void>;
 	anyFileIsStreaming(): boolean;
 
 }
@@ -109,6 +114,7 @@ export class ZeroEgressCommandBarService extends Disposable implements IZeroEgre
 		@IEditCodeService private readonly _editCodeService: IEditCodeService,
 		@IPendingFileOpsService private readonly _pendingFileOpsService: IPendingFileOpsService,
 		@IZeroEgressModelService private readonly _zeroEgressModelService: IZeroEgressModelService,
+		@IDialogService private readonly _dialogService: IDialogService,
 	) {
 		super();
 
@@ -483,16 +489,43 @@ export class ZeroEgressCommandBarService extends Disposable implements IZeroEgre
 		);
 	}
 
-	acceptOrRejectAllFiles(opts: { behavior: 'reject' | 'accept' }) {
+	async acceptOrRejectAllFiles(opts: { behavior: 'reject' | 'accept' }) {
 		const { behavior } = opts
 		// if anything is streaming, do nothing
 		const anyIsStreaming = this.anyFileIsStreaming()
 		if (anyIsStreaming) return
+		const sources = this._sourcesOfPendingChanges()
+		if (sources > 1) {
+			const { confirmed } = await this._dialogService.confirm({
+				type: 'warning',
+				message: behavior === 'accept' ? `Accept changes from ${sources} chats?` : `Reject changes from ${sources} chats?`,
+				primaryButton: behavior === 'accept' ? '&&Accept All' : '&&Reject All',
+			})
+			if (!confirmed || this.anyFileIsStreaming()) return
+		}
 		for (const uri of this.sortedURIs) {
 			this._editCodeService.acceptOrRejectAllDiffAreas({ uri, behavior, removeCtrlKs: false })
 		}
 		// pending file creates and deletes
 		this._pendingFileOpsService.resolveAll(behavior).catch(onUnexpectedError)
+	}
+
+	/** how many chats the pending changes come from, counting changes no chat owns as one more */
+	private _sourcesOfPendingChanges(): number {
+		// looked up when needed: the change owners service depends on the edit code service, which depends on this one
+		const changeOwners = this._instantiationService.invokeFunction(accessor => accessor.get(IChangeOwnersService))
+		const owners = new Set<string>()
+		let unowned = false
+		const count = (uri: URI) => {
+			const owner = changeOwners.ownerOf(uri)
+			if (owner === undefined) unowned = true
+			else owners.add(owner)
+		}
+		for (const uri of this.sortedURIs) {
+			if (this.stateOfURI[uri.fsPath]?.sortedDiffIds?.length) count(uri)
+		}
+		for (const op of this._pendingFileOpsService.ops) count(URI.parse(op.path))
+		return owners.size + (unowned ? 1 : 0)
 	}
 
 
@@ -877,16 +910,11 @@ registerAction2(class extends Action2 {
 			id: ZERO_EGRESS_ACCEPT_ALL_DIFFS_ACTION_ID,
 			f1: true,
 			title: localize2('zeroEgressAcceptAllDiffsAction', 'ZeroEgress: Accept All Diffs in All Files'),
-			keybinding: [{
+			// ⌘⏎ in the agent panel is handled by the docked chat itself (SidebarChat) and accepts only that chat's changes
+			keybinding: {
 				primary: KeyMod.CtrlCmd | KeyMod.Shift | KeyCode.Enter,
 				weight: KeybindingWeight.ZeroEgressExtension,
-			}, {
-				// ⌘⏎ from the agent panel, outside text inputs (the agent's input box handles ⌘⏎ itself, see SidebarChat,
-				// so typed text is sent and never also accepts everything)
-				primary: KeyMod.CtrlCmd | KeyCode.Enter,
-				when: ContextKeyExpr.and(ContextKeyExpr.equals('focusedView', 'workbench.view.zeroEgress'), InputFocusedContext.negate()), // ZERO_EGRESS_VIEW_ID (sidebarPane.ts); not imported to avoid an import cycle
-				weight: KeybindingWeight.ZeroEgressExtension,
-			}]
+			}
 		});
 	}
 
@@ -897,7 +925,7 @@ registerAction2(class extends Action2 {
 		if (commandBarService.anyFileIsStreaming()) return;
 
 		metricsService.capture('Accept All Files', { keyboard: true });
-		commandBarService.acceptOrRejectAllFiles({ behavior: 'accept' });
+		await commandBarService.acceptOrRejectAllFiles({ behavior: 'accept' });
 	}
 });
 
@@ -922,6 +950,6 @@ registerAction2(class extends Action2 {
 		if (commandBarService.anyFileIsStreaming()) return;
 
 		metricsService.capture('Reject All Files', { keyboard: true });
-		commandBarService.acceptOrRejectAllFiles({ behavior: 'reject' });
+		await commandBarService.acceptOrRejectAllFiles({ behavior: 'reject' });
 	}
 });

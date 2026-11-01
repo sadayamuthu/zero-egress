@@ -286,6 +286,7 @@ export type GlobalSettings = {
 	isOnboardingComplete: boolean;
 	disableSystemMessage: boolean;
 	autoAcceptLLMChanges: boolean;
+	useCommandAllowList: boolean;
 }
 
 export const defaultGlobalSettings: GlobalSettings = {
@@ -302,6 +303,7 @@ export const defaultGlobalSettings: GlobalSettings = {
 	isOnboardingComplete: false,
 	disableSystemMessage: false,
 	autoAcceptLLMChanges: false,
+	useCommandAllowList: true,
 }
 
 export type GlobalSettingName = keyof GlobalSettings

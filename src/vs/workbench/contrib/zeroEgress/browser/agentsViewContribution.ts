@@ -27,7 +27,15 @@ import { IWorkbenchLayoutService, Parts } from '../../../services/layout/browser
 import { IStatusbarEntry, IStatusbarEntryAccessor, IStatusbarService, StatusbarAlignment } from '../../../services/statusbar/browser/statusbar.js';
 import { ZERO_EGRESS_AGENTS_ACCEPT_ALL_ACTION_ID, ZERO_EGRESS_AGENTS_VIEW_VISIBLE_KEY, ZERO_EGRESS_SHOW_AGENTS_ACTION_ID, ZERO_EGRESS_SHOW_EDITOR_ACTION_ID } from './actionIDs.js';
 import { IBackgroundAgentsService } from './backgroundAgentsServiceInterface.js';
+import { IChatThreadService } from './chatThreadService.js';
+import { approvalClickTarget, countAwaiting, ThreadWaitInfo, waitInfoOf } from '../common/approvalTargets.js';
+import { IViewsService } from '../../../services/views/common/viewsService.js';
+import { ZERO_EGRESS_VIEW_CONTAINER_ID } from './sidebarPane.js';
+import { ILogService } from '../../../../platform/log/common/log.js';
+import { CommandsRegistry } from '../../../../platform/commands/common/commands.js';
 import { mountAgentsView } from './react/out/agents-tsx/index.js';
+
+const ZERO_EGRESS_SHOW_APPROVAL_COMMAND_ID = 'zeroEgress.showWaitingApproval';
 
 export const AGENTS_VIEW_VISIBLE = new RawContextKey<boolean>(ZERO_EGRESS_AGENTS_VIEW_VISIBLE_KEY, false);
 
@@ -63,6 +71,7 @@ class AgentsViewContribution extends Disposable implements IWorkbenchContributio
 		@IBackgroundAgentsService private readonly _agentsService: IBackgroundAgentsService,
 		@IStatusbarService private readonly _statusbarService: IStatusbarService,
 		@IEditorService private readonly _editorService: IEditorService,
+		@IChatThreadService private readonly _chatThreadService: IChatThreadService,
 	) {
 		super();
 		this._visible = AGENTS_VIEW_VISIBLE.bindTo(contextKeyService);
@@ -79,6 +88,7 @@ class AgentsViewContribution extends Disposable implements IWorkbenchContributio
 		this._position();
 
 		this._register(this._agentsService.onDidChange(() => this._renderStatus()));
+		this._register(this._chatThreadService.onDidChangeStreamState(() => this._renderStatus()));
 		this._renderStatus();
 
 		// an editor that becomes active while the overlay shows (a file link in the agent chat, Quick Open, ⌘N) must be seen
@@ -170,8 +180,27 @@ class AgentsViewContribution extends Disposable implements IWorkbenchContributio
 		this._bridge.acceptAllSelected?.();
 	}
 
+	/** every thread, docked or background, with whether it waits on the user */
+	private _waitInfo(): ThreadWaitInfo[] {
+		const { allThreads } = this._chatThreadService.state;
+		const ids = Object.keys(allThreads);
+		const streamAwaiting = new Set(ids.filter(id => this._chatThreadService.streamState[id]?.isRunning === 'awaiting_user'));
+		const agentsNeedingOk = new Set(this._agentsService.agents.filter(a => a.status.kind === 'needs_ok').map(a => a.threadId));
+		return waitInfoOf(ids.map(id => ({ id, background: !!allThreads[id]?.agent })), streamAwaiting, agentsNeedingOk);
+	}
+
+	/** click on the status entry: focus the first waiting chat when all waiting threads are docked, else the Agents view */
+	async showWaiting(accessor: ServicesAccessor): Promise<void> {
+		const target = approvalClickTarget(this._waitInfo());
+		if (target.kind === 'agents') { this.show(); return; }
+		if (this.isVisible) { this.hide(false); }
+		await accessor.get(IViewsService).openViewContainer(ZERO_EGRESS_VIEW_CONTAINER_ID, true); // shows the panel even when closed, and focuses it
+		this._chatThreadService.switchToThread(target.threadId);
+		await this._chatThreadService.focusCurrentChat(target.threadId);
+	}
+
 	private _renderStatus(): void {
-		const n = this._agentsService.agents.filter(a => a.status.kind === 'needs_ok').length;
+		const n = countAwaiting(this._waitInfo());
 		const text = agentsNeedOkText(n);
 		if (!text) {
 			this._statusEntry?.dispose();
@@ -182,8 +211,8 @@ class AgentsViewContribution extends Disposable implements IWorkbenchContributio
 			name: 'ZeroEgress Agents',
 			text,
 			ariaLabel: text.replace(/\$\([^)]*\)\s*/g, ''),
-			tooltip: 'Show the Agents view',
-			command: ZERO_EGRESS_SHOW_AGENTS_ACTION_ID,
+			tooltip: 'Show the chat waiting for your OK',
+			command: ZERO_EGRESS_SHOW_APPROVAL_COMMAND_ID,
 			kind: 'warning', // statusBarItem.warningBackground
 		};
 		if (this._statusEntry) {
@@ -202,6 +231,11 @@ class AgentsViewContribution extends Disposable implements IWorkbenchContributio
 }
 
 registerWorkbenchContribution2(AgentsViewContribution.ID, AgentsViewContribution, WorkbenchPhase.AfterRestored);
+
+CommandsRegistry.registerCommand(ZERO_EGRESS_SHOW_APPROVAL_COMMAND_ID, accessor => {
+	const log = accessor.get(ILogService);
+	instance?.showWaiting(accessor).catch(err => log.error('ZeroEgress: showing the chat waiting for approval failed', err));
+});
 
 registerAction2(class extends Action2 {
 	constructor() {

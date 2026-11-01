@@ -20,3 +20,5 @@ export const THREAD_STORAGE_KEY = 'zeroEgress.chatThreadStorageII'
 
 
 
+// the docked chat panel's open tabs (thread ids, application scope)
+export const CHAT_OPEN_TABS_STORAGE_KEY = 'zeroEgress.chatOpenTabs'

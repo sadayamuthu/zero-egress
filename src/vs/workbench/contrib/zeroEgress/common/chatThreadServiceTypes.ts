@@ -18,7 +18,11 @@ export type ToolMessage<T extends ToolName> = {
 		// in order of events:
 		| { type: 'invalid_params', result: null, name: T, }
 
-		| { type: 'tool_request', result: null, name: T, params: ToolCallParams<T>, }  // params were validated, awaiting user
+		// params were validated, awaiting user. `conflict`: the path has another docked chat's unreviewed changes (shown as
+		// the conflict card, never auto-approved); `uri` is the tool's target, `ownerThreadId` the chat that owns those changes,
+		// or UNOWNED ('unowned', common/changeOwners.ts) when no chat owns them. The card treats an id with no thread
+		// (UNOWNED, or a chat deleted since) as "made outside this chat"
+		| { type: 'tool_request', result: null, name: T, params: ToolCallParams<T>, conflict?: { uri: URI; ownerThreadId: string } }
 
 		| { type: 'running_now', result: null, name: T, params: ToolCallParams<T>, }
 
@@ -61,6 +65,7 @@ export type ChatMessage =
 		role: 'assistant';
 		displayContent: string; // content received from LLM  - allowed to be '', will be replaced with (empty)
 		reasoning: string; // reasoning from the LLM, used for step-by-step thinking
+		reasoningMs?: number; // how long the model reasoned (first reasoning token to the first answer token or the end); missing in older chats
 
 		anthropicReasoning: AnthropicReasoning[] | null; // anthropic reasoning
 	}

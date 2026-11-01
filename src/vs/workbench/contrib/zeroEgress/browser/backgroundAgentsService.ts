@@ -259,7 +259,7 @@ export class BackgroundAgentsService extends Disposable implements IBackgroundAg
 		await this._chatThreadService.abortRunning(threadId); // also leaves a queued wait
 		await this._enqueue(threadId, async () => {
 			await this._worktree.remove(agent.repoRoot, agent.agentId);
-			this._chatThreadService.deleteThread(threadId);
+			await this._chatThreadService.deleteThread(threadId);
 		});
 		this._pending.delete(threadId);
 		this._running.delete(threadId);
