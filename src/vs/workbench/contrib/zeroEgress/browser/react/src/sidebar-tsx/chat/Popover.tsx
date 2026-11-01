@@ -4,9 +4,11 @@
  *--------------------------------------------------------------------------------------*/
 
 // The one menu primitive of the chat panel: anchored to a button, positioned with fixed strategy (so a scrolling or
-// clipping parent never cuts it off), closed by Escape or a click outside it and its anchor, and navigable with the
-// arrow keys over its rows (anything with a menuitem role, disabled ones included). It renders in place, not in a
-// portal, so it stays inside the panel's style scope.
+// clipping parent never cuts it off), closed by Escape, Tab (which moves on from the anchor, as if the menu were not
+// there), focus leaving it, or a click outside it and its anchor. The arrow keys move over its rows: anything with a
+// menuitem role (disabled ones included), and each radio group (a segmented control) as one row, landing on its
+// selected radio; ←/→ inside a group are the group's own. It renders in place, not in a portal, so it stays inside the
+// panel's style scope.
 
 import React, { useEffect, useRef } from 'react';
 import { autoUpdate, flip, offset, shift, size, useFloating } from '@floating-ui/react';
@@ -14,8 +16,47 @@ import type { Placement } from '@floating-ui/react';
 
 const ITEM_SELECTOR = '[role="menuitem"],[role="menuitemradio"],[role="menuitemcheckbox"]';
 
-// disabled rows stay reachable, so the keyboard can land on one and read why it is disabled (Enter does nothing there)
-const itemsOf = (root: HTMLElement) => Array.from(root.querySelectorAll<HTMLElement>(ITEM_SELECTOR));
+const RADIO_SELECTOR = '[role="radio"]';
+
+// disabled rows stay reachable, so the keyboard can land on one and read why it is disabled (Enter does nothing there).
+// A radio group is one row: its focused radio if focus is in it, else its selected one, else its first
+const itemsOf = (root: HTMLElement) => {
+	const active = document.activeElement;
+	return Array.from(root.querySelectorAll<HTMLElement>(`${ITEM_SELECTOR},[role="radiogroup"]`)).flatMap(el => {
+		if (el.getAttribute('role') !== 'radiogroup') {
+			return [el];
+		}
+		const radios = Array.from(el.querySelectorAll<HTMLElement>(RADIO_SELECTOR));
+		const pick = radios.find(r => r === active) ?? radios.find(r => r.getAttribute('aria-checked') === 'true') ?? radios[0];
+		return pick ? [pick] : [];
+	});
+};
+
+// the element Tab (or Shift+Tab) would reach from `from` if the menu were not open (outside `skip`)
+const tabbableNextTo = (from: HTMLElement, step: 1 | -1, skip: HTMLElement | null): HTMLElement | undefined => {
+	const all = Array.from(document.querySelectorAll<HTMLElement>('a[href],button,input,textarea,select,[tabindex]'))
+		.filter(el => el === from || (el.tabIndex >= 0 && !(el as HTMLButtonElement).disabled && el.getClientRects().length > 0 && !skip?.contains(el)));
+	const idx = all.indexOf(from);
+	return idx < 0 ? undefined : all[idx + step];
+};
+
+/** Arrow-key handling for a radio group inside a Popover: ←/→ select the previous or next radio (wrapping) and focus it. */
+export const onRadioGroupKeyDown = (e: React.KeyboardEvent<HTMLElement>, select: (index: number) => void) => {
+	if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') {
+		return;
+	}
+	const radios = Array.from(e.currentTarget.querySelectorAll<HTMLElement>(RADIO_SELECTOR));
+	if (radios.length === 0) {
+		return;
+	}
+	e.preventDefault();
+	e.stopPropagation();
+	const current = radios.indexOf(document.activeElement as HTMLElement);
+	const from = current >= 0 ? current : radios.findIndex(r => r.getAttribute('aria-checked') === 'true');
+	const next = (Math.max(from, 0) + (e.key === 'ArrowRight' ? 1 : radios.length - 1)) % radios.length;
+	radios[next].focus({ preventScroll: true });
+	select(next);
+};
 
 /** Menu rows for a Popover: a full-width button with the menu row look. `checked` makes it a radio row. */
 export const MenuRow = ({ children, onSelect, checked, disabled, danger, tooltip, note, className = '' }: {
@@ -109,8 +150,21 @@ export const Popover = ({ anchor, open, onClose, children, placement = 'top-star
 			}
 			onCloseRef.current();
 		};
+		// focus moving somewhere else (not into the menu or back to its anchor) closes it, so Escape is never left
+		// without a menu to close
+		const onFocusIn = (e: FocusEvent) => {
+			const target = e.target as Node | null;
+			if (!target || panelRef.current?.contains(target) || anchor?.contains(target)) {
+				return;
+			}
+			onCloseRef.current();
+		};
 		document.addEventListener('mousedown', onMouseDown, true);
-		return () => document.removeEventListener('mousedown', onMouseDown, true);
+		document.addEventListener('focusin', onFocusIn, true);
+		return () => {
+			document.removeEventListener('mousedown', onMouseDown, true);
+			document.removeEventListener('focusin', onFocusIn, true);
+		};
 	}, [open, anchor]);
 
 	useEffect(() => {
@@ -138,6 +192,15 @@ export const Popover = ({ anchor, open, onClose, children, placement = 'top-star
 			close();
 			return;
 		}
+		if (e.key === 'Tab') {
+			// out of the menu, closing it: on to what Tab reaches from the anchor (the menu's rows are not tab stops)
+			e.preventDefault();
+			e.stopPropagation();
+			onCloseRef.current();
+			const next = anchor ? tabbableNextTo(anchor, e.shiftKey ? -1 : 1, panelRef.current) : undefined;
+			(next ?? anchor)?.focus({ preventScroll: true });
+			return;
+		}
 		if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp' && e.key !== 'Home' && e.key !== 'End') {
 			return;
 		}
@@ -148,7 +211,7 @@ export const Popover = ({ anchor, open, onClose, children, placement = 'top-star
 		const active = document.activeElement as HTMLElement | null;
 		// leave the keys to controls that use them (a slider); a text field only gives up the up and down arrows
 		const isTextField = active?.tagName === 'INPUT' && ((active as HTMLInputElement).type === 'text' || (active as HTMLInputElement).type === 'search');
-		const isItem = !!active?.matches(ITEM_SELECTOR) || active === root;
+		const isItem = !!active?.matches(ITEM_SELECTOR) || !!active?.matches(RADIO_SELECTOR) || active === root;
 		if (!isItem && !(isTextField && (e.key === 'ArrowDown' || e.key === 'ArrowUp'))) {
 			return;
 		}
