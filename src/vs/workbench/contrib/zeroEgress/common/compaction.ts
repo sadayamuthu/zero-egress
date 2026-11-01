@@ -53,3 +53,8 @@ export function compactionTranscript(messages: ChatMessage[]): string {
 	}
 	return lines.join('\n\n');
 }
+
+/** a summary computed for `messages[0..cut)` may be stored only if the chat still holds the same message at `cut` */
+export function compactionStillValid(messages: ChatMessage[], cut: number, messageAtCut: ChatMessage | undefined): boolean {
+	return messages.length > cut && messages[cut] === messageAtCut;
+}

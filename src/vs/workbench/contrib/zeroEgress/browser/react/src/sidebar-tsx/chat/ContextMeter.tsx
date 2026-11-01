@@ -27,12 +27,20 @@ export const useContextUse = (threadId: string): ContextUse | null => {
 	}, [messages, contextWindow]);
 };
 
+/** Compact is off while the chat is replying or a summary is being written */
+export const useCompactBusy = (threadId: string) => {
+	useChatThreadsState(); // re-render when the service says compacting started or ended
+	const compacting = useAccessor().get('IChatThreadService').isCompacting(threadId);
+	const running = !!useChatThreadsStreamState(threadId)?.isRunning;
+	return { compacting, disabled: compacting || running };
+};
+
 export const ContextMeter = ({ threadId }: { threadId: string }) => {
 	const use = useContextUse(threadId);
 	const [anchor, setAnchor] = useState<HTMLButtonElement | null>(null);
 	const [open, setOpen] = useState(false);
 	const chatThreadService = useAccessor().get('IChatThreadService');
-	const isRunning = !!useChatThreadsStreamState(threadId)?.isRunning;
+	const busy = useCompactBusy(threadId);
 	if (!use) { return null; }
 
 	const label = formatContextUse(use);
@@ -60,8 +68,8 @@ export const ContextMeter = ({ threadId }: { threadId: string }) => {
 		<Popover anchor={anchor} open={open} onClose={() => setOpen(false)} placement='top-end' className='w-56' label='Context'>
 			<MenuHeading>Context</MenuHeading>
 			<div className='px-2 py-1 text-sm text-ze-fg-1'>{used}</div>
-			<MenuRow disabled={isRunning} onSelect={() => { setOpen(false); void chatThreadService.compactThread(threadId); }}>
-				<span>Compact this chat</span>
+			<MenuRow disabled={busy.disabled} onSelect={() => { setOpen(false); void chatThreadService.compactThread(threadId); }}>
+				<span>{busy.compacting ? 'Compacting…' : 'Compact this chat'}</span>
 			</MenuRow>
 		</Popover>
 	</>;

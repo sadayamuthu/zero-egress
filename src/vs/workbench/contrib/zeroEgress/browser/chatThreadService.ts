@@ -40,7 +40,7 @@ import { truncate } from '../../../../base/common/strings.js';
 import { CHAT_OPEN_TABS_STORAGE_KEY, THREAD_STORAGE_KEY } from '../common/storageKeys.js';
 import { closeTab as closeTabOf, openTab, restoreTabs } from '../common/chatTabs.js';
 import { IConvertToLLMMessageService } from './convertToLLMMessageService.js';
-import { Compaction, COMPACT_SYSTEM_PROMPT, compactionAfterCut, compactionCut, compactionTranscript } from '../common/compaction.js';
+import { Compaction, COMPACT_SYSTEM_PROMPT, compactionAfterCut, compactionCut, compactionStillValid, compactionTranscript } from '../common/compaction.js';
 import { timeout } from '../../../../base/common/async.js';
 import { deepClone } from '../../../../base/common/objects.js';
 import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
@@ -131,6 +131,8 @@ type WhenMounted = {
 }
 
 
+
+const COMPACT_TIMEOUT_MS = 180_000
 
 export type ThreadType = {
 	id: string; // store the id here too
@@ -325,6 +327,8 @@ export interface IChatThreadService {
 
 	/** summarize the earlier turns of a chat into one message the model sees in their place */
 	compactThread(threadId: string): Promise<void>;
+	/** true while a summary for this chat is being written (fires onDidChangeCurrentThread on change) */
+	isCompacting(threadId: string): boolean;
 
 	// call to edit a message
 	editUserMessageAndStreamResponse({ userMessage, messageIdx, threadId }: { userMessage: string, messageIdx: number, threadId: string }): Promise<void>;
@@ -1497,6 +1501,14 @@ We only need to do it for files that were edited since `from`, ie files between 
 		}
 
 		this._setThreadState(threadId, { currCheckpointIdx: toIdx })
+		// the messages after the checkpoint are dropped on the next send; a summary reaching past it goes now
+		const restored = this.state.allThreads[threadId]
+		if (restored?.compaction && !compactionAfterCut(restored.compaction, toIdx + 1)) {
+			const { compaction: _gone, ...rest } = restored
+			const newThreads = { ...this.state.allThreads, [threadId]: rest }
+			this._storeAllThreads(newThreads)
+			this._setState({ allThreads: newThreads })
+		}
 
 		if (skippedPaths.length) {
 			this._notificationService.notify({
@@ -1557,6 +1569,8 @@ We only need to do it for files that were edited since `from`, ie files between 
 	private async _addUserMessageAndStreamResponse({ userMessage, _chatSelections, threadId }: { userMessage: string, _chatSelections?: StagingSelectionItem[], threadId: string }) {
 		const thread = this.state.allThreads[threadId]
 		if (!thread) return // should never happen
+
+		this._cancelCompaction(threadId, 'user')
 
 		// interrupt existing stream
 		if (this.streamState[threadId]?.isRunning) {
@@ -1650,14 +1664,30 @@ We only need to do it for files that were edited since `from`, ie files between 
 		this._addUserMessageAndStreamResponse({ userMessage, _chatSelections: currSelns, threadId })
 	}
 
+	private readonly _compacting = new Map<string, { requestId?: string, stoppedBecause?: 'user' | 'timeout' }>()
+	isCompacting(threadId: string) { return this._compacting.has(threadId) }
+
+	/** the user sent a message on this chat: the summary in flight is no longer wanted */
+	private _cancelCompaction(threadId: string, why: 'user' | 'timeout') {
+		const c = this._compacting.get(threadId)
+		if (!c) return
+		c.stoppedBecause = why
+		if (c.requestId) this._llmMessageService.abort(c.requestId)
+	}
+
 	async compactThread(threadId: string): Promise<void> {
 		const thread = this.state.allThreads[threadId]
-		if (!thread || this.streamState[threadId]?.isRunning) return
+		if (!thread || this.streamState[threadId]?.isRunning || this._compacting.has(threadId)) return
 		const cut = compactionCut(thread.messages)
 		if (cut === null) {
 			this._notificationService.info('Nothing to compact yet.')
 			return
 		}
+		const messageAtCut = thread.messages[cut]
+		const entry: { requestId?: string, stoppedBecause?: 'user' | 'timeout' } = {}
+		this._compacting.set(threadId, entry)
+		this._onDidChangeCurrentThread.fire()
+		const timer = setTimeout(() => this._cancelCompaction(threadId, 'timeout'), COMPACT_TIMEOUT_MS)
 		try {
 			const { modelSelection, modelSelectionOptions } = this._currentModelSelectionProps()
 			const { messages, separateSystemMessage } = this._convertToLLMMessagesService.prepareLLMSimpleMessages({
@@ -1667,7 +1697,7 @@ We only need to do it for files that were edited since `from`, ie files between 
 				featureName: 'Chat',
 			})
 			const summary = await new Promise<string>((resolve, reject) => {
-				this._llmMessageService.sendLLMMessage({
+				const requestId = this._llmMessageService.sendLLMMessage({
 					messagesType: 'chatMessages',
 					messages,
 					separateSystemMessage,
@@ -1681,10 +1711,15 @@ We only need to do it for files that were edited since `from`, ie files between 
 					onAbort: () => reject(new Error('cancelled')),
 					logging: { loggingName: 'ZeroEgress - Compact' },
 				})
+				if (!requestId) { reject(new Error('no model is selected')); return }
+				entry.requestId = requestId
+				if (entry.stoppedBecause) this._llmMessageService.abort(requestId)
 			})
+			if (entry.stoppedBecause === 'user') return
 			if (!summary) throw new Error('the model returned no summary')
 			const latest = this.state.allThreads[threadId]
-			if (!latest) return
+			// the chat changed while the summary was written (restored, edited): drop it, the user already moved on
+			if (!latest || !compactionStillValid(latest.messages, cut, messageAtCut)) return
 			const newThreads = {
 				...this.state.allThreads,
 				[threadId]: { ...latest, compaction: { summary, uptoIdx: cut, at: new Date().toISOString() } },
@@ -1692,7 +1727,13 @@ We only need to do it for files that were edited since `from`, ie files between 
 			this._storeAllThreads(newThreads)
 			this._setState({ allThreads: newThreads })
 		} catch (e) {
-			this._notificationService.error(`Couldn't compact this chat: ${getErrorMessage(e)}`)
+			if (entry.stoppedBecause === 'user') return
+			const msg = entry.stoppedBecause === 'timeout' ? 'it took too long.' : getErrorMessage(e)
+			this._notificationService.error(`Couldn't compact this chat: ${msg}`)
+		} finally {
+			clearTimeout(timer)
+			this._compacting.delete(threadId)
+			this._onDidChangeCurrentThread.fire()
 		}
 	}
 
