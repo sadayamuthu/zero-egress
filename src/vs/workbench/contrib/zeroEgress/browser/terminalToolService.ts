@@ -18,6 +18,16 @@ import { timeout } from '../../../../base/common/async.js';
 
 
 
+/** the xterm scrollback of a rendered terminal as plain text, oldest line first; '' before xterm exists */
+export function readXtermBuffer(instance: ITerminalInstance): string {
+	if (!instance.xterm) { return ''; }
+	const lines: string[] = [];
+	for (const line of instance.xterm.getBufferReverseIterator()) {
+		lines.unshift(line);
+	}
+	return removeAnsiEscapeCodes(lines.join('\n'));
+}
+
 export interface ITerminalToolService {
 	readonly _serviceBrand: undefined;
 
@@ -233,13 +243,7 @@ export class TerminalToolService extends Disposable implements ITerminalToolServ
 			throw new Error('Read Terminal: The requested terminal has not yet been rendered and therefore has no scrollback buffer available.');
 		}
 
-		// Collect lines from the buffer iterator (oldest to newest)
-		const lines: string[] = [];
-		for (const line of terminal.xterm.getBufferReverseIterator()) {
-			lines.unshift(line);
-		}
-
-		let result = removeAnsiEscapeCodes(lines.join('\n'));
+		let result = readXtermBuffer(terminal);
 
 		if (result.length > MAX_TERMINAL_CHARS) {
 			const half = MAX_TERMINAL_CHARS / 2;

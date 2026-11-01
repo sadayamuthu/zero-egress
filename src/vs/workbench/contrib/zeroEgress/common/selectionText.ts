@@ -11,6 +11,25 @@ export const DIFF_MAX_CHARS = 60_000;
 export const PROBLEMS_MAX = 100;
 export const IMAGE_MAX_BYTES = 5 * 1024 * 1024;
 
+export type SavedDoc = { name: string; path: string; isFolder: boolean };
+
+const BRANCH_RE = /^[A-Za-z0-9._/-]{1,200}$/;
+
+/** a branch name safe to pass to git as an argument */
+export function isValidBranchName(name: string): boolean {
+	return BRANCH_RE.test(name) && !name.startsWith('-') && !name.includes('..');
+}
+
+export function imageExtOf(mime: string): 'png' | 'jpg' | 'webp' | 'gif' | null {
+	switch (mime) {
+		case 'image/png': return 'png';
+		case 'image/jpeg': return 'jpg';
+		case 'image/webp': return 'webp';
+		case 'image/gif': return 'gif';
+		default: return null;
+	}
+}
+
 const FENCE = '```';
 
 /** keeps the last `max` chars */

@@ -4,8 +4,9 @@
  *--------------------------------------------------------------------------------------*/
 
 import { promisify } from 'util'
-import { exec as _exec } from 'child_process'
+import { exec as _exec, execFile as _execFile } from 'child_process'
 import { IZeroEgressSCMService } from '../common/zeroEgressSCMTypes.js'
+import { isValidBranchName } from '../common/selectionText.js'
 
 interface NumStat {
 	file: string
@@ -14,6 +15,7 @@ interface NumStat {
 }
 
 const exec = promisify(_exec)
+const execFile = promisify(_execFile)
 
 //8000 and 10 were chosen after some experimentation on small-to-moderately sized changes
 const MAX_DIFF_LENGTH = 8000
@@ -78,5 +80,17 @@ export class ZeroEgressSCMService implements IZeroEgressSCMService {
 
 	gitLog(path: string): Promise<string> {
 		return git('git log --pretty=format:"%h|%s|%ad" --date=short --no-merges -n 5', path)
+	}
+
+	async gitDiff(path: string, against: string | null): Promise<string> {
+		if (against !== null && !isValidBranchName(against)) { throw new Error('Not a valid branch name.') }
+		// args array, never a shell string
+		const { stdout } = await execFile('git', ['diff', '--no-color', against ?? 'HEAD', '--'], { cwd: path, maxBuffer: 10 * 1024 * 1024 })
+		return stdout
+	}
+
+	async gitBranches(path: string): Promise<string[]> {
+		const { stdout } = await execFile('git', ['for-each-ref', '--format=%(refname:short)', 'refs/heads'], { cwd: path, maxBuffer: 10 * 1024 * 1024 })
+		return stdout.split('\n').map(l => l.trim()).filter(l => l.length > 0)
 	}
 }

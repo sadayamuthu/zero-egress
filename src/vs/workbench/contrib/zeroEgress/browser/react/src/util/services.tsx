@@ -39,6 +39,7 @@ import { IPathService } from '../../../../../../../workbench/services/path/commo
 import { IMetricsService } from '../../../../../../../workbench/contrib/zeroEgress/common/metricsService.js'
 import { URI } from '../../../../../../../base/common/uri.js'
 import { IChatThreadService, ThreadsState, ThreadStreamState } from '../../../chatThreadService.js'
+import { IChatContextService } from '../../../chatContextService.js'
 import { ITerminalToolService } from '../../../terminalToolService.js'
 import { ILanguageService } from '../../../../../../../editor/common/languages/language.js'
 import { IZeroEgressModelService } from '../../../../common/zeroEgressModelService.js'
@@ -251,6 +252,7 @@ const getReactAccessor = (accessor: ServicesAccessor) => {
 		ILocalModelDetectionService: accessor.get(ILocalModelDetectionService),
 		ILocalStatusService: accessor.get(ILocalStatusService),
 		IEgressProofService: accessor.get(IEgressProofService),
+		IChatContextService: accessor.get(IChatContextService),
 
 		IStorageService: accessor.get(IStorageService),
 		IWorkspacesService: accessor.get(IWorkspacesService),

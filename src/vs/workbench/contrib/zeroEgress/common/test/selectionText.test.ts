@@ -6,7 +6,7 @@
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { messageOfSelection } from '../prompt/prompts.js';
-import { DIFF_MAX_CHARS, TERMINAL_MAX_CHARS, textOfSnapshotSelection } from '../selectionText.js';
+import { DIFF_MAX_CHARS, TERMINAL_MAX_CHARS, textOfSnapshotSelection, isValidBranchName, imageExtOf } from '../selectionText.js';
 
 suite('selectionText', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
@@ -37,5 +37,16 @@ suite('selectionText', () => {
 			folderOpts: { maxChildren: 1, maxCharsPerFile: 1 },
 		};
 		assert.strictEqual(await messageOfSelection({ type: 'Nope' } as any, opts), '');
+	});
+
+	test('branch names', () => {
+		for (const ok of ['main', 'feature/x-1', 'release/1.2']) { assert.strictEqual(isValidBranchName(ok), true, ok); }
+		for (const bad of ['-o', 'main;rm -rf ~', 'a..b', '$(x)', '']) { assert.strictEqual(isValidBranchName(bad), false, bad); }
+	});
+
+	test('image types', () => {
+		assert.strictEqual(imageExtOf('image/jpeg'), 'jpg');
+		assert.strictEqual(imageExtOf('image/png'), 'png');
+		assert.strictEqual(imageExtOf('image/svg+xml'), null);
 	});
 });
