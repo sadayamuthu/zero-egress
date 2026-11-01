@@ -53,6 +53,7 @@ export type ZeroEgressStaticModelInfo = { // not stateful
 	supportsSystemMessage: false | 'system-role' | 'developer-role' | 'separated'; // typically you should use 'system-role'. 'separated' means the system message is passed as a separate field (e.g. anthropic)
 	specialToolFormat?: 'openai-style' | 'anthropic-style' | 'gemini-style', // typically you should use 'openai-style'. null means "can't call tools by default", and asks the LLM to output XML in agent mode
 	supportsFIM: boolean; // whether the model was specifically designed for autocomplete or "FIM" ("fill-in-middle" format)
+	supportsVision?: boolean; // whether the model can read images (sent as image_url content parts)
 
 	additionalOpenAIPayload?: { [key: string]: string } // additional payload in the message body for requests that are openai-compatible (ollama, vllm, openai, openrouter, etc)
 
@@ -95,6 +96,7 @@ export const modelOverrideKeys = [
 	'supportsSystemMessage',
 	'specialToolFormat',
 	'supportsFIM',
+	'supportsVision',
 	'reasoningCapabilities',
 	'additionalOpenAIPayload'
 ] as const
@@ -280,6 +282,14 @@ const openSourceModelOptions_assumingOAICompat = {
 
 
 
+// Ollama-style model names of the families that can read images
+export const isVisionModelName = (modelName: string): boolean => {
+	const lower = modelName.toLowerCase()
+	if (lower === 'gemma3:1b' || lower.startsWith('gemma3:1b-')) return false // the 1b gemma3 is text-only
+	return ['llava', 'llama3.2-vision', 'qwen2.5vl', 'minicpm-v', 'mistral-small3.1', 'gemma3']
+		.some(prefix => lower.startsWith(prefix) || lower.includes('/' + prefix))
+}
+
 // keep modelName, but use the fallback's defaults
 const extensiveModelOptionsFallback: ZeroEgressStaticProviderInfo['modelOptionsFallback'] = (modelName, fallbackKnownValues) => {
 
@@ -300,6 +310,7 @@ const extensiveModelOptionsFallback: ZeroEgressStaticProviderInfo['modelOptionsF
 			supportsSystemMessage: supportsSystemMessage,
 			cost: { input: 0, output: 0 },
 			downloadable: false,
+			...(isVisionModelName(modelName) ? { supportsVision: true } : {}),
 			...fallbackKnownValues
 		};
 	}
@@ -524,7 +535,7 @@ export const getModelCapabilities = (
 		return { ...result, ...overrides, modelName: result.modelName, isUnrecognizedModel: false };
 	}
 
-	return { modelName, ...defaultModelOptions, ...overrides, isUnrecognizedModel: true };
+	return { modelName, ...defaultModelOptions, ...(isVisionModelName(modelName) ? { supportsVision: true } : {}), ...overrides, isUnrecognizedModel: true };
 }
 
 // non-model settings

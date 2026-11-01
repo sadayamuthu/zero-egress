@@ -7,6 +7,7 @@ import React, { createContext, useContext, ButtonHTMLAttributes, FormEvent, Form
 
 
 import { useAccessor, useChatThreadsState, useChatThreadsStreamState, useSettingsState, useActiveURI, useFullChatThreadsStreamState } from '../util/services.js';
+import { getModelCapabilities } from './composerDeps.js';
 import { ScrollType } from '../../../../../../../editor/common/editorCommon.js';
 
 import { ChatMarkdownRender, ChatMessageLocation, getApplyBoxId } from '../markdown/ChatMarkdownRender.js';
@@ -463,6 +464,11 @@ export const SelectedFiles = (
 	const commandService = accessor.get('ICommandService')
 	const modelReferenceService = accessor.get('IZeroEgressModelService')
 
+	// an Image chip warns when the current Chat model can't read images
+	const settingsState = useSettingsState()
+	const chatModel = settingsState.modelSelectionOfFeature['Chat']
+	const chatModelCanSeeImages = !chatModel || !!getModelCapabilities(chatModel.providerName, chatModel.modelName, settingsState.overridesOfModel).supportsVision
+
 
 
 
@@ -621,6 +627,11 @@ export const SelectedFiles = (
 							{ // file name and range
 								chipLabel
 								+ (selection.type === 'CodeSelection' || selection.type === 'Symbol' ? ` (${selection.range[0]}-${selection.range[1]})` : '')
+							}
+
+							{selection.type === 'Image' && !chatModelCanSeeImages ?
+								<span style={{ color: 'var(--vscode-editorWarning-foreground)' }}>{` · model can't read images`}</span>
+								: null
 							}
 
 							{selection.type === 'File' && selection.state.wasAddedAsCurrentFile && messageIdx === undefined && currentURI?.fsPath === selection.uri.fsPath ?

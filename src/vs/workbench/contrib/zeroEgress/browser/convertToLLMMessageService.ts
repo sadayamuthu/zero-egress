@@ -23,6 +23,10 @@ import { URI } from '../../../../base/common/uri.js';
 import { EndOfLinePreference } from '../../../../editor/common/model.js';
 import { ToolName } from '../common/toolsServiceTypes.js';
 import { IMCPService } from '../common/mcpService.js';
+import { encodeBase64 } from '../../../../base/common/buffer.js';
+import { IFileService } from '../../../../platform/files/common/files.js';
+import { IMAGE_MAX_BYTES } from '../common/selectionText.js';
+import { MAX_IMAGES_PER_MESSAGE, imageMissingNote, imageNote, imageTooLargeNote, toOpenAIUserContent } from '../common/imageContent.js';
 
 export const EMPTY_MESSAGE = '(empty message)'
 
@@ -37,6 +41,7 @@ type SimpleLLMMessage = {
 } | {
 	role: 'user';
 	content: string;
+	images?: { mime: string; base64: string; name: string }[]; // read at prepare time; turned into image_url parts (or notes) in prepareOpenAIOrAnthropicMessages
 } | {
 	role: 'assistant';
 	content: string;
@@ -230,13 +235,18 @@ const prepareMessages_XML_tools = (messages: SimpleLLMMessage[], supportsAnthrop
 			if (c.role === 'tool')
 				c.content = `<${c.name}_result>\n${c.content}\n</${c.name}_result>`
 
+			const images = c.role === 'user' ? c.images : undefined
 			if (llmChatMessages.length === 0 || llmChatMessages[llmChatMessages.length - 1].role !== 'user')
 				llmChatMessages.push({
 					role: 'user',
-					content: c.content
-				})
-			else
-				llmChatMessages[llmChatMessages.length - 1].content += '\n\n' + c.content
+					content: c.content,
+					...(images ? { images } : {}),
+				} as OpenAILLMChatMessage)
+			else {
+				const prev = llmChatMessages[llmChatMessages.length - 1] as { content: string, images?: unknown[] }
+				prev.content += '\n\n' + c.content
+				if (images) prev.images = [...(prev.images ?? []), ...images]
+			}
 		}
 	}
 	return llmChatMessages
@@ -254,6 +264,7 @@ const prepareOpenAIOrAnthropicMessages = ({
 	supportsAnthropicReasoning,
 	contextWindow,
 	reservedOutputTokenSpace,
+	supportsVision,
 }: {
 	messages: SimpleLLMMessage[],
 	systemMessage: string,
@@ -263,6 +274,7 @@ const prepareOpenAIOrAnthropicMessages = ({
 	supportsAnthropicReasoning: boolean,
 	contextWindow: number,
 	reservedOutputTokenSpace: number | null | undefined,
+	supportsVision?: boolean,
 }): { messages: AnthropicOrOpenAILLMMessage[], separateSystemMessage: string | undefined } => {
 
 	reservedOutputTokenSpace = Math.max(
@@ -283,6 +295,17 @@ const prepareOpenAIOrAnthropicMessages = ({
 
 	// ================ trim ================
 	messages = messages.map(m => ({ ...m, content: m.role !== 'tool' ? m.content.trim() : m.content }))
+
+	// images become image_url parts only for vision models on OpenAI-format messages; elsewhere they are described in text
+	const sendsImageParts = !!supportsVision && specialToolFormat !== 'anthropic-style'
+	if (!sendsImageParts) {
+		for (const m of messages) {
+			if (m.role === 'user' && m.images?.length) {
+				m.content = [m.content, ...m.images.map(i => imageNote(i.name))].filter(Boolean).join('\n')
+				delete m.images
+			}
+		}
+	}
 
 	type MesType = (typeof messages)[0]
 
@@ -383,6 +406,14 @@ const prepareOpenAIOrAnthropicMessages = ({
 	else if (specialToolFormat === 'openai-style') {
 		llmChatMessages = prepareMessages_openai_tools(messages as SimpleLLMMessage[])
 	}
+	// user messages that still carry images become OpenAI content parts (text is already trimmed; image parts are never cut)
+	for (const m of llmChatMessages) {
+		const withImages = m as { role: string, content: unknown, images?: { mime: string; base64: string }[] }
+		if (withImages.role !== 'user' || !withImages.images) continue
+		const images = withImages.images
+		delete withImages.images
+		if (typeof withImages.content === 'string') withImages.content = toOpenAIUserContent(withImages.content, images)
+	}
 	const llmMessages = llmChatMessages
 
 
@@ -401,9 +432,13 @@ const prepareOpenAIOrAnthropicMessages = ({
 	}
 	// if does not support system message
 	else {
+		const first = llmMessages[0].content
+		const sysPrefix = `<SYSTEM_MESSAGE>\n${newSysMsg}\n</SYSTEM_MESSAGE>\n`
 		const newFirstMessage = {
 			role: 'user',
-			content: `<SYSTEM_MESSAGE>\n${newSysMsg}\n</SYSTEM_MESSAGE>\n${llmMessages[0].content}`
+			content: Array.isArray(first) && first[0]?.type === 'text' && llmMessages[0].role === 'user'
+				? [{ type: 'text' as const, text: sysPrefix + first[0].text }, ...first.slice(1)] as any
+				: `${sysPrefix}${first}`
 		} as const
 		llmMessages.splice(0, 1) // delete first message
 		llmMessages.unshift(newFirstMessage) // add new first message
@@ -423,8 +458,8 @@ const prepareOpenAIOrAnthropicMessages = ({
 		}
 		else {
 			// allowed to be empty if has a tool in it or following it
-			if (currMsg.content.find(c => c.type === 'tool_result' || c.type === 'tool_use')) {
-				currMsg.content = currMsg.content.filter(c => !(c.type === 'text' && !c.text)) as any
+			if ((currMsg.content as { type: string }[]).find(c => c.type === 'tool_result' || c.type === 'tool_use')) {
+				currMsg.content = (currMsg.content as { type: string, text?: string }[]).filter(c => !(c.type === 'text' && !c.text)) as any
 				continue
 			}
 			if (nextMsg?.role === 'tool') continue
@@ -433,7 +468,7 @@ const prepareOpenAIOrAnthropicMessages = ({
 			for (const c of currMsg.content) {
 				if (c.type === 'text') c.text = c.text || EMPTY_MESSAGE
 			}
-			if (currMsg.content.length === 0) currMsg.content = [{ type: 'text', text: EMPTY_MESSAGE }]
+			if (currMsg.content.length === 0) currMsg.content = [{ type: 'text', text: EMPTY_MESSAGE }] as any
 		}
 	}
 
@@ -504,7 +539,8 @@ const prepareMessages = (params: {
 	supportsAnthropicReasoning: boolean,
 	contextWindow: number,
 	reservedOutputTokenSpace: number | null | undefined,
-	providerName: ProviderName
+	providerName: ProviderName,
+	supportsVision?: boolean,
 }): { messages: LLMChatMessage[], separateSystemMessage: string | undefined } => {
 
 	const specialFormat = params.specialToolFormat // this is just for ts stupidness
@@ -546,6 +582,7 @@ class ConvertToLLMMessageService extends Disposable implements IConvertToLLMMess
 		@IZeroEgressSettingsService private readonly zeroEgressSettingsService: IZeroEgressSettingsService,
 		@IZeroEgressModelService private readonly zeroEgressModelService: IZeroEgressModelService,
 		@IMCPService private readonly mcpService: IMCPService,
+		@IFileService private readonly fileService: IFileService,
 	) {
 		super()
 	}
@@ -611,7 +648,21 @@ class ConvertToLLMMessageService extends Disposable implements IConvertToLLMMess
 
 	// --- LLM Chat messages ---
 
-	private _chatMessagesToSimpleMessages(chatMessages: ChatMessage[]): SimpleLLMMessage[] {
+	/** Reads an image selection's bytes now (it may have changed since it was picked). Returns the image, or a note saying why it was not sent. */
+	private async _readImage(sel: { uri: URI, name: string, mime: string }): Promise<{ image: { mime: string; base64: string; name: string } } | { note: string }> {
+		try {
+			const stat = await this.fileService.stat(sel.uri)
+			if (stat.size > IMAGE_MAX_BYTES) return { note: imageTooLargeNote(sel.name) }
+			const file = await this.fileService.readFile(sel.uri)
+			if (file.value.byteLength > IMAGE_MAX_BYTES) return { note: imageTooLargeNote(sel.name) }
+			return { image: { mime: sel.mime, base64: encodeBase64(file.value), name: sel.name } }
+		}
+		catch {
+			return { note: imageMissingNote(sel.name) }
+		}
+	}
+
+	private async _chatMessagesToSimpleMessages(chatMessages: ChatMessage[], supportsVision: boolean): Promise<SimpleLLMMessage[]> {
 		const simpleLLMMessages: SimpleLLMMessage[] = []
 
 		for (const m of chatMessages) {
@@ -634,9 +685,23 @@ class ConvertToLLMMessageService extends Disposable implements IConvertToLLMMess
 				})
 			}
 			else if (m.role === 'user') {
+				const imageSels = (m.selections ?? []).filter((s): s is Extract<typeof s, { type: 'Image' }> => s.type === 'Image')
+				const images: { mime: string; base64: string; name: string }[] = []
+				const notes: string[] = []
+				if (supportsVision) { // without vision, prepareOpenAIOrAnthropicMessages writes the notes and no file is read
+					for (const sel of imageSels.slice(0, MAX_IMAGES_PER_MESSAGE)) {
+						const res = await this._readImage(sel)
+						if ('image' in res) images.push(res.image)
+						else notes.push(res.note)
+					}
+				}
+				else {
+					for (const sel of imageSels) images.push({ mime: sel.mime, base64: '', name: sel.name })
+				}
 				simpleLLMMessages.push({
 					role: m.role,
-					content: m.content,
+					content: notes.length ? [m.content, ...notes].filter(Boolean).join('\n') : m.content,
+					...(images.length ? { images } : {}),
 				})
 			}
 		}
@@ -686,6 +751,7 @@ class ConvertToLLMMessageService extends Disposable implements IConvertToLLMMess
 			specialToolFormat,
 			contextWindow,
 			supportsSystemMessage,
+			supportsVision,
 		} = getModelCapabilities(providerName, modelName, overridesOfModel)
 
 		const { disableSystemMessage } = this.zeroEgressSettingsService.state.globalSettings;
@@ -698,7 +764,7 @@ class ConvertToLLMMessageService extends Disposable implements IConvertToLLMMess
 		const aiInstructions = this._getCombinedAIInstructions();
 		const isReasoningEnabled = getIsReasoningEnabledState('Chat', providerName, modelName, modelSelectionOptions, overridesOfModel)
 		const reservedOutputTokenSpace = getReservedOutputTokenSpace(providerName, modelName, { isReasoningEnabled, overridesOfModel })
-		const llmMessages = this._chatMessagesToSimpleMessages(applyCompaction(chatMessages, compaction))
+		const llmMessages = await this._chatMessagesToSimpleMessages(applyCompaction(chatMessages, compaction), !!supportsVision)
 
 		const { messages, separateSystemMessage } = prepareMessages({
 			messages: llmMessages,
@@ -710,6 +776,7 @@ class ConvertToLLMMessageService extends Disposable implements IConvertToLLMMess
 			contextWindow,
 			reservedOutputTokenSpace,
 			providerName,
+			supportsVision: !!supportsVision,
 		})
 		return { messages, separateSystemMessage };
 	}

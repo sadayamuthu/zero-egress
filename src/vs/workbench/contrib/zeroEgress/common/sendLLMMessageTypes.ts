@@ -43,9 +43,13 @@ export type AnthropicLLMChatMessage = {
 		{ type: 'text'; text: string; } | { type: 'tool_result'; tool_use_id: string; content: string; }
 	)[]
 }
+export type OpenAIUserPart = { type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } }
 export type OpenAILLMChatMessage = {
-	role: 'system' | 'user' | 'developer';
+	role: 'system' | 'developer';
 	content: string;
+} | {
+	role: 'user';
+	content: string | OpenAIUserPart[];
 } | {
 	role: 'assistant',
 	content: string | (AnthropicReasoning | { type: 'text'; text: string })[];
