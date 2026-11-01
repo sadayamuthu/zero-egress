@@ -22,3 +22,5 @@ export { canAllowList, normalizeCommand, terminalAutoRunOf, settingsForTerminalA
 export type { TerminalAutoRun } from '../../../../common/commandAllowList.js';
 // the id of zeroEgressSettingsPane's open-settings action (that module registers actions, so only the id is copied)
 export const ZERO_EGRESS_OPEN_SETTINGS_ACTION_ID = 'workbench.action.openZeroEgressSettings';
+export { planProgress } from '../../../../common/plan.js';
+export type { PlanStep } from '../../../../common/plan.js';

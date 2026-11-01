@@ -28,6 +28,7 @@ import { builtinToolNames, isABuiltinToolName, MAX_FILE_CHARS_PAGE, MAX_TERMINAL
 import { RawToolCallObj } from '../../../../common/sendLLMMessageTypes.js';
 import ErrorBoundary from './ErrorBoundary.js';
 import { ConflictCard } from './chat/ConflictCard.js';
+import { PlanCard } from './chat/PlanCard.js';
 import { LineCounts, StepName, StepRow } from './chat/StepRow.js';
 import type { StepIcon } from './chat/StepRow.js';
 import { ApprovalButton, ApprovalCard, ApprovalCardShell } from './chat/ApprovalCard.js';
@@ -1287,6 +1288,7 @@ const titleOfBuiltinToolName = {
 
 	'read_lint_errors': { done: `Read lint errors`, proposed: 'Read lint errors', running: loadingTitleWrapper('Reading lint errors') },
 	'search_in_file': { done: 'Searched in file', proposed: 'Search in file', running: loadingTitleWrapper('Searching in file') },
+	'update_plan': { done: 'Updated the plan', proposed: 'Update the plan', running: loadingTitleWrapper('Updating the plan') },
 } as const satisfies Record<BuiltinToolName, { done: any, proposed: any, running: any }>
 
 
@@ -2275,6 +2277,16 @@ const builtinToolNameToComponent: { [T in BuiltinToolName]: { resultWrapper: Res
 			}
 
 			return <ToolHeaderWrapper {...componentParams} />
+		},
+	},
+	'update_plan': {
+		resultWrapper: ({ toolMessage, messageIdx, threadId }) => {
+			const messages = useChatThreadsState().allThreads[threadId]?.messages ?? []
+			if (toolMessage.type !== 'success') return null // the plan card shows the plan itself, nothing to show for a request or a refusal
+			let latestIdx = -1
+			messages.forEach((m, i) => { if (m.role === 'tool' && m.name === 'update_plan' && m.type === 'success') latestIdx = i })
+			if (messageIdx === latestIdx) return <PlanCard threadId={threadId} />
+			return <StepRow icon='ok' label='Updated the plan' />
 		},
 	},
 	'kill_persistent_terminal': {
