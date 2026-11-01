@@ -51,7 +51,7 @@ export const ChatTabs = () => {
 	const tabs = openTabIds.filter(id => allThreads[id] && !allThreads[id]?.agent);
 
 	return <div className='relative flex items-center gap-1 px-1 h-8 shrink-0 border-b border-ze-border-3 select-none'>
-		<div role='tablist' className='flex items-center gap-0.5 min-w-0 flex-1 overflow-x-auto overflow-y-hidden' style={{ scrollbarWidth: 'none' }}>
+		<div role='tablist' className='flex items-center gap-0.5 min-w-0 flex-1 overflow-x-auto overflow-y-hidden no-scrollbar'>
 			{tabs.map(id => {
 				const thread = allThreads[id]!;
 				const title = threadTitleOf(thread);

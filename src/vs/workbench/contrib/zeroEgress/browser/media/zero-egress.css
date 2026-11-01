@@ -84,6 +84,15 @@
 	/* For Firefox */
 }
 
+/* no scrollbar at all (the chat tab strip): more specific than the rule above, so it wins over its !important */
+.ze-scope .ze-no-scrollbar {
+	scrollbar-width: none !important;
+}
+
+.ze-scope .ze-no-scrollbar::-webkit-scrollbar {
+	display: none !important;
+}
+
 .ze-scope::-webkit-scrollbar,
 .ze-scope *::-webkit-scrollbar {
 	width: var(--scrollbar-vertical-width) !important;
