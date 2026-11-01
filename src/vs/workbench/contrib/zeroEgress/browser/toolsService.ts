@@ -340,7 +340,7 @@ export class ToolsService implements IToolsService {
 				return { persistentTerminalId };
 			},
 			update_plan: (params: RawToolParamsObj) => {
-				const plan = typeof params.plan === 'string' ? params.plan : ''
+				const plan = typeof params.plan === 'string' ? params.plan : typeof params.steps === 'string' ? params.steps : ''
 				const steps = parsePlan(plan)
 				if (steps.length === 0) throw new Error('Plan is empty.')
 				if (steps.length > 30) throw new Error('Plan has more than 30 steps.')

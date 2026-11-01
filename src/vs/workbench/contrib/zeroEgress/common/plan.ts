@@ -11,13 +11,46 @@ const MAX_STEP_TEXT = 200
 
 /** one step per non-empty line; an optional leading `-`, `*` or `1.` is stripped, then `[x]`, `[>]` or `[ ]` */
 export function parsePlan(raw: string): PlanStep[] {
+	const arr = jsonArrayOf(raw)
+	if (arr) return parseItems(arr)
+	return parseItems(raw.split(/\r?\n/))
+}
+
+const jsonArrayOf = (raw: string): unknown[] | undefined => {
+	const t = raw.trim()
+	if (!t.startsWith('[')) return undefined
+	try {
+		const v = JSON.parse(t)
+		return Array.isArray(v) ? v : undefined
+	} catch { return undefined }
+}
+
+const statusOfWord = (w: unknown): PlanStatus => {
+	const k = typeof w === 'string' ? w.trim().toLowerCase() : ''
+	if (k === 'done' || k === 'completed') return 'done'
+	if (k === 'current' || k === 'in_progress' || k === 'doing') return 'current'
+	return 'todo'
+}
+
+/** items are lines of text, or (from a JSON list) objects `{text|step|title, status?}` */
+function parseItems(items: unknown[]): PlanStep[] {
 	const steps: PlanStep[] = []
 	let hasCurrent = false
-	for (const line of raw.split(/\r?\n/)) {
+	for (const item of items) {
+		let line = ''
+		let forced: PlanStatus | undefined
+		if (typeof item === 'string') line = item
+		else if (item && typeof item === 'object') {
+			const o = item as Record<string, unknown>
+			const t = [o.text, o.step, o.title].find(v => typeof v === 'string')
+			if (typeof t !== 'string') continue
+			line = t
+			forced = statusOfWord(o.status)
+		}
 		let rest = line.trim()
 		if (!rest) continue
 		rest = rest.replace(/^(?:[-*]|\d+[.)])\s+/, '')
-		let status: PlanStatus = 'todo'
+		let status: PlanStatus = forced ?? 'todo'
 		const marker = /^\[([xX>\s])\]\s*/.exec(rest)
 		if (marker) {
 			rest = rest.slice(marker[0].length)

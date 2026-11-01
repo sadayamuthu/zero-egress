@@ -26,6 +26,22 @@ suite('plan', () => {
 		assert.deepStrictEqual(parsePlan('[>] a\n[>] b').map(s => s.status), ['current', 'todo']);
 	});
 
+	test('JSON array of strings keeps markers', () => {
+		assert.deepStrictEqual(parsePlan('["[x] a", "[>] b", "c"]'), [
+			{ text: 'a', status: 'done' }, { text: 'b', status: 'current' }, { text: 'c', status: 'todo' },
+		]);
+	});
+
+	test('JSON array of objects maps statuses', () => {
+		assert.deepStrictEqual(parsePlan('[{"text":"a","status":"completed"},{"step":"b","status":"in_progress"},{"title":"c"},{"text":"d","status":"weird"}]'), [
+			{ text: 'a', status: 'done' }, { text: 'b', status: 'current' }, { text: 'c', status: 'todo' }, { text: 'd', status: 'todo' },
+		]);
+	});
+
+	test('a line starting with [x] that is not JSON still parses as lines', () => {
+		assert.deepStrictEqual(parsePlan('[x] a\n[ ] b'), [{ text: 'a', status: 'done' }, { text: 'b', status: 'todo' }]);
+	});
+
 	test('round trip', () => {
 		const s: PlanStep[] = [{ text: 'a', status: 'done' }, { text: 'b', status: 'current' }, { text: 'c', status: 'todo' }];
 		assert.deepStrictEqual(parsePlan(formatPlan(s)), s);

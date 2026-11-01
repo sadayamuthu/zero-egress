@@ -2284,7 +2284,10 @@ const builtinToolNameToComponent: { [T in BuiltinToolName]: { resultWrapper: Res
 			const messages = useChatThreadsState().allThreads[threadId]?.messages ?? []
 			if (toolMessage.type !== 'success') return null // the plan card shows the plan itself, nothing to show for a request or a refusal
 			let latestIdx = -1
-			messages.forEach((m, i) => { if (m.role === 'tool' && m.name === 'update_plan' && m.type === 'success') latestIdx = i })
+			for (let i = messages.length - 1; i >= 0; i--) {
+				const m = messages[i]
+				if (m.role === 'tool' && m.name === 'update_plan' && m.type === 'success') { latestIdx = i; break }
+			}
 			if (messageIdx === latestIdx) return <PlanCard threadId={threadId} />
 			return <StepRow icon='ok' label='Updated the plan' />
 		},
