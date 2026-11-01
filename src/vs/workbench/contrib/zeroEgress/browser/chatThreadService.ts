@@ -60,7 +60,7 @@ import { IDisposable } from '../../../../base/common/lifecycle.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { AGENTS_MAX_CONCURRENT_DEFAULT, AGENTS_MAX_CONCURRENT_SETTING } from '../common/zeroEgressConfiguration.js';
 import { clampConcurrency, parallelRequestsOf } from '../common/zeroEgressSettingsTypes.js';
-import { PlanStep, ThreadPlan } from '../common/plan.js';
+import { nextPlan, PlanStep, ThreadPlan } from '../common/plan.js';
 import { refusalOf, ToolPolicy, toolPolicyOfMode } from '../common/toolPolicy.js';
 
 
@@ -2089,16 +2089,17 @@ We only need to do it for files that were edited since `from`, ie files between 
 	}
 
 
+	/** Called by _runToolCall when the agent runs update_plan: replaces the steps, clears editedAt, and clears approvedAt only for a plan-mode write. */
 	setPlanFromAgent(threadId: string, steps: PlanStep[], madeInPlanMode: boolean): void {
 		const thread = this.state.allThreads[threadId]
 		if (!thread) return
-		const plan: ThreadPlan = { steps, updatedAt: new Date().toISOString(), madeInPlanMode: thread.plan?.madeInPlanMode || madeInPlanMode }
-		if (thread.plan?.approvedAt) plan.approvedAt = thread.plan.approvedAt
+		const plan = nextPlan(thread.plan, steps, madeInPlanMode, new Date().toISOString())
 		const newThreads: ChatThreads = { ...this.state.allThreads, [threadId]: { ...thread, plan } }
 		this._storeAllThreads(newThreads)
 		this._setState({ allThreads: newThreads })
 	}
 
+	/** Called when the user edits the plan: replaces the steps, sets editedAt, and keeps approvedAt. */
 	setPlanSteps(threadId: string, steps: PlanStep[]): void {
 		const thread = this.state.allThreads[threadId]
 		if (!thread?.plan) return

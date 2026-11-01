@@ -16,7 +16,7 @@ export function parsePlan(raw: string): PlanStep[] {
 	for (const line of raw.split(/\r?\n/)) {
 		let rest = line.trim()
 		if (!rest) continue
-		rest = rest.replace(/^(?:[-*]|\d+\.)\s+/, '')
+		rest = rest.replace(/^(?:[-*]|\d+[.)])\s+/, '')
 		let status: PlanStatus = 'todo'
 		const marker = /^\[([xX>\s])\]\s*/.exec(rest)
 		if (marker) {
@@ -25,12 +25,12 @@ export function parsePlan(raw: string): PlanStep[] {
 			if (m === 'x' || m === 'X') status = 'done'
 			else if (m === '>') status = 'current'
 		}
+		const text = Array.from(rest.trim()).slice(0, MAX_STEP_TEXT).join('')
+		if (!text) continue
 		if (status === 'current') {
 			if (hasCurrent) status = 'todo'
 			else hasCurrent = true
 		}
-		const text = rest.trim().slice(0, MAX_STEP_TEXT)
-		if (!text) continue
 		steps.push({ text, status })
 	}
 	return steps
@@ -42,4 +42,10 @@ export function formatPlan(steps: PlanStep[]): string {
 
 export function planProgress(steps: PlanStep[]): { done: number; total: number } {
 	return { done: steps.filter(s => s.status === 'done').length, total: steps.length }
+}
+
+/** The plan after a write by the agent. A plan-mode write needs approval again; an agent-mode write keeps an earlier approval. */
+export function nextPlan(prev: ThreadPlan | undefined, steps: PlanStep[], madeInPlanMode: boolean, now: string): ThreadPlan {
+	if (madeInPlanMode) return { steps, updatedAt: now, madeInPlanMode: true }
+	return { steps, updatedAt: now, madeInPlanMode: prev?.madeInPlanMode ?? false, approvedAt: prev?.approvedAt }
 }
