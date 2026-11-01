@@ -72,6 +72,7 @@ import './pendingChangeContextKeys.js'
 import './egressTargetsContribution.js'
 import './localStatusService.js'
 import './localStatusContribution.js'
+import './modelSlotsStatusContribution.js'
 import './agentsViewContribution.js'
 
 // Home (empty window): clone command
