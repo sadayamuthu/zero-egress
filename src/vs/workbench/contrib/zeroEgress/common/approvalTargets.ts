@@ -24,3 +24,18 @@ export const approvalClickTarget = (threads: readonly ThreadWaitInfo[]): Approva
 	if (waiting.length === 0 || waiting.some(t => t.background)) { return { kind: 'agents' }; }
 	return { kind: 'chat', threadId: waiting[0].id };
 };
+
+/**
+ * Builds the wait info for every thread. A background thread waits when the agents service says `needs_ok` for it (that
+ * source also covers agents left waiting after a restart and skips other workspaces); a docked thread waits when its
+ * stream state is `awaiting_user`.
+ */
+export const waitInfoOf = (
+	threads: readonly { id: string; background: boolean }[],
+	streamAwaiting: ReadonlySet<string>,
+	agentsNeedingOk: ReadonlySet<string>,
+): ThreadWaitInfo[] => threads.map(t => ({
+	id: t.id,
+	background: t.background,
+	awaitingUser: t.background ? agentsNeedingOk.has(t.id) : streamAwaiting.has(t.id),
+}));
