@@ -21,6 +21,10 @@ suite('toolPolicy', () => {
 		assert.ok(names.includes('read_file'));
 	});
 
+	test('agent gets update_plan', () => {
+		assert.ok(availableTools(toolPolicyOfMode('agent'), undefined)!.some(t => t.name === 'update_plan'));
+	});
+
 	test('chat has no tools even with MCP', () => {
 		assert.strictEqual(availableTools(null, [mcpTool]), undefined);
 	});

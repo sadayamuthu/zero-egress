@@ -23,6 +23,7 @@ import { MAX_CHILDREN_URIs_PAGE, MAX_FILE_CHARS_PAGE, MAX_TERMINAL_BG_COMMAND_TI
 import { IZeroEgressSettingsService } from '../common/zeroEgressSettingsService.js'
 import { generateUuid } from '../../../../base/common/uuid.js'
 import { VSBuffer } from '../../../../base/common/buffer.js'
+import { parsePlan } from '../common/plan.js'
 import { AGENT_WORKTREE_REMOVED_MESSAGE, agentRootOf, ToolRunContext } from '../common/backgroundAgentTypes.js'
 import { applySearchReplaceBlocks } from '../common/helpers/searchReplace.js'
 import { checkTerminalOwner } from '../common/terminalOwnership.js'
@@ -338,6 +339,13 @@ export class ToolsService implements IToolsService {
 				const persistentTerminalId = validateProposedTerminalId(terminalIdUnknown);
 				return { persistentTerminalId };
 			},
+			update_plan: (params: RawToolParamsObj) => {
+				const plan = typeof params.plan === 'string' ? params.plan : ''
+				const steps = parsePlan(plan)
+				if (steps.length === 0) throw new Error('Plan is empty.')
+				if (steps.length > 30) throw new Error('Plan has more than 30 steps.')
+				return { plan, steps }
+			},
 
 		}
 
@@ -605,6 +613,10 @@ export class ToolsService implements IToolsService {
 				await this.terminalToolService.killPersistentTerminal(persistentTerminalId)
 				return { result: {} }
 			},
+			// the plan is stored on the thread by chatThreadService (it depends on this service, so it can't be injected here)
+			update_plan: async ({ steps }) => {
+				return { result: { count: steps.length } }
+			},
 		}
 
 
@@ -722,6 +734,9 @@ export class ToolsService implements IToolsService {
 			},
 			kill_persistent_terminal: (params, _result) => {
 				return `Successfully closed terminal "${params.persistentTerminalId}".`;
+			},
+			update_plan: (_params, result) => {
+				return `Plan updated (${result.count} steps).`;
 			},
 		}
 

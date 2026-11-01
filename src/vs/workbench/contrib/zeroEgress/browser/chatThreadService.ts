@@ -60,6 +60,7 @@ import { IDisposable } from '../../../../base/common/lifecycle.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { AGENTS_MAX_CONCURRENT_DEFAULT, AGENTS_MAX_CONCURRENT_SETTING } from '../common/zeroEgressConfiguration.js';
 import { clampConcurrency, parallelRequestsOf } from '../common/zeroEgressSettingsTypes.js';
+import { PlanStep, ThreadPlan } from '../common/plan.js';
 import { refusalOf, ToolPolicy, toolPolicyOfMode } from '../common/toolPolicy.js';
 
 
@@ -148,6 +149,9 @@ export type ThreadType = {
 
 	/** the earlier turns, summarized: the model sees the summary in place of messages[0..uptoIdx) */
 	compaction?: Compaction;
+
+	/** the task plan: written by the agent's update_plan tool, editable by the user */
+	plan?: ThreadPlan;
 
 	/** set when this thread runs as a background agent in its own git worktree */
 	agent?: BackgroundAgentInfo;
@@ -281,6 +285,8 @@ export interface IChatThreadService {
 	// tabs and history
 	/** an empty or blank title clears it, so the thread falls back to its first message */
 	renameThread(threadId: string, title: string): void;
+	setPlanFromAgent(threadId: string, steps: PlanStep[], madeInPlanMode: boolean): void;
+	setPlanSteps(threadId: string, steps: PlanStep[]): void;
 	/** closes the tab only: the thread stays in history and keeps its changes */
 	closeTab(threadId: string): void;
 	/** stops the thread first if it is running (its tool calls and model slot), then deletes it */
@@ -800,6 +806,7 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 		toolId: string,
 		mcpServerName: string | undefined,
 		toolPolicy: ToolPolicy | null,
+		madeInPlanMode: boolean,
 		opts: { preapproved: true, unvalidatedToolParams: RawToolParamsObj, validatedParams: ToolCallParams<ToolName> } | { preapproved: false, unvalidatedToolParams: RawToolParamsObj },
 	): Promise<{ awaitingUserApproval?: boolean, interrupted?: boolean }> => {
 
@@ -908,6 +915,7 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 				resolveInterruptor(interruptor)
 
 				toolResult = await result
+				if (toolName === 'update_plan') this.setPlanFromAgent(threadId, (toolParams as BuiltinToolCallParams['update_plan']).steps, madeInPlanMode)
 			}
 			else {
 				const mcpTools = this._mcpService.getMCPTools()
@@ -1015,6 +1023,7 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 		const backgroundAgent = this.state.allThreads[threadId]?.agent
 		const chatMode = backgroundAgent ? 'agent' : this._settingsService.state.globalSettings.chatMode
 		const toolPolicy = toolPolicyOfMode(chatMode)
+		const madeInPlanMode = (chatMode as string) === 'plan' // ChatMode gains 'plan' with plan mode
 		const agentRoot = backgroundAgent ? { folder: agentRootOf(backgroundAgent), depsMayBeMissing: !backgroundAgent.setup?.command, agentId: backgroundAgent.agentId } : undefined
 		const { overridesOfModel } = this._settingsService.state
 
@@ -1033,7 +1042,7 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 
 			// before enter loop, call tool
 			if (callThisToolFirst) {
-				const { interrupted, awaitingUserApproval } = await this._runToolCall(threadId, callThisToolFirst.name, callThisToolFirst.id, callThisToolFirst.mcpServerName, toolPolicy, { preapproved: true, unvalidatedToolParams: callThisToolFirst.rawParams, validatedParams: callThisToolFirst.params })
+				const { interrupted, awaitingUserApproval } = await this._runToolCall(threadId, callThisToolFirst.name, callThisToolFirst.id, callThisToolFirst.mcpServerName, toolPolicy, madeInPlanMode, { preapproved: true, unvalidatedToolParams: callThisToolFirst.rawParams, validatedParams: callThisToolFirst.params })
 				if (interrupted) {
 					this._setStreamState(threadId, undefined)
 					this._addUserCheckpoint({ threadId })
@@ -1068,6 +1077,7 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 					toolPolicy,
 					agentRoot,
 					compaction: this.state.allThreads[threadId]?.compaction,
+					plan: this.state.allThreads[threadId]?.plan?.steps,
 				})
 
 				if (interruptedWhenIdle) {
@@ -1200,7 +1210,7 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 						const mcpTools = this._mcpService.getMCPTools()
 						const mcpTool = mcpTools?.find(t => t.name === toolCall.name)
 
-						const { awaitingUserApproval, interrupted } = await this._runToolCall(threadId, toolCall.name, toolCall.id, mcpTool?.mcpServerName, toolPolicy, { preapproved: false, unvalidatedToolParams: toolCall.rawParams })
+						const { awaitingUserApproval, interrupted } = await this._runToolCall(threadId, toolCall.name, toolCall.id, mcpTool?.mcpServerName, toolPolicy, madeInPlanMode, { preapproved: false, unvalidatedToolParams: toolCall.rawParams })
 						if (interrupted) {
 							this._setStreamState(threadId, undefined)
 							return
@@ -2078,6 +2088,25 @@ We only need to do it for files that were edited since `from`, ie files between 
 		this._setState({ allThreads: newThreads })
 	}
 
+
+	setPlanFromAgent(threadId: string, steps: PlanStep[], madeInPlanMode: boolean): void {
+		const thread = this.state.allThreads[threadId]
+		if (!thread) return
+		const plan: ThreadPlan = { steps, updatedAt: new Date().toISOString(), madeInPlanMode: thread.plan?.madeInPlanMode || madeInPlanMode }
+		if (thread.plan?.approvedAt) plan.approvedAt = thread.plan.approvedAt
+		const newThreads: ChatThreads = { ...this.state.allThreads, [threadId]: { ...thread, plan } }
+		this._storeAllThreads(newThreads)
+		this._setState({ allThreads: newThreads })
+	}
+
+	setPlanSteps(threadId: string, steps: PlanStep[]): void {
+		const thread = this.state.allThreads[threadId]
+		if (!thread?.plan) return
+		const now = new Date().toISOString()
+		const newThreads: ChatThreads = { ...this.state.allThreads, [threadId]: { ...thread, plan: { ...thread.plan, steps, updatedAt: now, editedAt: now } } }
+		this._storeAllThreads(newThreads)
+		this._setState({ allThreads: newThreads })
+	}
 
 	closeTab(threadId: string): void {
 		const { tabs, next } = closeTabOf(this.state.openTabIds, threadId, this.state.currentThreadId)

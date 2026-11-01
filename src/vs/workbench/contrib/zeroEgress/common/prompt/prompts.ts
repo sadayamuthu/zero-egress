@@ -337,6 +337,12 @@ export const builtinTools: {
 		name: 'kill_persistent_terminal',
 		description: `Interrupts and closes a persistent terminal that you opened with open_persistent_terminal.`,
 		params: { persistent_terminal_id: { description: `The ID of the persistent terminal.` } }
+	},
+
+	update_plan: {
+		name: 'update_plan',
+		description: `Write or replace the task plan shown to the user. Send the whole plan every time.`,
+		params: { plan: { description: `One step per line. Start each line with [x] for done, [>] for the current step, or [ ] for to do.` } }
 	}
 
 
@@ -478,6 +484,7 @@ ${directoryStr}
 		details.push(`You will OFTEN need to gather context before making a change. Do not immediately make a change unless you have ALL relevant context.`)
 		details.push(`ALWAYS have maximal certainty in a change BEFORE you make it. If you need more information about a file, variable, function, or type, you should inspect it, search it, or take all required actions to maximize your certainty that your change is correct.`)
 		details.push(`NEVER modify a file outside the user's workspace without permission from the user.`)
+		details.push(`For a task with 3 or more steps, call update_plan with the whole plan before you change anything, and call it again each time a step is done.`)
 	}
 
 	if (mode === 'gather') {
