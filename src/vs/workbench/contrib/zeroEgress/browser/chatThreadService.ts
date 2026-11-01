@@ -19,6 +19,7 @@ import { IZeroEgressSettingsService } from '../common/zeroEgressSettingsService.
 import { approvalTypeOfBuiltinToolName, BuiltinToolCallParams, ToolCallParams, ToolName, ToolResult } from '../common/toolsServiceTypes.js';
 import { IToolsService } from './toolsService.js';
 import { IChangeOwnersService, OwnershipConflictError } from './changeOwnersService.js';
+import { UNOWNED } from '../common/changeOwners.js';
 import { ICommandAllowListService } from './commandAllowListService.js';
 import { restoreTargets } from '../common/reviewScope.js';
 import { basename } from '../../../../base/common/resources.js';
@@ -629,7 +630,10 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 		if (!thread) return
 		const lastMsg = thread.messages[thread.messages.length - 1]
 		if (!(lastMsg?.role === 'tool' && lastMsg.type === 'tool_request' && lastMsg.conflict)) return
-		const { uri, ownerThreadId } = lastMsg.conflict
+		const { uri } = lastMsg.conflict
+		// a chat deleted since the card was shown no longer owns anything: its changes are unowned now (the card already
+		// says "made outside this chat"), so resolve them without another click
+		const ownerThreadId = this.state.allThreads[lastMsg.conflict.ownerThreadId] ? lastMsg.conflict.ownerThreadId : UNOWNED
 
 		// only the named chat's changes that block this path: its files at or under it, and its folder ops above it.
 		// If resolving them would also touch a third chat's changes, the card names that chat instead and nothing is resolved
@@ -638,13 +642,20 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 			this._updateLatestTool(threadId, { ...lastMsg, conflict: { uri, ownerThreadId: blocking.owner } })
 			return
 		}
+		// the blocker can be UNOWNED (changes no chat owns): those are resolved the same way
 		if (blocking) {
-			for (const owned of blocking.uris) {
-				this._editCodeService.acceptOrRejectAllDiffAreas({ uri: owned, behavior: choice, removeCtrlKs: false })
-				await this._pendingFileOpsService.resolveAll(choice, owned)
-			}
-			for (const id of blocking.opIds) {
-				await this._pendingFileOpsService.resolve(id, choice)
+			try {
+				for (const owned of blocking.uris) {
+					await this._editCodeService.acceptOrRejectAllDiffAreas({ uri: owned, behavior: choice, removeCtrlKs: false })
+					await this._pendingFileOpsService.resolveAll(choice, owned)
+				}
+				for (const id of blocking.opIds) {
+					await this._pendingFileOpsService.resolve(id, choice)
+				}
+			} catch (e) {
+				// the card stays (nothing continues): say why instead of leaving it to the console
+				this._notificationService.error(`Could not ${choice} the other changes: ${getErrorMessage(e)}`)
+				return
 			}
 		}
 		// the thread may have moved on (deleted, or stopped) while the review ran

@@ -11,6 +11,8 @@
 // "in flight" until the write is done: an in-flight path counts as pending for other chats and is never released.
 // The conflict check also covers folders: a path conflicts with another chat's pending changes at or under it, and
 // with another chat's pending (or in-flight) folder create or delete above it. Owner keys stay per file.
+// Pending changes with no owner block a docked write the same way, reported with the owner UNOWNED: the next chat to
+// write the file never takes them over silently.
 
 import { Emitter, Event } from '../../../../base/common/event.js';
 import { Disposable, IDisposable, toDisposable } from '../../../../base/common/lifecycle.js';
@@ -18,7 +20,7 @@ import { isEqual, isEqualOrParent } from '../../../../base/common/resources.js';
 import { URI } from '../../../../base/common/uri.js';
 import { InstantiationType, registerSingleton } from '../../../../platform/instantiation/common/extensions.js';
 import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
-import { ChangeOwners, ClaimResult } from '../common/changeOwners.js';
+import { ChangeOwners, ClaimResult, UNOWNED } from '../common/changeOwners.js';
 import { IEditCodeService } from './editCodeServiceInterface.js';
 import { IPendingFileOpsService } from './pendingFileOpsService.js';
 
@@ -34,18 +36,20 @@ export interface IChangeOwnersService {
 	hasPending(uri: URI): boolean;
 	/**
 	 * For a docked tool, before it writes: throws OwnershipConflictError if another chat has pending or in-flight
-	 * changes at or under `uri`, or a pending or in-flight folder create or delete above it. Otherwise claims `uri` (taking it
-	 * over from an owner with nothing pending) and keeps it in flight until the returned disposable is disposed.
+	 * changes at or under `uri`, or a pending or in-flight folder create or delete above it. Unowned pending changes
+	 * there conflict too, with the owner UNOWNED. Otherwise claims `uri` (taking it over from an owner with nothing
+	 * pending) and keeps it in flight until the returned disposable is disposed.
 	 */
 	beginWrite(uri: URI, threadId: string, kind: WriteKind): IDisposable;
-	/** Read-only: the chat whose changes would stop `threadId` writing `uri` (the same rule as beginWrite), if any. */
+	/** Read-only: the chat (or UNOWNED) whose changes would stop `threadId` writing `uri` (the same rule as beginWrite), if any. */
 	conflictFor(uri: URI, threadId: string): { owner: string } | undefined;
 	/**
 	 * Read-only: what to resolve so `threadId` can write `uri`, one blocking chat at a time. That chat's owned paths at
 	 * or under `uri` (resolve their diffs and pending ops), and the ids of its pending folder ops above `uri`.
 	 * Never selects a third chat's changes: if resolving a blocker would also resolve (or remove) changes another chat
 	 * owns, that other chat is reported instead. `preferredOwner` (the chat the card names) is picked when it can be.
-	 * Unowned pending changes inside the selection go with it.
+	 * Unowned pending changes inside the selection go with it. When the blocker is UNOWNED, the selection is the unowned
+	 * pending paths at or under `uri` and the unowned folder ops above it.
 	 */
 	changesBlocking(uri: URI, threadId: string, preferredOwner?: string): BlockingChanges | undefined;
 }
@@ -182,12 +186,14 @@ export class ChangeOwnersService extends Disposable implements IChangeOwnersServ
 
 	/** `owner`'s owned paths at or under `uri`, and its pending ops above `uri` (with their folders) */
 	private _selectionOf(owner: string, uri: URI): { uris: URI[]; opIds: number[]; folders: URI[] } {
-		const uris = this.ownedUris(owner).filter(u => isEqualOrParent(u, uri));
+		const uris = owner === UNOWNED
+			? this._unownedPending().filter(u => isEqualOrParent(u, uri))
+			: this.ownedUris(owner).filter(u => isEqualOrParent(u, uri));
 		const opIds: number[] = [];
 		const folders: URI[] = [];
 		for (const op of this._pendingFileOpsService.ops) {
 			const folder = URI.parse(op.path);
-			if (this.ownerOf(folder) === owner && isEqualOrParent(uri, folder) && !isEqual(uri, folder)) {
+			if ((this.ownerOf(folder) ?? UNOWNED) === owner && isEqualOrParent(uri, folder) && !isEqual(uri, folder)) {
 				opIds.push(op.id);
 				folders.push(folder);
 			}
@@ -212,6 +218,30 @@ export class ChangeOwnersService extends Disposable implements IChangeOwnersServ
 			}
 		}
 		return undefined;
+	}
+
+	/** every path with pending changes (diff zones, or a pending create or delete) and no owner, each once */
+	private _unownedPending(): URI[] {
+		const found = new Map<string, URI>();
+		for (const [path, ids] of Object.entries(this._editCodeService.diffAreasOfURI)) {
+			if (found.has(path) || this._owners.ownerOf(path) !== undefined) {
+				continue;
+			}
+			for (const id of ids ?? []) {
+				const area = this._editCodeService.diffAreaOfId[id];
+				if (area?.type === 'DiffZone') {
+					found.set(path, area._URI ?? URI.file(path));
+					break;
+				}
+			}
+		}
+		for (const op of this._pendingFileOpsService.ops) {
+			const opUri = URI.parse(op.path);
+			if (!found.has(opUri.fsPath) && this._owners.ownerOf(opUri.fsPath) === undefined) {
+				found.set(opUri.fsPath, opUri);
+			}
+		}
+		return [...found.values()];
 	}
 
 	private _isInFlight(path: string): boolean {
@@ -239,11 +269,18 @@ export class ChangeOwnersService extends Disposable implements IChangeOwnersServ
 				conflicts.push({ uri: owned, owner });
 			}
 		}
-		// another chat's folder create or delete above uri, pending or in flight (any op or write above a path is a folder's)
+		// pending changes no chat owns, at or under uri (a write never takes them over silently)
+		for (const unowned of this._unownedPending()) {
+			if (isEqualOrParent(unowned, uri)) {
+				conflicts.push({ uri: unowned, owner: UNOWNED });
+			}
+		}
+		// another chat's (or no chat's) folder create or delete above uri, pending or in flight (any op or write above a
+		// path is a folder's). An unowned op at or under uri was reported above
 		for (const op of this._pendingFileOpsService.ops) {
 			const folder = URI.parse(op.path);
-			const owner = this.ownerOf(folder);
-			if (owner !== undefined && owner !== threadId && isEqualOrParent(uri, folder)) {
+			const owner = this.ownerOf(folder) ?? UNOWNED;
+			if (owner !== threadId && isEqualOrParent(uri, folder) && !(owner === UNOWNED && isEqual(uri, folder))) {
 				conflicts.push({ uri: folder, owner });
 			}
 		}

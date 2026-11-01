@@ -5,11 +5,13 @@
 
 // Shown instead of the approval card when a docked chat's file tool targets a path with another chat's unreviewed
 // changes. It is never auto-approved: the user accepts or rejects the other chat's changes and continues, or stops.
+// Changes no chat owns (conflict.ownerThreadId is UNOWNED, or names a chat deleted since) get the "outside this chat"
+// copy and the same buttons.
 
 import React, { useCallback, useState } from 'react';
 import { AlertTriangle } from 'lucide-react';
-import { ToolMessage } from '../../../../../common/chatThreadServiceTypes.js';
-import { ToolName } from '../../../../../common/toolsServiceTypes.js';
+import type { ToolMessage } from '../../../../../common/chatThreadServiceTypes.js';
+import type { ToolName } from '../../../../../common/toolsServiceTypes.js';
 import { useAccessor, useChatThreadsState } from '../../util/services.js';
 // no runtime imports from vs/ here: the bundle flattens this folder, so a relative path one level deeper breaks
 import { threadTitleOf } from '../chatTitle.js';
@@ -20,6 +22,7 @@ const basenameOf = (path: string) => path.split('/').filter(Boolean).pop() ?? pa
 export const ConflictCard = ({ threadId, toolMessage }: { threadId: string; toolMessage: ToolMessage<ToolName> & { type: 'tool_request' } }) => {
 	const accessor = useAccessor();
 	const chatThreadsService = accessor.get('IChatThreadService');
+	const notificationService = accessor.get('INotificationService');
 	const chatThreadsState = useChatThreadsState();
 	const [busy, setBusy] = useState(false);
 
@@ -30,10 +33,11 @@ export const ConflictCard = ({ threadId, toolMessage }: { threadId: string; tool
 			await chatThreadsService.resolveConflictAndContinue(threadId, choice);
 		} catch (e) {
 			console.error('Error while resolving a conflict in chat:', e);
+			notificationService.error(`Could not resolve the other changes: ${e instanceof Error ? e.message : String(e)}`);
 		} finally {
 			setBusy(false);
 		}
-	}, [chatThreadsService, threadId]);
+	}, [chatThreadsService, notificationService, threadId]);
 	const stop = useCallback(() => {
 		try {
 			chatThreadsService.rejectLatestToolRequest(threadId);
@@ -45,12 +49,13 @@ export const ConflictCard = ({ threadId, toolMessage }: { threadId: string; tool
 	}
 	const file = basenameOf(conflict.uri.path);
 	const otherThread = chatThreadsState.allThreads[conflict.ownerThreadId];
-	const otherTitle = otherThread ? threadTitleOf(otherThread) : 'New chat';
 
 	return <div className='mx-0.5 my-1 px-2.5 py-2 rounded-[10px] border border-ze-border-2 bg-[color-mix(in_srgb,var(--ze-warning)_8%,var(--ze-bg-2))] text-ze-fg-1 flex flex-col gap-2'>
 		<div className='flex items-start gap-1.5 text-sm'>
 			<AlertTriangle size={14} className='text-ze-warning shrink-0 mt-0.5' />
-			<span>{file} has unreviewed changes from “{otherTitle}”.</span>
+			<span>{otherThread
+				? <>{file} has unreviewed changes from “{threadTitleOf(otherThread)}”.</>
+				: <>{file} has unreviewed changes made outside this chat.</>}</span>
 		</div>
 		<div className='flex flex-wrap gap-1.5'>
 			<ApprovalButton primary disabled={busy} onClick={() => resolve('accept')}>Accept theirs & continue</ApprovalButton>

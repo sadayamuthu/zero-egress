@@ -5,6 +5,14 @@
 
 // Which chat thread owns each file's pending (unreviewed) changes. Pure state over fsPath strings.
 
+/**
+ * The owner reported for pending changes that no chat owns (the user's own Apply or ⌘K edits, a deleted chat's
+ * leftovers, pending creates and deletes that survived a reload). Thread ids are UUIDs, so it never names a chat.
+ * Used as a conflict's owner (`OwnershipConflictError.owner`, `BlockingChanges.owner`, and a tool_request's
+ * `conflict.ownerThreadId`); it is never stored as a path's owner.
+ */
+export const UNOWNED = 'unowned';
+
 export type ClaimResult = { ok: true } | { ok: false; owner: string };
 
 export class ChangeOwners {

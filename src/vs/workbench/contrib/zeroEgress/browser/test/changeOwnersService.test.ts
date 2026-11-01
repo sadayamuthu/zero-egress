@@ -21,6 +21,7 @@ import { IEditCodeService } from '../editCodeServiceInterface.js';
 import { IPendingFileOpsService, PendingFileOpsService } from '../pendingFileOpsService.js';
 import { ChangeOwnersService, OwnershipConflictError } from '../changeOwnersService.js';
 import { VSBuffer } from '../../../../../base/common/buffer.js';
+import { UNOWNED } from '../../common/changeOwners.js';
 
 suite('ChangeOwnersService', () => {
 	const store = ensureNoDisposablesAreLeakedInTestSuite();
@@ -223,5 +224,55 @@ suite('ChangeOwnersService', () => {
 		write.dispose();
 		const b = service.changesBlocking(inner, 't2');
 		assert.deepStrictEqual(b && { owner: b.owner, uris: b.uris, opIds: b.opIds }, { owner: 't1', uris: [], opIds: [pendingFileOps.ops[0].id] });
+	});
+	const shapeOf = (b: ReturnType<ChangeOwnersService['changesBlocking']>) => b && { owner: b.owner, uris: b.uris.map(u => u.toString()).sort(), opIds: b.opIds };
+
+	test('unowned pending diffs block a docked write instead of being taken over', () => {
+		diffAreasOfURI[a.fsPath] = new Set(['1']); // e.g. the user's own Apply or Cmd+K zone
+		assert.throws(() => service.beginWrite(a, 't2', 'edit'), conflictWith(UNOWNED, a));
+		assert.strictEqual(service.ownerOf(a), undefined); // nothing claimed
+		assert.deepStrictEqual(service.conflictFor(a, 't2'), { owner: UNOWNED });
+		assert.deepStrictEqual(shapeOf(service.changesBlocking(a, 't2')), { owner: UNOWNED, uris: [a.toString()], opIds: [] });
+		// once they are resolved, the write goes ahead
+		delete diffAreasOfURI[a.fsPath];
+		diffZonesChanged.fire({ uri: a });
+		assert.strictEqual(service.conflictFor(a, 't2'), undefined);
+		service.beginWrite(a, 't2', 'edit').dispose();
+	});
+
+	test('a deleted chat\'s leftovers block the next chat as unowned', () => {
+		const write = service.beginWrite(a, 't1', 'edit');
+		diffAreasOfURI[a.fsPath] = new Set(['1']);
+		write.dispose();
+		service.releaseThread('t1');
+		assert.throws(() => service.beginWrite(a, 't2', 'edit'), conflictWith(UNOWNED, a));
+		assert.throws(() => service.beginWrite(a, 't1', 'edit'), conflictWith(UNOWNED, a)); // no chat owns them now
+	});
+
+	test('unowned pending creates and deletes block writes at, under and above them', async () => {
+		const folder = URI.parse('file:///w/d');
+		const inner = URI.parse('file:///w/d/x.ts');
+		await pendingFileOps.create(folder, true); // e.g. left over after a reload: no owner
+		const op = pendingFileOps.ops[0];
+		assert.throws(() => service.beginWrite(folder, 't2', 'delete'), conflictWith(UNOWNED, folder));
+		assert.throws(() => service.beginWrite(inner, 't2', 'create'), conflictWith(UNOWNED, folder));
+		assert.throws(() => service.beginWrite(URI.parse('file:///w'), 't2', 'delete'), conflictWith(UNOWNED, folder));
+		// at the path, the op's folder is resolved by path; below it, by op id
+		assert.deepStrictEqual(shapeOf(service.changesBlocking(folder, 't2')), { owner: UNOWNED, uris: [folder.toString()], opIds: [] });
+		assert.deepStrictEqual(shapeOf(service.changesBlocking(inner, 't2')), { owner: UNOWNED, uris: [], opIds: [op.id] });
+		assert.strictEqual(service.conflictFor(URI.parse('file:///w/e.ts'), 't2'), undefined);
+	});
+
+	test('a chat\'s own changes still win over the unowned rule, and other owners are reported before unowned ones', () => {
+		const b = URI.parse('file:///w/b.ts');
+		const write = service.beginWrite(a, 't1', 'edit');
+		diffAreasOfURI[a.fsPath] = new Set(['1']);
+		write.dispose();
+		service.beginWrite(a, 't1', 'edit').dispose(); // t1 owns a: no conflict for itself
+		diffAreasOfURI[b.fsPath] = new Set(['1']); // unowned
+		const root = URI.parse('file:///w');
+		assert.deepStrictEqual(shapeOf(service.changesBlocking(root, 't2')), { owner: 't1', uris: [a.toString()], opIds: [] });
+		assert.deepStrictEqual(shapeOf(service.changesBlocking(root, 't2', UNOWNED)), { owner: UNOWNED, uris: [b.toString()], opIds: [] });
+		assert.deepStrictEqual(shapeOf(service.changesBlocking(root, 't1')), { owner: UNOWNED, uris: [b.toString()], opIds: [] });
 	});
 });

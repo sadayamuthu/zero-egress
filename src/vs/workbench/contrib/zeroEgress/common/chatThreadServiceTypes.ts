@@ -19,7 +19,9 @@ export type ToolMessage<T extends ToolName> = {
 		| { type: 'invalid_params', result: null, name: T, }
 
 		// params were validated, awaiting user. `conflict`: the path has another docked chat's unreviewed changes (shown as
-		// the conflict card, never auto-approved); `uri` is the tool's target, `ownerThreadId` the chat that owns those changes
+		// the conflict card, never auto-approved); `uri` is the tool's target, `ownerThreadId` the chat that owns those changes,
+		// or UNOWNED ('unowned', common/changeOwners.ts) when no chat owns them. The card treats an id with no thread
+		// (UNOWNED, or a chat deleted since) as "made outside this chat"
 		| { type: 'tool_request', result: null, name: T, params: ToolCallParams<T>, conflict?: { uri: URI; ownerThreadId: string } }
 
 		| { type: 'running_now', result: null, name: T, params: ToolCallParams<T>, }
