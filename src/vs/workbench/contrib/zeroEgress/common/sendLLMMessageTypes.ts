@@ -7,6 +7,7 @@ import { InternalToolInfo } from './prompt/prompts.js'
 import { ToolName, ToolParamName } from './toolsServiceTypes.js'
 import { ChatMode, ModelSelection, ModelSelectionOptions, OverridesOfModel, ProviderName, RefreshableProviderName, SettingsOfProvider } from './zeroEgressSettingsTypes.js'
 import { AuditWorkspace } from './auditTypes.js'
+import { TokenUsage } from './tokenUsage.js'
 
 
 export const errorDetails = (fullError: Error | null): string | null => {
@@ -93,7 +94,7 @@ export type RawToolCallObj = {
 export type AnthropicReasoning = ({ type: 'thinking'; thinking: any; signature: string; } | { type: 'redacted_thinking', data: any })
 
 export type OnText = (p: { fullText: string; fullReasoning: string; toolCall?: RawToolCallObj }) => void
-export type OnFinalMessage = (p: { fullText: string; fullReasoning: string; toolCall?: RawToolCallObj; anthropicReasoning: AnthropicReasoning[] | null }) => void // id is tool_use_id
+export type OnFinalMessage = (p: { fullText: string; fullReasoning: string; toolCall?: RawToolCallObj; anthropicReasoning: AnthropicReasoning[] | null; usage?: TokenUsage }) => void // id is tool_use_id
 export type OnError = (p: { message: string; fullError: Error | null }) => void
 export type OnAbort = () => void
 export type AbortRef = { current: (() => void) | null }

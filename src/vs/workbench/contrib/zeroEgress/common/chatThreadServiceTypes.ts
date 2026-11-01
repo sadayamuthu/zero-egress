@@ -6,6 +6,7 @@
 import { URI } from '../../../../base/common/uri.js';
 import { ZeroEgressFileSnapshot } from './editCodeServiceTypes.js';
 import { AnthropicReasoning, RawToolParamsObj } from './sendLLMMessageTypes.js';
+import { TokenUsage } from './tokenUsage.js';
 import { ToolCallParams, ToolName, ToolResult } from './toolsServiceTypes.js';
 
 export type ToolMessage<T extends ToolName> = {
@@ -68,6 +69,7 @@ export type ChatMessage =
 		reasoningMs?: number; // how long the model reasoned (first reasoning token to the first answer token or the end); missing in older chats
 
 		anthropicReasoning: AnthropicReasoning[] | null; // anthropic reasoning
+		usage?: TokenUsage; // token counts from the provider; missing in older chats
 	}
 	| ToolMessage<ToolName>
 	| DecorativeCanceledTool

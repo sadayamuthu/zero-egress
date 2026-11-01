@@ -13,6 +13,7 @@ import { Emitter, Event } from '../../../../base/common/event.js';
 import { ILLMMessageService } from '../common/sendLLMMessageService.js';
 import { chat_userMessageContent, isABuiltinToolName } from '../common/prompt/prompts.js';
 import { AnthropicReasoning, getErrorMessage, RawToolCallObj, RawToolParamsObj } from '../common/sendLLMMessageTypes.js';
+import { TokenUsage } from '../common/tokenUsage.js';
 import { generateUuid } from '../../../../base/common/uuid.js';
 import { FeatureName, ModelSelection, ModelSelectionOptions } from '../common/zeroEgressSettingsTypes.js';
 import { IZeroEgressSettingsService } from '../common/zeroEgressSettingsService.js';
@@ -1057,7 +1058,7 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 					nAttempts += 1
 
 					type ResTypes =
-						| { type: 'llmDone', toolCall?: RawToolCallObj, info: { fullText: string, fullReasoning: string, anthropicReasoning: AnthropicReasoning[] | null } }
+						| { type: 'llmDone', toolCall?: RawToolCallObj, info: { fullText: string, fullReasoning: string, anthropicReasoning: AnthropicReasoning[] | null, usage?: TokenUsage } }
 						| { type: 'llmError', error?: { message: string; fullError: Error | null; } }
 						| { type: 'llmAborted' }
 
@@ -1095,9 +1096,9 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 								if ((fullText || toolCall) && reasoningStartedAt !== undefined && reasoningEndedAt === undefined) reasoningEndedAt = Date.now()
 								this._setStreamState(threadId, { isRunning: 'LLM', llmInfo: { displayContentSoFar: fullText, reasoningSoFar: fullReasoning, toolCallSoFar: toolCall ?? null }, interrupt: Promise.resolve(() => { if (llmCancelToken) this._llmMessageService.abort(llmCancelToken) }) })
 							},
-							onFinalMessage: async ({ fullText, fullReasoning, toolCall, anthropicReasoning, }) => {
+							onFinalMessage: async ({ fullText, fullReasoning, toolCall, anthropicReasoning, usage }) => {
 								releaseModelSlot()
-								resMessageIsDonePromise({ type: 'llmDone', toolCall, info: { fullText, fullReasoning, anthropicReasoning } }) // resolve with tool calls
+								resMessageIsDonePromise({ type: 'llmDone', toolCall, info: { fullText, fullReasoning, anthropicReasoning, usage } }) // resolve with tool calls
 							},
 							onError: async (error) => {
 								releaseModelSlot()
@@ -1165,7 +1166,7 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 					const { toolCall, info } = llmRes
 
 					const reasoningMs = reasoningStartedAt !== undefined && info.fullReasoning ? (reasoningEndedAt ?? Date.now()) - reasoningStartedAt : undefined
-					this._addMessageToThread(threadId, { role: 'assistant', displayContent: info.fullText, reasoning: info.fullReasoning, anthropicReasoning: info.anthropicReasoning, reasoningMs })
+					this._addMessageToThread(threadId, { role: 'assistant', displayContent: info.fullText, reasoning: info.fullReasoning, anthropicReasoning: info.anthropicReasoning, reasoningMs, usage: info.usage })
 
 					this._setStreamState(threadId, { isRunning: 'idle', interrupt: 'not_needed' }) // just decorative for clarity
 
