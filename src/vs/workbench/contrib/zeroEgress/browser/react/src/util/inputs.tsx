@@ -18,7 +18,7 @@ import { inputBackground, inputForeground } from '../../../../../../../platform/
 import { useFloating, autoUpdate, offset, flip, shift, size, autoPlacement } from '@floating-ui/react';
 import { URI } from '../../../../../../../base/common/uri.js';
 import { getBasename, getFolderName } from '../sidebar-tsx/SidebarChat.js';
-import { ChevronRight, File, Folder, FolderClosed, LucideProps } from 'lucide-react';
+import { BookOpen, Braces, ChevronRight, File, Folder, FolderClosed, GitBranch, Image as ImageIcon, LucideProps, SquareTerminal, TextSelect, TriangleAlert } from 'lucide-react';
 import { StagingSelectionItem } from '../../../../common/chatThreadServiceTypes.js';
 import { DiffEditorWidget } from '../../../../../../../editor/browser/widget/diffEditor/diffEditorWidget.js';
 import { extractSearchReplaceBlocks, ExtractedSearchReplaceBlock } from '../../../../common/helpers/extractCodeFromResult.js';
@@ -63,10 +63,12 @@ type Option = {
 	fullName: string,
 	abbreviatedName: string,
 	iconInMenu: ForwardRefExoticComponent<Omit<LucideProps, "ref"> & RefAttributes<SVGSVGElement>>, // type for lucide-react components
+	note?: string, // shown on the right of the row
 } & (
-		| { leafNodeType?: undefined, nextOptions: Option[], generateNextOptions?: undefined, }
-		| { leafNodeType?: undefined, nextOptions?: undefined, generateNextOptions: GenerateNextOptions, }
-		| { leafNodeType: 'File' | 'Folder', uri: URI, nextOptions?: undefined, generateNextOptions?: undefined, }
+		| { leafNodeType?: undefined, pick: () => Promise<StagingSelectionItem | null>, nextOptions?: undefined, generateNextOptions?: undefined, }
+		| { leafNodeType?: undefined, pick?: undefined, nextOptions: Option[], generateNextOptions?: undefined, }
+		| { leafNodeType?: undefined, pick?: undefined, nextOptions?: undefined, generateNextOptions: GenerateNextOptions, }
+		| { leafNodeType: 'File' | 'Folder', uri: URI, pick?: undefined, nextOptions?: undefined, generateNextOptions?: undefined, }
 	)
 
 
@@ -283,18 +285,145 @@ const getOptionsAtPath = async (accessor: ReturnType<typeof useAccessor>, path: 
 	};
 
 
+	const contextService = accessor.get('IChatContextService')
+	const notificationService = accessor.get('INotificationService')
+
+	const filesAndFolders = async (t: string): Promise<Option[]> => {
+		const filesResults = await searchForFilesOrFolders(t, 'files') || [];
+		const foldersResults = await searchForFilesOrFolders(t, 'folders') || [];
+		return [...foldersResults, ...filesResults]
+	}
+
+	const symbolOptions = async (t: string): Promise<Option[]> => {
+		try {
+			const symbols = await contextService.searchSymbols(t)
+			return symbols.map(sel => {
+				const name = `ƒ ${sel.name}`
+				return {
+					fullName: name,
+					abbreviatedName: name,
+					iconInMenu: Braces,
+					note: getBasename(sel.uri.path),
+					pick: async () => sel,
+				} satisfies Option
+			})
+		} catch (error) {
+			console.error('Error searching symbols:', error);
+			return []
+		}
+	}
+
+	const pickWithNotice = async (get: () => Promise<StagingSelectionItem | null> | StagingSelectionItem | null, notice: string): Promise<StagingSelectionItem | null> => {
+		const sel = await get()
+		if (!sel) notificationService.info(notice)
+		return sel
+	}
+
+	const problemOptions = (): Option[] => {
+		const withProblems = contextService.filesWithProblems()
+		return [
+			{
+				fullName: 'All problems',
+				abbreviatedName: 'All problems',
+				iconInMenu: TriangleAlert,
+				pick: async () => contextService.problems(),
+			},
+			...withProblems.map(({ uri, count }): Option => {
+				const relativePath = getRelativeWorkspacePath(accessor, uri)
+				return {
+					fullName: relativePath,
+					abbreviatedName: getAbbreviatedName(relativePath),
+					iconInMenu: File,
+					note: String(count),
+					pick: async () => contextService.problems(uri),
+				}
+			}),
+		]
+	}
+
+	const gitOptions = async (): Promise<Option[]> => {
+		const branches = await contextService.gitBranches().catch(() => [] as string[])
+		const run = async (against: string | null): Promise<StagingSelectionItem | null> => {
+			try { return await contextService.gitDiff(against) }
+			catch (e) { notificationService.error(e instanceof Error ? e.message : String(e)); return null }
+		}
+		return [
+			{ fullName: 'Working changes', abbreviatedName: 'Working changes', iconInMenu: GitBranch, pick: () => run(null) },
+			...branches.map((branch): Option => ({ fullName: branch, abbreviatedName: branch, iconInMenu: GitBranch, pick: () => run(branch) })),
+		]
+	}
+
+	const savedDocOptions = (): Option[] => [
+		...contextService.savedDocs().map((d): Option => ({
+			fullName: d.name,
+			abbreviatedName: d.name,
+			iconInMenu: d.isFolder ? Folder : BookOpen,
+			pick: async () => ({ type: 'Doc', uri: URI.file(d.path), name: d.name, isFolder: d.isFolder }),
+		})),
+		{
+			fullName: 'Add a doc…',
+			abbreviatedName: 'Add a doc…',
+			iconInMenu: BookOpen,
+			pick: async () => {
+				const d = await contextService.addSavedDoc()
+				return d ? { type: 'Doc', uri: URI.file(d.path), name: d.name, isFolder: d.isFolder } : null
+			},
+		},
+	]
+
+	const totalProblems = contextService.filesWithProblems().reduce((n, f) => n + f.count, 0)
+
 	const allOptions: Option[] = [
 		{
-			fullName: 'files',
-			abbreviatedName: 'files',
+			fullName: 'Files & folders',
+			abbreviatedName: 'Files & folders',
 			iconInMenu: File,
-			generateNextOptions: async (t) => (await searchForFilesOrFolders(t, 'files')) || [],
+			generateNextOptions: filesAndFolders,
 		},
 		{
-			fullName: 'folders',
-			abbreviatedName: 'folders',
-			iconInMenu: Folder,
-			generateNextOptions: async (t) => (await searchForFilesOrFolders(t, 'folders')) || [],
+			fullName: 'Code symbols',
+			abbreviatedName: 'Code symbols',
+			iconInMenu: Braces,
+			generateNextOptions: symbolOptions,
+		},
+		{
+			fullName: 'Current selection',
+			abbreviatedName: 'Current selection',
+			iconInMenu: TextSelect,
+			pick: () => pickWithNotice(() => contextService.currentSelection(), 'Select some code in the editor first.'),
+		},
+		{
+			fullName: 'Terminal output',
+			abbreviatedName: 'Terminal output',
+			iconInMenu: SquareTerminal,
+			pick: () => pickWithNotice(() => contextService.terminalSnapshot(), 'No terminal is open.'),
+		},
+		{
+			fullName: 'Problems',
+			abbreviatedName: 'Problems',
+			iconInMenu: TriangleAlert,
+			note: String(totalProblems),
+			nextOptions: problemOptions(),
+		},
+		{
+			fullName: 'Git diff · branch',
+			abbreviatedName: 'Git diff · branch',
+			iconInMenu: GitBranch,
+			generateNextOptions: gitOptions,
+		},
+		{
+			fullName: 'Saved docs',
+			abbreviatedName: 'Saved docs',
+			iconInMenu: BookOpen,
+			note: 'local only',
+			nextOptions: savedDocOptions(),
+		},
+		{
+			fullName: 'Image',
+			abbreviatedName: 'Image',
+			iconInMenu: ImageIcon,
+			note: 'or paste',
+			pick: () => contextService.pickImage(),
 		},
 	]
 
@@ -320,9 +449,8 @@ const getOptionsAtPath = async (accessor: ReturnType<typeof useAccessor>, path: 
 		nextOptionsAtPath = await generateNextOptionsAtPath(optionText)
 	}
 	else if (path.length === 0 && optionText.trim().length > 0) { // (special case): directly search for both files and folders if optionsPath is empty and there's a search term
-		const filesResults = await searchForFilesOrFolders(optionText, 'files') || [];
-		const foldersResults = await searchForFilesOrFolders(optionText, 'folders') || [];
-		nextOptionsAtPath = [...foldersResults, ...filesResults,]
+		const [ff, symbols] = await Promise.all([filesAndFolders(optionText), symbolOptions(optionText)]);
+		nextOptionsAtPath = [...ff, ...symbols]
 	}
 
 	const optionsAtPath = nextOptionsAtPath
@@ -352,9 +480,10 @@ type InputBox2Props = {
 	onKeyDown?: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void;
 	onFocus?: (e: React.FocusEvent<HTMLTextAreaElement>) => void;
 	onBlur?: (e: React.FocusEvent<HTMLTextAreaElement>) => void;
+	onPaste?: (e: React.ClipboardEvent<HTMLTextAreaElement>) => void;
 	onChangeHeight?: (newHeight: number) => void;
 }
-export const ZeroEgressInputBox2 = forwardRef<HTMLTextAreaElement, InputBox2Props>(function X({ initValue, placeholder, multiline, enableAtToMention, fnsRef, className, onKeyDown, onFocus, onBlur, onChangeText }, ref) {
+export const ZeroEgressInputBox2 = forwardRef<HTMLTextAreaElement, InputBox2Props>(function X({ initValue, placeholder, multiline, enableAtToMention, fnsRef, className, onKeyDown, onFocus, onBlur, onPaste, onChangeText }, ref) {
 
 
 	// mirrors whatever is in ref
@@ -427,6 +556,16 @@ export const ZeroEgressInputBox2 = forwardRef<HTMLTextAreaElement, InputBox2Prop
 		if (isLastOption) {
 			setIsMenuOpen(false)
 			insertTextAtCursor(option.abbreviatedName)
+
+			if (option.pick) {
+				try {
+					const picked = await option.pick()
+					if (picked) chatThreadService.addNewStagingSelection(picked)
+				} catch (e) {
+					accessor.get('INotificationService').error(e instanceof Error ? e.message : String(e))
+				}
+				return
+			}
 
 			let newSelection: StagingSelectionItem
 			if (option.leafNodeType === 'File') newSelection = {
@@ -750,6 +889,7 @@ export const ZeroEgressInputBox2 = forwardRef<HTMLTextAreaElement, InputBox2Prop
 
 			onFocus={onFocus}
 			onBlur={onBlur}
+			onPaste={onPaste}
 
 			disabled={!isEnabled}
 
@@ -819,6 +959,7 @@ export const ZeroEgressInputBox2 = forwardRef<HTMLTextAreaElement, InputBox2Prop
 				onWheel={(e) => e.stopPropagation()}
 			>
 				{/* Breadcrumbs Header */}
+				{!isBreadcrumbsShowing && <div className="px-3 py-1 text-xs text-ze-fg-3 border-b border-ze-border-3 select-none pointer-events-none">Add context</div>}
 				{isBreadcrumbsShowing && <div className="px-2 py-1 text-ze-fg-1 bg-ze-bg-2-alt border-b border-ze-border-3 sticky top-0 bg-ze-bg-1 z-10 select-none pointer-events-none">
 					{optionText ?
 						<div className="flex items-center">
@@ -846,7 +987,7 @@ export const ZeroEgressInputBox2 = forwardRef<HTMLTextAreaElement, InputBox2Prop
 									// Option
 									<div
 										ref={oIdx === optionIdx ? selectedOptionRef : null}
-										key={o.fullName}
+										key={`${oIdx}:${o.fullName}`}
 										className={`
 											flex items-center gap-2
 											px-3 py-1 cursor-pointer
@@ -861,8 +1002,10 @@ export const ZeroEgressInputBox2 = forwardRef<HTMLTextAreaElement, InputBox2Prop
 
 										{o.fullName && o.fullName !== o.abbreviatedName && <span className="opacity-60 text-sm">{o.fullName}</span>}
 
+										{o.note && <span className="ml-auto pl-3 opacity-60 text-sm">{o.note}</span>}
+
 										{o.nextOptions || o.generateNextOptions ? (
-											<ChevronRight size={12} />
+											<ChevronRight size={12} className={o.note ? '' : 'ml-auto'} />
 										) : null}
 
 									</div>

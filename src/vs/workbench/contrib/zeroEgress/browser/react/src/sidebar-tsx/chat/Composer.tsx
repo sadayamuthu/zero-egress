@@ -173,6 +173,24 @@ export const Composer = ({ threadId, variant, inputDisabledReason, textAreaRef, 
 		}
 	};
 
+	// image files on the clipboard become image chips; any other paste is left alone
+	const onPaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+		const images = Array.from(e.clipboardData?.files ?? []).filter(f => f.type.startsWith('image/'));
+		if (!images.length) return;
+		e.preventDefault();
+		const contextService = accessor.get('IChatContextService');
+		void (async () => {
+			for (const file of images) {
+				try {
+					const sel = await contextService.imageFromClipboard(new Uint8Array(await file.arrayBuffer()), file.type);
+					if (sel) chatThreadsService.addNewStagingSelection(sel);
+				} catch (err) {
+					accessor.get('INotificationService').error(err instanceof Error ? err.message : String(err));
+				}
+			}
+		})();
+	};
+
 	const keybindingString = accessor.get('IKeybindingService').lookupKeybinding(ZERO_EGRESS_CTRL_L_ACTION_ID)?.getLabel();
 	const showReviewBar = variant === 'docked' && review.mine.length > 0;
 
@@ -204,6 +222,7 @@ export const Composer = ({ threadId, variant, inputDisabledReason, textAreaRef, 
 					placeholder={`Ask, or @ a file…${keybindingString ? ` (${keybindingString} adds the selection)` : ''}`}
 					onChangeText={onChangeText}
 					onKeyDown={onKeyDown}
+					onPaste={onPaste}
 					onFocus={() => { chatThreadsService.setCurrentlyFocusedMessageIdx(undefined, threadId); }}
 					ref={textAreaRef}
 					fnsRef={textAreaFnsRef}
