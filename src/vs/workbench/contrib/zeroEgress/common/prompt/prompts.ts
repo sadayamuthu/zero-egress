@@ -7,6 +7,7 @@ import { URI } from '../../../../../base/common/uri.js';
 import { IFileService } from '../../../../../platform/files/common/files.js';
 import { IDirectoryStrService } from '../directoryStrService.js';
 import { StagingSelectionItem } from '../chatThreadServiceTypes.js';
+import { textOfSnapshotSelection } from '../selectionText.js';
 import { os } from '../helpers/systemInfo.js';
 import { RawToolParamsObj } from '../sendLLMMessageTypes.js';
 import { BuiltinToolCallParams, BuiltinToolName, BuiltinToolResultType, ToolName } from '../toolsServiceTypes.js';
@@ -586,7 +587,21 @@ export const messageOfSelection = async (
 ) => {
 	const lineNumAddition = (range: [number, number]) => ` (lines ${range[0]}:${range[1]})`
 
-	if (s.type === 'CodeSelection') {
+	if (s.type === 'Terminal' || s.type === 'Problems' || s.type === 'GitDiff') {
+		return textOfSnapshotSelection(s)
+	}
+	else if (s.type === 'Symbol') {
+		const { val } = await readFile(opts.fileService, s.uri, DEFAULT_FILE_SIZE_LIMIT)
+		const lines = val?.split('\n')
+		const innerVal = lines?.slice(s.range[0] - 1, s.range[1]).join('\n')
+		const content = !lines ? ''
+			: `${tripleTick[0]}${s.language}\n${innerVal}\n${tripleTick[1]}`
+		return `${textOfSnapshotSelection(s)}\n${content}`
+	}
+	else if (s.type === 'Image') {
+		return '' // the image itself is sent as an attachment to vision models
+	}
+	else if (s.type === 'CodeSelection') {
 		const { val } = await readFile(opts.fileService, s.uri, DEFAULT_FILE_SIZE_LIMIT)
 		const lines = val?.split('\n')
 
@@ -596,17 +611,18 @@ export const messageOfSelection = async (
 		const str = `${s.uri.fsPath}${lineNumAddition(s.range)}:\n${content}`
 		return str
 	}
-	else if (s.type === 'File') {
+	else if (s.type === 'File' || (s.type === 'Doc' && !s.isFolder)) {
 		const { val } = await readFile(opts.fileService, s.uri, DEFAULT_FILE_SIZE_LIMIT)
 
 		const innerVal = val
+		const language = s.type === 'File' ? s.language : ''
 		const content = val === null ? ''
-			: `${tripleTick[0]}${s.language}\n${innerVal}\n${tripleTick[1]}`
+			: `${tripleTick[0]}${language}\n${innerVal}\n${tripleTick[1]}`
 
 		const str = `${s.uri.fsPath}:\n${content}`
 		return str
 	}
-	else if (s.type === 'Folder') {
+	else if (s.type === 'Folder' || s.type === 'Doc') {
 		const dirStr: string = await opts.directoryStrService.getDirectoryStrTool(s.uri)
 		const folderStructure = `${s.uri.fsPath} folder structure:${tripleTick[0]}\n${dirStr}\n${tripleTick[1]}`
 

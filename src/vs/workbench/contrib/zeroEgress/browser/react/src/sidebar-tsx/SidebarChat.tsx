@@ -18,8 +18,8 @@ import { ZERO_EGRESS_OPEN_SETTINGS_ACTION_ID } from '../../../zeroEgressSettings
 import { FeatureName } from '../../../../../../../workbench/contrib/zeroEgress/common/zeroEgressSettingsTypes.js';
 import { ICommandService } from '../../../../../../../platform/commands/common/commands.js';
 import { WarningBox } from '../zero-egress-settings-tsx/WarningBox.js';
-import { AlertTriangle, File, Ban, ChevronRight, Dot, FileIcon, Pencil, Undo, Undo2, X, Flag, Copy as CopyIcon, Info, CirclePlus, Ellipsis, CircleEllipsis, Folder, ALargeSmall, TypeOutline, Text } from 'lucide-react';
-import { ChatMessage, CheckpointEntry, StagingSelectionItem, ToolMessage } from '../../../../common/chatThreadServiceTypes.js';
+import { AlertTriangle, File, Ban, ChevronRight, Dot, FileIcon, Pencil, Undo, Undo2, X, Flag, Copy as CopyIcon, Info, CirclePlus, Ellipsis, CircleEllipsis, Folder, ALargeSmall, TypeOutline, Text, Braces, SquareTerminal, TriangleAlert, GitBranch, BookOpen, Image as ImageIcon, Paperclip } from 'lucide-react';
+import { ChatMessage, CheckpointEntry, selectionUri, StagingSelectionItem, ToolMessage } from '../../../../common/chatThreadServiceTypes.js';
 import { approvalTypeOfBuiltinToolName, BuiltinToolCallParams, BuiltinToolName, ToolName, LintErrorItem, ToolApprovalType, toolApprovalTypes } from '../../../../common/toolsServiceTypes.js';
 import { CopyButton, EditToolAcceptRejectButtonsHTML, JumpToFileButton, JumpToTerminalButton, StatusIndicatorForApplyButton, useApplyStreamState, useEditToolStreamState } from '../markdown/ApplyBlockHoverButtons.js';
 import { IsRunningType } from '../../../chatThreadService.js';
@@ -527,14 +527,33 @@ export const SelectedFiles = (
 				const thisKey = selection.type === 'CodeSelection' ? selection.type + selection.language + selection.range + selection.state.wasAddedAsCurrentFile + selection.uri.fsPath
 					: selection.type === 'File' ? selection.type + selection.language + selection.state.wasAddedAsCurrentFile + selection.uri.fsPath
 						: selection.type === 'Folder' ? selection.type + selection.language + selection.state + selection.uri.fsPath
-							: i
+							: selection.type === 'Symbol' ? selection.type + selection.name + selection.range + selection.uri.fsPath
+								: selection.type === 'Doc' || selection.type === 'Image' ? selection.type + selection.name + selection.uri.fsPath
+									: selection.type === 'Terminal' ? selection.type + selection.title + selection.capturedAt
+										: selection.type === 'GitDiff' ? selection.type + selection.against
+											: selection.type === 'Problems' ? selection.type + (selection.uri?.fsPath ?? '')
+												: i
 
 				const SelectionIcon = (
 					selection.type === 'File' ? File
 						: selection.type === 'Folder' ? Folder
 							: selection.type === 'CodeSelection' ? Text
-								: (undefined as never)
+								: selection.type === 'Symbol' ? Braces
+									: selection.type === 'Terminal' ? SquareTerminal
+										: selection.type === 'Problems' ? TriangleAlert
+											: selection.type === 'GitDiff' ? GitBranch
+												: selection.type === 'Doc' ? BookOpen
+													: selection.type === 'Image' ? ImageIcon
+														: Paperclip // unknown type from a newer build
 				)
+				const selUri = selectionUri(selection)
+				const chipLabel = selection.type === 'Terminal' ? selection.title || 'Terminal'
+					: selection.type === 'Problems' ? `Problems (${selection.items.length})`
+						: selection.type === 'GitDiff' ? (selection.against === null ? 'Git diff' : `Git diff (${selection.against})`)
+							: selection.type === 'Symbol' ? selection.name
+								: selection.type === 'Doc' || selection.type === 'Image' ? selection.name
+									: selUri && (selection.type === 'File' || selection.type === 'CodeSelection' || selection.type === 'Folder') ? getBasename(selUri.fsPath)
+										: 'Context'
 
 				return <div // container for summarybox and code
 					key={thisKey}
@@ -543,7 +562,7 @@ export const SelectedFiles = (
 					{/* tooltip for file path */}
 					<span className="truncate overflow-hidden text-ellipsis"
 						data-tooltip-id='ze-tooltip'
-						data-tooltip-content={getRelative(selection.uri, accessor)}
+						data-tooltip-content={selUri ? getRelative(selUri, accessor) : undefined}
 						data-tooltip-place='top'
 						data-tooltip-delay-show={3000}
 					>
@@ -580,8 +599,17 @@ export const SelectedFiles = (
 										])
 									}
 								}
-								else if (selection.type === 'CodeSelection') {
+								else if (selection.type === 'CodeSelection' || selection.type === 'Symbol') {
 									zeroEgressOpenFileFn(selection.uri, accessor, selection.range);
+								}
+								else if (selection.type === 'Doc') {
+									if (!selection.isFolder) zeroEgressOpenFileFn(selection.uri, accessor);
+								}
+								else if (selection.type === 'Problems') {
+									commandService.executeCommand('workbench.actions.view.problems');
+								}
+								else if (selection.type === 'GitDiff') {
+									commandService.executeCommand('workbench.view.scm');
 								}
 								else if (selection.type === 'Folder') {
 									// TODO!!! reveal in tree
@@ -591,8 +619,8 @@ export const SelectedFiles = (
 							{<SelectionIcon size={10} />}
 
 							{ // file name and range
-								getBasename(selection.uri.fsPath)
-								+ (selection.type === 'CodeSelection' ? ` (${selection.range[0]}-${selection.range[1]})` : '')
+								chipLabel
+								+ (selection.type === 'CodeSelection' || selection.type === 'Symbol' ? ` (${selection.range[0]}-${selection.range[1]})` : '')
 							}
 
 							{selection.type === 'File' && selection.state.wasAddedAsCurrentFile && messageIdx === undefined && currentURI?.fsPath === selection.uri.fsPath ?

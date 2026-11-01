@@ -15,7 +15,7 @@ import { ButtonStop, ButtonSubmit, getRelative, SelectedFiles } from '../Sidebar
 // no runtime imports from vs/ here: the bundle flattens this folder, so a relative path one level deeper breaks
 import { isFeatureNameDisabled, promptWithContext, ZERO_EGRESS_CTRL_L_ACTION_ID, ZERO_EGRESS_SHOW_AGENTS_ACTION_ID } from '../composerDeps.js';
 import type { PromptContextItem } from '../composerDeps.js';
-import type { StagingSelectionItem } from '../../../../../common/chatThreadServiceTypes.js';
+import { selectionUri, type StagingSelectionItem } from '../../../../../common/chatThreadServiceTypes.js';
 import { useThreadReview } from '../useThreadReview.js';
 import { AgentSettingsMenu } from './AgentSettingsMenu.js';
 import { ContextMeter } from './ContextMeter.js';
@@ -120,14 +120,17 @@ export const Composer = ({ threadId, variant, inputDisabledReason, textAreaRef, 
 			const prompt = userMessage.trim();
 			if (!prompt) { return; }
 			// the agent's first message is plain text: the staged chips go into it as workspace-relative paths
-			const context: PromptContextItem[] = selections.map(sel => {
+			// snapshot types (terminal, problems, diff, images) have no path: they are left out of the path list
+			const context: PromptContextItem[] = selections.flatMap((sel): PromptContextItem[] => {
+				const selUri = selectionUri(sel);
+				if (!selUri || sel.type === 'Image') { return []; }
 				// getRelative gives back the fsPath itself for a file outside the workspace: that one stays absolute
-				const relative = getRelative(sel.uri, accessor);
-				const absolute = relative === undefined || relative === sel.uri.fsPath;
-				const path = absolute ? sel.uri.fsPath : relative;
-				return sel.type === 'Folder' ? { kind: 'folder', path, absolute }
-					: sel.type === 'CodeSelection' ? { kind: 'selection', path, range: sel.range, absolute }
-						: { kind: 'file', path, absolute };
+				const relative = getRelative(selUri, accessor);
+				const absolute = relative === undefined || relative === selUri.fsPath;
+				const path = absolute ? selUri.fsPath : relative;
+				return [sel.type === 'Folder' || (sel.type === 'Doc' && sel.isFolder) ? { kind: 'folder', path, absolute }
+					: sel.type === 'CodeSelection' || sel.type === 'Symbol' ? { kind: 'selection', path, range: sel.range, absolute }
+						: { kind: 'file', path, absolute }];
 			});
 			setIsStarting(true);
 			try {

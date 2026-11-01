@@ -93,7 +93,43 @@ export type StagingSelectionItem = {
 	uri: URI;
 	language?: undefined;
 	state?: undefined;
+} | {
+	type: 'Symbol';
+	uri: URI;
+	range: [number, number];
+	name: string;
+	kind: string;
+	language: string;
+} | {
+	type: 'Terminal';
+	title: string;
+	text: string;
+	capturedAt: string; // ISO string
+} | {
+	type: 'Problems';
+	uri?: URI;
+	items: { path: string; line: number; severity: 'error' | 'warning'; message: string }[];
+} | {
+	type: 'GitDiff';
+	against: string | null; // null: working changes against HEAD
+	text: string;
+	truncated: boolean;
+} | {
+	type: 'Doc';
+	uri: URI;
+	name: string;
+	isFolder: boolean;
+} | {
+	type: 'Image';
+	uri: URI;
+	name: string;
+	mime: 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif';
+	bytes: number;
 }
+
+// the uri a selection points at, if any (snapshot types such as Terminal and GitDiff have none)
+export const selectionUri = (s: StagingSelectionItem): URI | undefined =>
+	(s as { uri?: URI } | undefined)?.uri ?? undefined
 
 
 // a link to a symbol (an underlined link to a piece of code)

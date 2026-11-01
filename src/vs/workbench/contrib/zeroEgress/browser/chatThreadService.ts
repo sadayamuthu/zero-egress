@@ -27,7 +27,7 @@ import { basename } from '../../../../base/common/resources.js';
 import { IPendingFileOpsService } from './pendingFileOpsService.js';
 import { CancellationToken } from '../../../../base/common/cancellation.js';
 import { ILanguageFeaturesService } from '../../../../editor/common/services/languageFeatures.js';
-import { ChatMessage, CheckpointEntry, CodespanLocationLink, StagingSelectionItem, ToolMessage } from '../common/chatThreadServiceTypes.js';
+import { ChatMessage, CheckpointEntry, CodespanLocationLink, selectionUri, StagingSelectionItem, ToolMessage } from '../common/chatThreadServiceTypes.js';
 import { Position } from '../../../../editor/common/core/position.js';
 import { IMetricsService } from '../common/metricsService.js';
 import { shorten } from '../../../../base/common/labels.js';
@@ -75,7 +75,27 @@ const findStagingSelectionIndex = (currentSelections: StagingSelectionItem[] | u
 	for (let i = 0; i < currentSelections.length; i += 1) {
 		const s = currentSelections[i]
 
-		if (s.uri.fsPath !== newSelection.uri.fsPath) continue
+		// snapshot types are never deduped against files: same type plus the same key
+		if (s.type === 'Terminal' || s.type === 'GitDiff' || s.type === 'Problems') {
+			if (s.type !== newSelection.type) continue
+			if (s.type === 'Terminal' && newSelection.type === 'Terminal' && s.title === newSelection.title && s.capturedAt === newSelection.capturedAt) return i
+			if (s.type === 'GitDiff' && newSelection.type === 'GitDiff' && s.against === newSelection.against) return i
+			if (s.type === 'Problems' && newSelection.type === 'Problems' && selectionUri(s)?.fsPath === selectionUri(newSelection)?.fsPath) return i
+			continue
+		}
+
+		const sUri = selectionUri(s)
+		const newUri = selectionUri(newSelection)
+		if (!sUri || !newUri || sUri.fsPath !== newUri.fsPath) continue
+		if (s.type !== newSelection.type) continue
+
+		if (s.type === 'Symbol' && newSelection.type === 'Symbol') {
+			if (s.range[0] === newSelection.range[0] && s.range[1] === newSelection.range[1] && s.name === newSelection.name) return i
+			continue
+		}
+		if ((s.type === 'Doc' && newSelection.type === 'Doc') || (s.type === 'Image' && newSelection.type === 'Image')) {
+			return i
+		}
 
 		if (s.type === 'File' && newSelection.type === 'File') {
 			return i
@@ -1781,7 +1801,8 @@ We only need to do it for files that were edited since `from`, ie files between 
 			// URIs of user selections
 			if (m.role === 'user') {
 				for (const sel of m.selections ?? []) {
-					addURI(sel.uri)
+					const selUri = selectionUri(sel)
+					if (selUri) addURI(selUri)
 				}
 			}
 			// URIs of files that have been read
