@@ -12,7 +12,7 @@ import { applyCompaction, Compaction } from '../common/compaction.js';
 import { formatPlan, PlanStep } from '../common/plan.js';
 import { getIsReasoningEnabledState, getReservedOutputTokenSpace, getModelCapabilities } from '../common/modelCapabilities.js';
 import { reParsedToolXMLString, chat_systemMessage } from '../common/prompt/prompts.js';
-import { AnthropicLLMChatMessage, AnthropicReasoning, GeminiLLMChatMessage, LLMChatMessage, LLMFIMMessage, OpenAILLMChatMessage, RawToolParamsObj } from '../common/sendLLMMessageTypes.js';
+import { AnthropicLLMChatMessage, AnthropicReasoning, GeminiLLMChatMessage, LLMChatMessage, LLMFIMMessage, OpenAILLMChatMessage, OpenAIUserPart, RawToolParamsObj } from '../common/sendLLMMessageTypes.js';
 import { IZeroEgressSettingsService } from '../common/zeroEgressSettingsService.js';
 import { ChatMode, FeatureName, ModelSelection, ProviderName } from '../common/zeroEgressSettingsTypes.js';
 import { IDirectoryStrService } from '../common/directoryStrService.js';
@@ -26,7 +26,7 @@ import { IMCPService } from '../common/mcpService.js';
 import { encodeBase64 } from '../../../../base/common/buffer.js';
 import { IFileService } from '../../../../platform/files/common/files.js';
 import { IMAGE_MAX_BYTES } from '../common/selectionText.js';
-import { MAX_IMAGES_PER_MESSAGE, imageMissingNote, imageNote, imageTooLargeNote, toOpenAIUserContent } from '../common/imageContent.js';
+import { MAX_IMAGES_PER_MESSAGE, imageMessageIndex, mergeUserImages, noteForImage, prefixUserContent, toOpenAIUserContent } from '../common/imageContent.js';
 
 export const EMPTY_MESSAGE = '(empty message)'
 
@@ -245,7 +245,11 @@ const prepareMessages_XML_tools = (messages: SimpleLLMMessage[], supportsAnthrop
 			else {
 				const prev = llmChatMessages[llmChatMessages.length - 1] as { content: string, images?: unknown[] }
 				prev.content += '\n\n' + c.content
-				if (images) prev.images = [...(prev.images ?? []), ...images]
+				if (images) {
+					const merged = mergeUserImages((prev.images ?? []) as { name: string }[], images)
+					prev.images = merged.images
+					if (merged.notes.length) prev.content += '\n' + merged.notes.join('\n')
+				}
 			}
 		}
 	}
@@ -301,7 +305,8 @@ const prepareOpenAIOrAnthropicMessages = ({
 	if (!sendsImageParts) {
 		for (const m of messages) {
 			if (m.role === 'user' && m.images?.length) {
-				m.content = [m.content, ...m.images.map(i => imageNote(i.name))].filter(Boolean).join('\n')
+				const reason = supportsVision ? 'format' : 'no-vision'
+				m.content = [m.content, ...m.images.map(i => noteForImage(i.name, reason))].filter(Boolean).join('\n')
 				delete m.images
 			}
 		}
@@ -436,8 +441,8 @@ const prepareOpenAIOrAnthropicMessages = ({
 		const sysPrefix = `<SYSTEM_MESSAGE>\n${newSysMsg}\n</SYSTEM_MESSAGE>\n`
 		const newFirstMessage = {
 			role: 'user',
-			content: Array.isArray(first) && first[0]?.type === 'text' && llmMessages[0].role === 'user'
-				? [{ type: 'text' as const, text: sysPrefix + first[0].text }, ...first.slice(1)] as any
+			content: typeof first === 'string' || (Array.isArray(first) && llmMessages[0].role === 'user')
+				? prefixUserContent(first as string | OpenAIUserPart[], sysPrefix) as any
 				: `${sysPrefix}${first}`
 		} as const
 		llmMessages.splice(0, 1) // delete first message
@@ -652,20 +657,25 @@ class ConvertToLLMMessageService extends Disposable implements IConvertToLLMMess
 	private async _readImage(sel: { uri: URI, name: string, mime: string }): Promise<{ image: { mime: string; base64: string; name: string } } | { note: string }> {
 		try {
 			const stat = await this.fileService.stat(sel.uri)
-			if (stat.size > IMAGE_MAX_BYTES) return { note: imageTooLargeNote(sel.name) }
+			if (stat.size > IMAGE_MAX_BYTES) return { note: noteForImage(sel.name, 'too-large') }
 			const file = await this.fileService.readFile(sel.uri)
-			if (file.value.byteLength > IMAGE_MAX_BYTES) return { note: imageTooLargeNote(sel.name) }
+			if (file.value.byteLength > IMAGE_MAX_BYTES) return { note: noteForImage(sel.name, 'too-large') }
 			return { image: { mime: sel.mime, base64: encodeBase64(file.value), name: sel.name } }
 		}
 		catch {
-			return { note: imageMissingNote(sel.name) }
+			return { note: noteForImage(sel.name, 'missing') }
 		}
 	}
 
 	private async _chatMessagesToSimpleMessages(chatMessages: ChatMessage[], supportsVision: boolean): Promise<SimpleLLMMessage[]> {
 		const simpleLLMMessages: SimpleLLMMessage[] = []
 
-		for (const m of chatMessages) {
+		// only the latest user message carries image bytes; earlier ones leave a text note per image
+		const userIdxs = chatMessages.flatMap((m, i) => m.role === 'user' ? [i] : [])
+		const imageIdx = imageMessageIndex(userIdxs)
+
+		for (let idx = 0; idx < chatMessages.length; idx += 1) {
+			const m = chatMessages[idx]
 			if (m.role === 'checkpoint') continue
 			if (m.role === 'interrupted_streaming_tool') continue
 			if (m.role === 'assistant') {
@@ -688,15 +698,19 @@ class ConvertToLLMMessageService extends Disposable implements IConvertToLLMMess
 				const imageSels = (m.selections ?? []).filter((s): s is Extract<typeof s, { type: 'Image' }> => s.type === 'Image')
 				const images: { mime: string; base64: string; name: string }[] = []
 				const notes: string[] = []
-				if (supportsVision) { // without vision, prepareOpenAIOrAnthropicMessages writes the notes and no file is read
-					for (const sel of imageSels.slice(0, MAX_IMAGES_PER_MESSAGE)) {
-						const res = await this._readImage(sel)
+				if (imageSels.length && !supportsVision) { // prepareOpenAIOrAnthropicMessages writes the notes; no file is read
+					for (const sel of imageSels) images.push({ mime: sel.mime, base64: '', name: sel.name })
+				}
+				else if (imageSels.length && idx !== imageIdx) {
+					for (const sel of imageSels) notes.push(noteForImage(sel.name, 'sent-earlier'))
+				}
+				else if (imageSels.length) {
+					const results = await Promise.all(imageSels.slice(0, MAX_IMAGES_PER_MESSAGE).map(sel => this._readImage(sel)))
+					for (const res of results) {
 						if ('image' in res) images.push(res.image)
 						else notes.push(res.note)
 					}
-				}
-				else {
-					for (const sel of imageSels) images.push({ mime: sel.mime, base64: '', name: sel.name })
+					for (const sel of imageSels.slice(MAX_IMAGES_PER_MESSAGE)) notes.push(noteForImage(sel.name, 'cap'))
 				}
 				simpleLLMMessages.push({
 					role: m.role,

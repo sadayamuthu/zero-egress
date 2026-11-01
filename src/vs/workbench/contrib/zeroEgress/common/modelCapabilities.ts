@@ -285,7 +285,7 @@ const openSourceModelOptions_assumingOAICompat = {
 // Ollama-style model names of the families that can read images
 export const isVisionModelName = (modelName: string): boolean => {
 	const lower = modelName.toLowerCase()
-	if (lower === 'gemma3:1b' || lower.startsWith('gemma3:1b-')) return false // the 1b gemma3 is text-only
+	if (lower === 'gemma3:1b' || lower.startsWith('gemma3:1b-') || lower.startsWith('gemma3:270m') || lower.startsWith('gemma3n')) return false // the small gemma3 sizes and gemma3n are text-only here
 	return ['llava', 'llama3.2-vision', 'qwen2.5vl', 'minicpm-v', 'mistral-small3.1', 'gemma3']
 		.some(prefix => lower.startsWith(prefix) || lower.includes('/' + prefix))
 }
