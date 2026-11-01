@@ -11,9 +11,9 @@
 import React, { useCallback } from 'react';
 import type { ToolMessage } from '../../../../../common/chatThreadServiceTypes.js';
 import type { ToolName } from '../../../../../common/toolsServiceTypes.js';
-import { useAccessor } from '../../util/services.js';
+import { useAccessor, useSettingsState } from '../../util/services.js';
 // no runtime imports from vs/ here: the bundle flattens this folder, so a relative path one level deeper breaks
-import { canAllowList, normalizeCommand } from '../composerDeps.js';
+import { canAllowList, normalizeCommand, terminalAutoRunOf } from '../composerDeps.js';
 
 // the class lists stay inside JSX className: the scope-tailwind pass only prefixes classes written there
 export const ApprovalButton = ({ primary, className = '', ...props }: { primary?: boolean } & React.ButtonHTMLAttributes<HTMLButtonElement>) => {
@@ -77,6 +77,8 @@ export const ApprovalCard = ({ threadId, toolMessage }: {
 	}, [commandAllowListService, command, onRun]);
 
 	const allowLabel = `Always allow “${normalizeCommand(command)}”`;
+	// with Auto-run terminal Off the allow-list is not consulted, so adding to it would change nothing
+	const autoRunIsOff = terminalAutoRunOf(useSettingsState().globalSettings) === 'off';
 
 	return <ApprovalCardShell
 		title='Run this command?'
@@ -86,7 +88,7 @@ export const ApprovalCard = ({ threadId, toolMessage }: {
 				Run <span className='ml-0.5 opacity-70'>⏎</span>
 			</ApprovalButton>
 			<ApprovalButton onClick={onSkip}>Skip</ApprovalButton>
-			{canAllowList(command) && <ApprovalButton
+			{!autoRunIsOff && canAllowList(command) && <ApprovalButton
 				className='max-w-full'
 				onClick={onAlwaysAllow}
 				data-tooltip-id='ze-tooltip'
