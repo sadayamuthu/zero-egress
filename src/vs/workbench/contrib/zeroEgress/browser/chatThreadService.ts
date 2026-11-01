@@ -287,6 +287,8 @@ export interface IChatThreadService {
 	renameThread(threadId: string, title: string): void;
 	setPlanFromAgent(threadId: string, steps: PlanStep[], madeInPlanMode: boolean): void;
 	setPlanSteps(threadId: string, steps: PlanStep[]): void;
+	/** starts the plan: marks it approved, switches to Agent mode, and sends the go-ahead message */
+	approvePlan(threadId: string): Promise<void>;
 	/** closes the tab only: the thread stays in history and keeps its changes */
 	closeTab(threadId: string): void;
 	/** stops the thread first if it is running (its tool calls and model slot), then deletes it */
@@ -1023,7 +1025,7 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 		const backgroundAgent = this.state.allThreads[threadId]?.agent
 		const chatMode = backgroundAgent ? 'agent' : this._settingsService.state.globalSettings.chatMode
 		const toolPolicy = toolPolicyOfMode(chatMode)
-		const madeInPlanMode = (chatMode as string) === 'plan' // ChatMode gains 'plan' with plan mode
+		const madeInPlanMode = chatMode === 'plan'
 		const agentRoot = backgroundAgent ? { folder: agentRootOf(backgroundAgent), depsMayBeMissing: !backgroundAgent.setup?.command, agentId: backgroundAgent.agentId } : undefined
 		const { overridesOfModel } = this._settingsService.state
 
@@ -2107,6 +2109,18 @@ We only need to do it for files that were edited since `from`, ie files between 
 		const newThreads: ChatThreads = { ...this.state.allThreads, [threadId]: { ...thread, plan: { ...thread.plan, steps, updatedAt: now, editedAt: now } } }
 		this._storeAllThreads(newThreads)
 		this._setState({ allThreads: newThreads })
+	}
+
+	async approvePlan(threadId: string): Promise<void> {
+		const thread = this.state.allThreads[threadId]
+		if (!thread?.plan) return
+		const steps: PlanStep[] = thread.plan.steps.map((s, i) => ({ ...s, status: i === 0 ? 'current' : 'todo' }))
+		const plan = { ...thread.plan, steps, approvedAt: new Date().toISOString() }
+		const newThreads: ChatThreads = { ...this.state.allThreads, [threadId]: { ...thread, plan } }
+		this._storeAllThreads(newThreads)
+		this._setState({ allThreads: newThreads })
+		this._settingsService.setGlobalSetting('chatMode', 'agent')
+		await this.addUserMessageAndStreamResponse({ userMessage: 'Approved. Carry out the plan.', threadId })
 	}
 
 	closeTab(threadId: string): void {

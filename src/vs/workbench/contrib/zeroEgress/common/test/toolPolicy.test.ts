@@ -21,6 +21,15 @@ suite('toolPolicy', () => {
 		assert.ok(names.includes('read_file'));
 	});
 
+	test('plan mode reads and plans only', () => {
+		const names = availableTools(toolPolicyOfMode('plan'), [mcpTool])!.map(t => t.name);
+		assert.ok(names.includes('read_file'));
+		assert.ok(names.includes('update_plan'));
+		assert.ok(!names.includes('edit_file'));
+		assert.ok(!names.includes('run_command'));
+		assert.ok(!names.includes('mcp_thing'));
+	});
+
 	test('agent gets update_plan', () => {
 		assert.ok(availableTools(toolPolicyOfMode('agent'), undefined)!.some(t => t.name === 'update_plan'));
 	});

@@ -591,7 +591,7 @@ class ConvertToLLMMessageService extends Disposable implements IConvertToLLMMess
 		const directoryStr = agentRoot ?
 			`Directory of ${agentRoot.folder}:\n` + await this.directoryStrService.getDirectoryStrTool(URI.file(agentRoot.folder)).catch(() => '(could not read the folder)')
 			: await this.directoryStrService.getAllDirectoriesStr({
-				cutOffMessage: chatMode === 'agent' || chatMode === 'gather' ?
+				cutOffMessage: chatMode === 'agent' || chatMode === 'gather' || chatMode === 'plan' ?
 					`...Directories string cut off, use tools to read more...`
 					: `...Directories string cut off, ask user for more if necessary...`
 			})

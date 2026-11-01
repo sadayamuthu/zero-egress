@@ -15,6 +15,7 @@ export function toolPolicyOfMode(mode: ChatMode): ToolPolicy | null {
 	switch (mode) {
 		case 'agent': return { edit: true, terminal: true, mcp: true, plan: true }
 		case 'gather': return { edit: false, terminal: false, mcp: false, plan: false }
+		case 'plan': return { edit: false, terminal: false, mcp: false, plan: true }
 		default: return null
 	}
 }

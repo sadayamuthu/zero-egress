@@ -8,7 +8,7 @@
 // composer owns that choice); on a chat with messages, Background moves the chat to a background agent.
 
 import React, { useState } from 'react';
-import { ChevronDown, Infinity as InfinityIcon, MessageCircle, Search } from 'lucide-react';
+import { ChevronDown, Infinity as InfinityIcon, ListChecks, MessageCircle, Search } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { useAccessor, useSettingsState } from '../../util/services.js';
 // no runtime imports from vs/ here: the bundle flattens this folder, so a relative path one level deeper breaks
@@ -17,6 +17,7 @@ import { MenuHeading, MenuRow, Popover } from './Popover.js';
 
 export const modeOptions: readonly { mode: ChatMode; label: string; detail: string; Icon: LucideIcon }[] = [
 	{ mode: 'agent', label: 'Agent', detail: 'edits, runs', Icon: InfinityIcon },
+	{ mode: 'plan', label: 'Plan', detail: 'plan, then wait', Icon: ListChecks },
 	{ mode: 'gather', label: 'Gather', detail: 'read only', Icon: Search },
 	{ mode: 'normal', label: 'Chat', detail: 'no tools', Icon: MessageCircle },
 ];
