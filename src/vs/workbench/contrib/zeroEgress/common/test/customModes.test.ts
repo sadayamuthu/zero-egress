@@ -5,7 +5,7 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { CustomMode, resolveRunMode, runModeFor, selectBuiltInMode, validateCustomMode } from '../customModes.js';
+import { backgroundAllowed, CustomMode, resolveRunMode, runModeFor, selectBuiltInMode, validateCustomMode } from '../customModes.js';
 
 const mode = (o: { name?: string; instructions?: string; tools?: Partial<CustomMode['tools']> }): CustomMode => ({
 	id: 'm1', name: o.name ?? 'Mine', icon: 'eye', instructions: o.instructions ?? '',
@@ -35,6 +35,15 @@ suite('customModes', () => {
 		await selectBuiltInMode(settings, 'plan');
 		assert.strictEqual(resolveRunMode(gs).chatMode, 'plan');
 		assert.strictEqual(gs.activeCustomModeId, null);
+	});
+
+	test('background runs only start outside Plan and custom modes', () => {
+		assert.strictEqual(backgroundAllowed({ chatMode: 'agent', customModes: [], activeCustomModeId: null }), true);
+		assert.strictEqual(backgroundAllowed({ chatMode: 'gather', customModes: [], activeCustomModeId: null }), true);
+		assert.strictEqual(backgroundAllowed({ chatMode: 'plan', customModes: [], activeCustomModeId: null }), false);
+		assert.strictEqual(backgroundAllowed({ chatMode: 'agent', customModes: [mode({ tools: { edit: true, terminal: true } })], activeCustomModeId: 'm1' }), false);
+		// an id with no mode behind it falls back to the built-in mode
+		assert.strictEqual(backgroundAllowed({ chatMode: 'agent', customModes: [], activeCustomModeId: 'gone' }), true);
 	});
 
 	test('missing id falls back', () => {

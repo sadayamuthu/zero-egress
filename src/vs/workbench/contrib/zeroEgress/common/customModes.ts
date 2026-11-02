@@ -58,6 +58,12 @@ export function runModeFor({ modeOverride, isBackground, gs }: { modeOverride?: 
 	return resolveRunMode(gs)
 }
 
+/** Background agents run as Agent: starting one is refused while Plan or a custom mode is chosen, so the choice isn't silently dropped. */
+export function backgroundAllowed(gs: Pick<GlobalSettings, 'chatMode' | 'customModes' | 'activeCustomModeId'>): boolean {
+	const r = resolveRunMode(gs)
+	return !r.customModeId && r.chatMode !== 'plan'
+}
+
 /** Choosing a built-in mode (the mode menu, `/plan`, approving a plan) also leaves any custom mode, so the pick takes effect. */
 export function selectBuiltInMode(settings: { setGlobalSetting(name: 'chatMode', v: ChatMode): unknown; setGlobalSetting(name: 'activeCustomModeId', v: string | null): unknown }, mode: ChatMode): Promise<void> {
 	return Promise.all([settings.setGlobalSetting('activeCustomModeId', null), settings.setGlobalSetting('chatMode', mode)]).then(() => undefined)

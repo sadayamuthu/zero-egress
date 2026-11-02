@@ -15,7 +15,7 @@ import { useAccessor, useActiveURI, useChatThreadsState, useChatThreadsStreamSta
 import { TextAreaFns, ZeroEgressInputBox2 } from '../../util/inputs.js';
 import { ButtonStop, ButtonSubmit, getRelative, SelectedFiles } from '../SidebarChat.js';
 // no runtime imports from vs/ here: the bundle flattens this folder, so a relative path one level deeper breaks
-import { builtinCommands, selectBuiltInMode, isFeatureNameDisabled, promptContextOfSelection, resolveSlashSend, slashEnterPicks, slashMenuQuery, withNewSelections, promptWithContext, ZERO_EGRESS_CTRL_L_ACTION_ID, ZERO_EGRESS_SHOW_AGENTS_ACTION_ID } from '../composerDeps.js';
+import { backgroundAllowed, builtinCommands, selectBuiltInMode, isFeatureNameDisabled, promptContextOfSelection, resolveSlashSend, slashEnterPicks, slashMenuQuery, withNewSelections, promptWithContext, ZERO_EGRESS_CTRL_L_ACTION_ID, ZERO_EGRESS_SHOW_AGENTS_ACTION_ID } from '../composerDeps.js';
 import type { ChatMode, CustomCommand, PromptContextItem } from '../composerDeps.js';
 import type { StagingSelectionItem } from '../../../../../common/chatThreadServiceTypes.js';
 import { useThreadReview } from '../useThreadReview.js';
@@ -87,8 +87,10 @@ export const Composer = ({ threadId, variant, inputDisabledReason, textAreaRef, 
 						: !bgAvailability ? 'Checking whether background agents are available.'
 							: null
 	);
+	const BACKGROUND_NEEDS_AGENT = 'Switch to Agent to run in the background.';
 	const moveToBackground = async () => {
 		if (moveDisabledReason || isMoving) { return; }
+		if (!backgroundAllowed(settingsState.globalSettings)) { accessor.get('INotificationService').info(BACKGROUND_NEEDS_AGENT); return; }
 		setIsMoving(true);
 		try {
 			await accessor.get('IBackgroundAgentsService').startAgent('', threadId);
@@ -126,6 +128,8 @@ export const Composer = ({ threadId, variant, inputDisabledReason, textAreaRef, 
 	const onSubmit = async (_forceSubmit?: string) => {
 		if ((isDisabled && !_forceSubmit) || isFeatureNameDisabled('Chat', settingsState)) { return; }
 		if (isRunning || isStarting || loadingCustomRef.current) { return; }
+		// background agents run as Agent: Plan and custom modes would be dropped, so the box keeps the text
+		if (startsInBackground && !backgroundAllowed(settingsState.globalSettings)) { accessor.get('INotificationService').info(BACKGROUND_NEEDS_AGENT); return; }
 		const userMessage0 = _forceSubmit || textAreaRef.current?.value || '';
 
 		let userMessage = userMessage0;
