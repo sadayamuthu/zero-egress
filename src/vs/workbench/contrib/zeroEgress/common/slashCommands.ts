@@ -38,6 +38,9 @@ export const slashMenuQuery = (text: string): string | null => {
 	return m ? m[1].toLowerCase() : null;
 };
 
+/** Enter picks a row only once the user has typed a letter of a command or moved the highlight: a bare "/" plus Enter does nothing */
+export const slashEnterPicks = (query: string, userMovedHighlight: boolean): boolean => query.length > 0 || userMovedHighlight;
+
 export function parseSlash(text: string): { name: string; args: string } | null {
 	const m = /^\/([a-z0-9][a-z0-9-]*)(?:\s+([\s\S]*))?$/.exec(text);
 	return m ? { name: m[1], args: (m[2] ?? '').trim() } : null;

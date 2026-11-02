@@ -5,7 +5,7 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { expandBuiltin, parseSlash, resolveSlashSend, withNewSelections } from '../slashCommands.js';
+import { expandBuiltin, parseSlash, resolveSlashSend, slashEnterPicks, withNewSelections } from '../slashCommands.js';
 
 suite('slashCommands', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
@@ -50,6 +50,12 @@ suite('slashCommands', () => {
 			assert.strictEqual(r.displayMessage, undefined);
 			assert.strictEqual(r.isCommand, false);
 		}
+	});
+
+	test('Enter on a bare / picks nothing until the highlight moves', () => {
+		assert.strictEqual(slashEnterPicks('', false), false);
+		assert.strictEqual(slashEnterPicks('', true), true);
+		assert.strictEqual(slashEnterPicks('re', false), true);
 	});
 
 	test('staged context is not added twice', () => {

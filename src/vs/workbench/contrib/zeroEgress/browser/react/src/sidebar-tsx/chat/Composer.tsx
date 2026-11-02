@@ -15,7 +15,7 @@ import { useAccessor, useActiveURI, useChatThreadsState, useChatThreadsStreamSta
 import { TextAreaFns, ZeroEgressInputBox2 } from '../../util/inputs.js';
 import { ButtonStop, ButtonSubmit, getRelative, SelectedFiles } from '../SidebarChat.js';
 // no runtime imports from vs/ here: the bundle flattens this folder, so a relative path one level deeper breaks
-import { builtinCommands, isFeatureNameDisabled, promptContextOfSelection, resolveSlashSend, slashMenuQuery, withNewSelections, promptWithContext, ZERO_EGRESS_CTRL_L_ACTION_ID, ZERO_EGRESS_SHOW_AGENTS_ACTION_ID } from '../composerDeps.js';
+import { builtinCommands, isFeatureNameDisabled, promptContextOfSelection, resolveSlashSend, slashEnterPicks, slashMenuQuery, withNewSelections, promptWithContext, ZERO_EGRESS_CTRL_L_ACTION_ID, ZERO_EGRESS_SHOW_AGENTS_ACTION_ID } from '../composerDeps.js';
 import type { ChatMode, PromptContextItem } from '../composerDeps.js';
 import type { StagingSelectionItem } from '../../../../../common/chatThreadServiceTypes.js';
 import { useThreadReview } from '../useThreadReview.js';
@@ -209,11 +209,13 @@ export const Composer = ({ threadId, variant, inputDisabledReason, textAreaRef, 
 	const [typed, setTyped] = useState('');
 	const [slashIdx, setSlashIdx] = useState(0);
 	const [slashClosed, setSlashClosed] = useState(false);
+	const slashMovedRef = React.useRef(false); // the arrow keys moved the highlight since the text last changed
 	const slashPickedRef = React.useRef(false); // a pick rewrites the text itself: that change must not reopen the menu
 	const onChangeText = useCallback((newStr: string) => {
 		setInstructionsAreEmpty(!newStr);
 		setTyped(newStr);
 		setSlashIdx(0);
+		slashMovedRef.current = false;
 		setSlashClosed(slashPickedRef.current);
 	}, []);
 	const slashQuery = slashMenuQuery(typed);
@@ -237,12 +239,13 @@ export const Composer = ({ threadId, variant, inputDisabledReason, textAreaRef, 
 			const active = slashItems[Math.min(slashIdx, slashItems.length - 1)];
 			if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
 				e.preventDefault();
+				slashMovedRef.current = true;
 				setSlashIdx(i => (i + (e.key === 'ArrowDown' ? 1 : slashItems.length - 1)) % slashItems.length);
 				return;
 			} else if (e.key === 'Enter' && !e.shiftKey && !e.metaKey && !e.ctrlKey) {
 				e.preventDefault();
-				runSlashItem(active);
-				return;
+				if (slashEnterPicks(slashQuery ?? '', slashMovedRef.current)) { runSlashItem(active); }
+				return; // a bare "/": nothing runs and the menu stays open
 			} else if (e.key === 'Tab' && !e.shiftKey) {
 				e.preventDefault();
 				textAreaFnsRef.current?.setValue('/' + active.name + ' ');
