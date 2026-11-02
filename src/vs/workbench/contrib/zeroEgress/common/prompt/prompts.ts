@@ -450,7 +450,7 @@ ${workspaceFolders.join('\n') || 'NO FOLDERS OPEN'}${depsMayBeMissing ? `
 ${activeURI}
 
 - Open files:
-${openedURIs.join('\n') || 'NO OPENED FILES'}${''/* separator */}${mode === 'agent' && persistentTerminalIDs.length !== 0 ? `
+${openedURIs.join('\n') || 'NO OPENED FILES'}${''/* separator */}${mode === 'agent' && toolPolicy?.terminal && persistentTerminalIDs.length !== 0 ? `
 
 - Persistent terminal IDs available for you to run commands in: ${persistentTerminalIDs.join(', ')}` : ''}
 </system_info>`)
@@ -480,7 +480,9 @@ ${directoryStr}
 	}
 
 	if (mode === 'agent') {
-		details.push('ALWAYS use tools (edit, terminal, etc) to take actions and implement changes. For example, if you would like to edit a file, you MUST use a tool.')
+		// a custom mode may allow edits without the terminal (or the reverse): name only the tools it has
+		const actionTools = [toolPolicy?.edit ? 'edit' : '', toolPolicy?.terminal ? 'terminal' : ''].filter(Boolean).join(', ')
+		details.push(`ALWAYS use tools (${actionTools ? `${actionTools}, ` : ''}etc) to take actions and implement changes. For example, if you would like to edit a file, you MUST use a tool.`)
 		details.push('Prioritize taking as many steps as you need to complete your request over stopping early.')
 		details.push(`You will OFTEN need to gather context before making a change. Do not immediately make a change unless you have ALL relevant context.`)
 		details.push(`ALWAYS have maximal certainty in a change BEFORE you make it. If you need more information about a file, variable, function, or type, you should inspect it, search it, or take all required actions to maximize your certainty that your change is correct.`)

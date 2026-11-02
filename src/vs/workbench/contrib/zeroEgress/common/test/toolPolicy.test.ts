@@ -5,7 +5,7 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { availableTools, InternalToolInfo } from '../prompt/prompts.js';
+import { availableTools, chat_systemMessage, InternalToolInfo } from '../prompt/prompts.js';
 import { resolveRunMode } from '../customModes.js';
 import { BAD_TOOL_STREAK_LIMIT, nextBadToolStreak, refusalOf, toolGroupOf, toolPolicyOfMode } from '../toolPolicy.js';
 
@@ -85,5 +85,16 @@ suite('toolPolicy', () => {
 		assert.strictEqual(iv.stopMessage, 'Stopped: the model kept sending invalid tool calls.');
 		iv = nextBadToolStreak(0, 'invalid');
 		assert.strictEqual(iv.stopMessage, null);
+	});
+
+	test('a mode without the terminal is not told about terminals', () => {
+		const msg = (toolPolicy: { edit: boolean; terminal: boolean; mcp: boolean; plan: boolean }) => chat_systemMessage({ workspaceFolders: ['/w'], directoryStr: '', openedURIs: [], activeURI: undefined, persistentTerminalIDs: ['T1'], chatMode: 'agent', toolPolicy, mcpTools: undefined, includeXMLToolDefinitions: false });
+		const editOnly = msg({ edit: true, terminal: false, mcp: false, plan: true });
+		assert.ok(!editOnly.includes('Persistent terminal IDs'));
+		assert.ok(!editOnly.includes('terminal, etc'));
+		assert.ok(editOnly.includes('ALWAYS use tools (edit, etc)'));
+		const agent = msg({ edit: true, terminal: true, mcp: true, plan: true });
+		assert.ok(agent.includes('Persistent terminal IDs available for you to run commands in: T1'));
+		assert.ok(agent.includes('ALWAYS use tools (edit, terminal, etc)'));
 	});
 });
