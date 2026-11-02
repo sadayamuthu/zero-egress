@@ -13,8 +13,9 @@ import { Emitter, Event } from '../../../../base/common/event.js';
 import { ILLMMessageService } from '../common/sendLLMMessageService.js';
 import { chat_userMessageContent, isABuiltinToolName } from '../common/prompt/prompts.js';
 import { AnthropicReasoning, getErrorMessage, RawToolCallObj, RawToolParamsObj } from '../common/sendLLMMessageTypes.js';
+import { TokenUsage } from '../common/tokenUsage.js';
 import { generateUuid } from '../../../../base/common/uuid.js';
-import { FeatureName, ModelSelection, ModelSelectionOptions } from '../common/zeroEgressSettingsTypes.js';
+import { ChatMode, FeatureName, ModelSelection, ModelSelectionOptions } from '../common/zeroEgressSettingsTypes.js';
 import { IZeroEgressSettingsService } from '../common/zeroEgressSettingsService.js';
 import { approvalTypeOfBuiltinToolName, BuiltinToolCallParams, ToolCallParams, ToolName, ToolResult } from '../common/toolsServiceTypes.js';
 import { IToolsService } from './toolsService.js';
@@ -26,7 +27,7 @@ import { basename } from '../../../../base/common/resources.js';
 import { IPendingFileOpsService } from './pendingFileOpsService.js';
 import { CancellationToken } from '../../../../base/common/cancellation.js';
 import { ILanguageFeaturesService } from '../../../../editor/common/services/languageFeatures.js';
-import { ChatMessage, CheckpointEntry, CodespanLocationLink, StagingSelectionItem, ToolMessage } from '../common/chatThreadServiceTypes.js';
+import { ChatMessage, CheckpointEntry, CodespanLocationLink, selectionUri, StagingSelectionItem, ToolMessage } from '../common/chatThreadServiceTypes.js';
 import { Position } from '../../../../editor/common/core/position.js';
 import { IMetricsService } from '../common/metricsService.js';
 import { shorten } from '../../../../base/common/labels.js';
@@ -39,6 +40,9 @@ import { truncate } from '../../../../base/common/strings.js';
 import { CHAT_OPEN_TABS_STORAGE_KEY, THREAD_STORAGE_KEY } from '../common/storageKeys.js';
 import { closeTab as closeTabOf, openTab, restoreTabs } from '../common/chatTabs.js';
 import { IConvertToLLMMessageService } from './convertToLLMMessageService.js';
+import { Compaction, COMPACT_SYSTEM_PROMPT, compactionAfterCut, compactionCut, compactionInput, compactionStillValid } from '../common/compaction.js';
+import { CHARS_PER_TOKEN } from '../common/contextUse.js';
+import { getModelCapabilities } from '../common/modelCapabilities.js';
 import { timeout } from '../../../../base/common/async.js';
 import { deepClone } from '../../../../base/common/objects.js';
 import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
@@ -58,6 +62,9 @@ import { IDisposable } from '../../../../base/common/lifecycle.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { AGENTS_MAX_CONCURRENT_DEFAULT, AGENTS_MAX_CONCURRENT_SETTING } from '../common/zeroEgressConfiguration.js';
 import { clampConcurrency, parallelRequestsOf } from '../common/zeroEgressSettingsTypes.js';
+import { nextPlan, planAfterCut, planForPrompt, PlanStep, ThreadPlan } from '../common/plan.js';
+import { runModeFor, selectBuiltInMode } from '../common/customModes.js';
+import { nextBadToolStreak, refusalOf, ToolPolicy } from '../common/toolPolicy.js';
 
 
 // related to retrying when LLM message has error
@@ -71,7 +78,27 @@ const findStagingSelectionIndex = (currentSelections: StagingSelectionItem[] | u
 	for (let i = 0; i < currentSelections.length; i += 1) {
 		const s = currentSelections[i]
 
-		if (s.uri.fsPath !== newSelection.uri.fsPath) continue
+		// snapshot types are never deduped against files: same type plus the same key
+		if (s.type === 'Terminal' || s.type === 'GitDiff' || s.type === 'Problems') {
+			if (s.type !== newSelection.type) continue
+			if (s.type === 'Terminal' && newSelection.type === 'Terminal' && s.title === newSelection.title && s.capturedAt === newSelection.capturedAt) return i
+			if (s.type === 'GitDiff' && newSelection.type === 'GitDiff' && s.against === newSelection.against) return i
+			if (s.type === 'Problems' && newSelection.type === 'Problems' && selectionUri(s)?.fsPath === selectionUri(newSelection)?.fsPath) return i
+			continue
+		}
+
+		const sUri = selectionUri(s)
+		const newUri = selectionUri(newSelection)
+		if (!sUri || !newUri || sUri.fsPath !== newUri.fsPath) continue
+		if (s.type !== newSelection.type) continue
+
+		if (s.type === 'Symbol' && newSelection.type === 'Symbol') {
+			if (s.range[0] === newSelection.range[0] && s.range[1] === newSelection.range[1] && s.name === newSelection.name) return i
+			continue
+		}
+		if ((s.type === 'Doc' && newSelection.type === 'Doc') || (s.type === 'Image' && newSelection.type === 'Image')) {
+			return i
+		}
 
 		if (s.type === 'File' && newSelection.type === 'File') {
 			return i
@@ -130,6 +157,8 @@ type WhenMounted = {
 
 
 
+const COMPACT_TIMEOUT_MS = 180_000
+
 export type ThreadType = {
 	id: string; // store the id here too
 	createdAt: string; // ISO string
@@ -140,6 +169,12 @@ export type ThreadType = {
 
 	messages: ChatMessage[];
 	filesWithUserChanges: Set<string>;
+
+	/** the earlier turns, summarized: the model sees the summary in place of messages[0..uptoIdx) */
+	compaction?: Compaction;
+
+	/** the task plan: written by the agent's update_plan tool, editable by the user */
+	plan?: ThreadPlan;
 
 	/** set when this thread runs as a background agent in its own git worktree */
 	agent?: BackgroundAgentInfo;
@@ -273,6 +308,10 @@ export interface IChatThreadService {
 	// tabs and history
 	/** an empty or blank title clears it, so the thread falls back to its first message */
 	renameThread(threadId: string, title: string): void;
+	setPlanFromAgent(threadId: string, steps: PlanStep[], madeInPlanMode: boolean): void;
+	setPlanSteps(threadId: string, steps: PlanStep[]): void;
+	/** starts the plan: marks it approved, switches to Agent mode, and sends the go-ahead message */
+	approvePlan(threadId: string): Promise<void>;
 	/** closes the tab only: the thread stays in history and keeps its changes */
 	closeTab(threadId: string): void;
 	/** stops the thread first if it is running (its tool calls and model slot), then deletes it */
@@ -281,7 +320,8 @@ export interface IChatThreadService {
 
 	// background agents (never the current thread)
 	/** creates a background-agent thread with `messages` and sends `prompt` in it; returns its id */
-	startBackgroundThread(agent: BackgroundAgentInfo, messages: ChatMessage[], prompt: string): string;
+	/** `displayMessage` is what the first bubble shows; `modeOverride` can only narrow the agent's tools (e.g. 'gather') */
+	startBackgroundThread(agent: BackgroundAgentInfo, messages: ChatMessage[], prompt: string, opts?: { displayMessage?: string, modeOverride?: ChatMode }): string;
 	/** replaces a background thread's agent info (persisted) */
 	setBackgroundAgentInfo(threadId: string, agent: BackgroundAgentInfo): void;
 
@@ -318,11 +358,20 @@ export interface IChatThreadService {
 	abortRunning(threadId: string): Promise<void>;
 	dismissStreamError(threadId: string): void;
 
+	/** summarize the earlier turns of a chat into one message the model sees in their place */
+	compactThread(threadId: string): Promise<void>;
+	/** true while a summary for this chat is being written (fires onDidChangeCurrentThread on change) */
+	isCompacting(threadId: string): boolean;
+
 	// call to edit a message
-	editUserMessageAndStreamResponse({ userMessage, messageIdx, threadId }: { userMessage: string, messageIdx: number, threadId: string }): Promise<void>;
+	editUserMessageAndStreamResponse({ userMessage, messageIdx, threadId, displayMessage, modeOverride }: { userMessage: string, messageIdx: number, threadId: string, displayMessage?: string, modeOverride?: ChatMode }): Promise<void>;
 
 	// call to add a message
-	addUserMessageAndStreamResponse({ userMessage, threadId }: { userMessage: string, threadId: string }): Promise<void>;
+	/**
+	 * `displayMessage` is what the user's bubble shows when it differs from the prompt (a / command: the command as typed).
+	 * `modeOverride` runs this message, and the approval re-runs that follow it, in another mode; the chosen mode is unchanged.
+	 */
+	addUserMessageAndStreamResponse({ userMessage, threadId, displayMessage, modeOverride }: { userMessage: string, threadId: string, displayMessage?: string, modeOverride?: ChatMode }): Promise<void>;
 
 	// approve/reject
 	approveLatestToolRequest(threadId: string): void;
@@ -671,6 +720,7 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 	rejectLatestToolRequest(threadId: string) {
 		const thread = this.state.allThreads[threadId]
 		if (!thread) return // should never happen
+		this._modeOverrides.delete(threadId) // nothing runs after a rejection
 
 		const lastMsg = thread.messages[thread.messages.length - 1]
 
@@ -694,6 +744,7 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 	async abortRunning(threadId: string) {
 		const thread = this.state.allThreads[threadId]
 		if (!thread) return // should never happen
+		this._modeOverrides.delete(threadId)
 
 		// add assistant message
 		if (this.streamState[threadId]?.isRunning === 'LLM') {
@@ -730,6 +781,10 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 	}
 
 
+
+	// a / command's mode for one message; read by _runChatAgent, kept while the run waits on an approval
+	private readonly _modeOverrides = new Map<string, ChatMode>()
+	private readonly _runSeqs = new Map<string, number>()
 
 	private readonly toolErrMsgs = {
 		rejected: 'Tool call was rejected by the user.',
@@ -786,6 +841,8 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 		toolName: ToolName,
 		toolId: string,
 		mcpServerName: string | undefined,
+		toolPolicy: ToolPolicy | null,
+		madeInPlanMode: boolean,
 		opts: { preapproved: true, unvalidatedToolParams: RawToolParamsObj, validatedParams: ToolCallParams<ToolName> } | { preapproved: false, unvalidatedToolParams: RawToolParamsObj },
 	): Promise<{ awaitingUserApproval?: boolean, interrupted?: boolean }> => {
 
@@ -799,6 +856,14 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 
 		// Check if it's a built-in tool
 		const isBuiltInTool = isABuiltinToolName(toolName)
+
+		// the run's policy decides which tools may run, whatever the model asked for (also for a just-approved tool)
+		const refusal = refusalOf(toolPolicy, toolName, !isBuiltInTool)
+		if (refusal) {
+			// replaces the pending request when the tool was just approved, else adds a message
+			this._updateLatestTool(threadId, { role: 'tool', type: 'invalid_params', refused: true, result: null, name: toolName, content: refusal, id: toolId, rawParams: opts.unvalidatedToolParams, mcpServerName })
+			return {}
+		}
 		const toolCtx = this._toolContextOf(threadId)
 
 
@@ -886,6 +951,7 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 				resolveInterruptor(interruptor)
 
 				toolResult = await result
+				if (toolName === 'update_plan') this.setPlanFromAgent(threadId, (toolParams as BuiltinToolCallParams['update_plan']).steps, madeInPlanMode)
 			}
 			else {
 				const mcpTools = this._mcpService.getMCPTools()
@@ -991,7 +1057,16 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 		// above just defines helpers, below starts the actual function
 		// should not change as we loop even if user changes it, so it goes here. Background agents always run in agent mode.
 		const backgroundAgent = this.state.allThreads[threadId]?.agent
-		const chatMode = backgroundAgent ? 'agent' : this._settingsService.state.globalSettings.chatMode
+		// a / command's mode wins, background agents included: it can only take tools away (gather, normal)
+		const modeOverride = this._modeOverrides.get(threadId)
+		// precedence (runModeFor): / command override, then background agent, then the global mode (custom or built-in)
+		const runMode = runModeFor({ modeOverride, isBackground: !!backgroundAgent, gs: this._settingsService.state.globalSettings })
+		const { chatMode, toolPolicy, extraInstructions } = runMode
+		// a newer run of this chat owns the override; an older one ending late must not delete it
+		const runSeq = (this._runSeqs.get(threadId) ?? 0) + 1
+		this._runSeqs.set(threadId, runSeq)
+		let keepModeOverride = false
+		const madeInPlanMode = chatMode === 'plan'
 		const agentRoot = backgroundAgent ? { folder: agentRootOf(backgroundAgent), depsMayBeMissing: !backgroundAgent.setup?.command, agentId: backgroundAgent.agentId } : undefined
 		const { overridesOfModel } = this._settingsService.state
 
@@ -1005,12 +1080,13 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 		try {
 
 			let nMessagesSent = 0
+			let badToolStreak = 0 // refused or invalid tool calls in a row; at the limit the run ends
 			let shouldSendAnotherMessage = true
 			let isRunningWhenEnd: IsRunningType = undefined
 
 			// before enter loop, call tool
 			if (callThisToolFirst) {
-				const { interrupted, awaitingUserApproval } = await this._runToolCall(threadId, callThisToolFirst.name, callThisToolFirst.id, callThisToolFirst.mcpServerName, { preapproved: true, unvalidatedToolParams: callThisToolFirst.rawParams, validatedParams: callThisToolFirst.params })
+				const { interrupted, awaitingUserApproval } = await this._runToolCall(threadId, callThisToolFirst.name, callThisToolFirst.id, callThisToolFirst.mcpServerName, toolPolicy, madeInPlanMode, { preapproved: true, unvalidatedToolParams: callThisToolFirst.rawParams, validatedParams: callThisToolFirst.params })
 				if (interrupted) {
 					this._setStreamState(threadId, undefined)
 					this._addUserCheckpoint({ threadId })
@@ -1018,6 +1094,7 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 				}
 				// the approved write hit another chat's changes (the race guard): it waits on the conflict card again
 				if (awaitingUserApproval) {
+					keepModeOverride = true
 					this._setStreamState(threadId, { isRunning: 'awaiting_user' })
 					return
 				}
@@ -1042,7 +1119,11 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 					chatMessages,
 					modelSelection,
 					chatMode,
+					toolPolicy,
+					modeInstructions: extraInstructions,
 					agentRoot,
+					compaction: this.state.allThreads[threadId]?.compaction,
+					plan: planForPrompt(this.state.allThreads[threadId]?.plan, toolPolicy),
 				})
 
 				if (interruptedWhenIdle) {
@@ -1057,7 +1138,7 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 					nAttempts += 1
 
 					type ResTypes =
-						| { type: 'llmDone', toolCall?: RawToolCallObj, info: { fullText: string, fullReasoning: string, anthropicReasoning: AnthropicReasoning[] | null } }
+						| { type: 'llmDone', toolCall?: RawToolCallObj, info: { fullText: string, fullReasoning: string, anthropicReasoning: AnthropicReasoning[] | null, usage?: TokenUsage } }
 						| { type: 'llmError', error?: { message: string; fullError: Error | null; } }
 						| { type: 'llmAborted' }
 
@@ -1084,6 +1165,7 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 						llmCancelToken = this._llmMessageService.sendLLMMessage({
 							messagesType: 'chatMessages',
 							chatMode,
+							toolPolicy,
 							messages: messages,
 							modelSelection,
 							modelSelectionOptions,
@@ -1095,9 +1177,9 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 								if ((fullText || toolCall) && reasoningStartedAt !== undefined && reasoningEndedAt === undefined) reasoningEndedAt = Date.now()
 								this._setStreamState(threadId, { isRunning: 'LLM', llmInfo: { displayContentSoFar: fullText, reasoningSoFar: fullReasoning, toolCallSoFar: toolCall ?? null }, interrupt: Promise.resolve(() => { if (llmCancelToken) this._llmMessageService.abort(llmCancelToken) }) })
 							},
-							onFinalMessage: async ({ fullText, fullReasoning, toolCall, anthropicReasoning, }) => {
+							onFinalMessage: async ({ fullText, fullReasoning, toolCall, anthropicReasoning, usage }) => {
 								releaseModelSlot()
-								resMessageIsDonePromise({ type: 'llmDone', toolCall, info: { fullText, fullReasoning, anthropicReasoning } }) // resolve with tool calls
+								resMessageIsDonePromise({ type: 'llmDone', toolCall, info: { fullText, fullReasoning, anthropicReasoning, usage } }) // resolve with tool calls
 							},
 							onError: async (error) => {
 								releaseModelSlot()
@@ -1165,7 +1247,7 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 					const { toolCall, info } = llmRes
 
 					const reasoningMs = reasoningStartedAt !== undefined && info.fullReasoning ? (reasoningEndedAt ?? Date.now()) - reasoningStartedAt : undefined
-					this._addMessageToThread(threadId, { role: 'assistant', displayContent: info.fullText, reasoning: info.fullReasoning, anthropicReasoning: info.anthropicReasoning, reasoningMs })
+					this._addMessageToThread(threadId, { role: 'assistant', displayContent: info.fullText, reasoning: info.fullReasoning, anthropicReasoning: info.anthropicReasoning, reasoningMs, usage: info.usage })
 
 					this._setStreamState(threadId, { isRunning: 'idle', interrupt: 'not_needed' }) // just decorative for clarity
 
@@ -1174,13 +1256,22 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 						const mcpTools = this._mcpService.getMCPTools()
 						const mcpTool = mcpTools?.find(t => t.name === toolCall.name)
 
-						const { awaitingUserApproval, interrupted } = await this._runToolCall(threadId, toolCall.name, toolCall.id, mcpTool?.mcpServerName, { preapproved: false, unvalidatedToolParams: toolCall.rawParams })
+						const { awaitingUserApproval, interrupted } = await this._runToolCall(threadId, toolCall.name, toolCall.id, mcpTool?.mcpServerName, toolPolicy, madeInPlanMode, { preapproved: false, unvalidatedToolParams: toolCall.rawParams })
 						if (interrupted) {
 							this._setStreamState(threadId, undefined)
 							return
 						}
 						if (awaitingUserApproval) { isRunningWhenEnd = 'awaiting_user' }
 						else { shouldSendAnotherMessage = true }
+
+						const toolMsg = findLast(this.state.allThreads[threadId]?.messages ?? [], m => m.role === 'tool' && m.id === toolCall.id)
+						const outcome = toolMsg?.role === 'tool' && toolMsg.type === 'invalid_params' ? (toolMsg.refused ? 'refused' : 'invalid') : 'ok'
+						const streak = nextBadToolStreak(badToolStreak, outcome)
+						badToolStreak = streak.streak
+						if (streak.stopMessage) {
+							this._addMessageToThread(threadId, { role: 'assistant', displayContent: streak.stopMessage, reasoning: '', anthropicReasoning: null })
+							shouldSendAnotherMessage = false
+						}
 
 						this._setStreamState(threadId, { isRunning: 'idle', interrupt: 'not_needed' }) // just decorative, for clarity
 					}
@@ -1189,6 +1280,7 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 			} // end while (send message)
 
 			// if awaiting user approval, keep isRunning true, else end isRunning
+			keepModeOverride = isRunningWhenEnd === 'awaiting_user'
 			this._setStreamState(threadId, { isRunning: isRunningWhenEnd })
 
 			// add checkpoint before the next user message
@@ -1198,6 +1290,8 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 			this._metricsService.capture('Agent loop done', { nMessagesSent, chatMode })
 		} finally {
 			agentSlot?.dispose() // the loop exited for any reason
+			// the override ends with the run, unless the run waits on an approval (that re-run keeps it)
+			if (!keepModeOverride && this._runSeqs.get(threadId) === runSeq) this._modeOverrides.delete(threadId)
 		}
 	}
 
@@ -1488,6 +1582,19 @@ We only need to do it for files that were edited since `from`, ie files between 
 		}
 
 		this._setThreadState(threadId, { currCheckpointIdx: toIdx })
+		// the messages after the checkpoint are dropped on the next send; a summary or plan reaching past it goes now
+		const restored = this.state.allThreads[threadId]
+		const keptMessages = restored ? restored.messages.slice(0, toIdx + 1) : []
+		const compactionGoes = !!restored?.compaction && !compactionAfterCut(restored.compaction, toIdx + 1)
+		const planGoes = !!restored?.plan && !planAfterCut(keptMessages, restored.plan)
+		if (restored && (compactionGoes || planGoes)) {
+			const rest = { ...restored }
+			if (compactionGoes) { delete rest.compaction }
+			if (planGoes) { delete rest.plan }
+			const newThreads = { ...this.state.allThreads, [threadId]: rest }
+			this._storeAllThreads(newThreads)
+			this._setState({ allThreads: newThreads })
+		}
 
 		if (skippedPaths.length) {
 			this._notificationService.notify({
@@ -1545,9 +1652,11 @@ We only need to do it for files that were edited since `from`, ie files between 
 	}
 
 
-	private async _addUserMessageAndStreamResponse({ userMessage, _chatSelections, threadId }: { userMessage: string, _chatSelections?: StagingSelectionItem[], threadId: string }) {
+	private async _addUserMessageAndStreamResponse({ userMessage, _chatSelections, threadId, displayMessage, modeOverride }: { userMessage: string, _chatSelections?: StagingSelectionItem[], threadId: string, displayMessage?: string, modeOverride?: ChatMode }) {
 		const thread = this.state.allThreads[threadId]
 		if (!thread) return // should never happen
+
+		this._cancelCompaction(threadId, 'user')
 
 		// interrupt existing stream
 		if (this.streamState[threadId]?.isRunning) {
@@ -1565,8 +1674,10 @@ We only need to do it for files that were edited since `from`, ie files between 
 		const currSelns: StagingSelectionItem[] = _chatSelections ?? thread.state.stagingSelections
 
 		const userMessageContent = await chat_userMessageContent(instructions, currSelns, { directoryStrService: this._directoryStringService, fileService: this._fileService }) // user message + names of files (NOT content)
-		const userHistoryElt: ChatMessage = { role: 'user', content: userMessageContent, displayContent: instructions, selections: currSelns, state: defaultMessageState }
+		const userHistoryElt: ChatMessage = { role: 'user', content: userMessageContent, displayContent: displayMessage ?? instructions, selections: currSelns, state: defaultMessageState }
 		this._addMessageToThread(threadId, userHistoryElt)
+		// after the abort above, which clears the previous message's override
+		if (modeOverride) this._modeOverrides.set(threadId, modeOverride); else this._modeOverrides.delete(threadId)
 
 		this._setThreadState(threadId, { currCheckpointIdx: null }) // no longer at a checkpoint because started streaming
 
@@ -1582,7 +1693,7 @@ We only need to do it for files that were edited since `from`, ie files between 
 	}
 
 
-	async addUserMessageAndStreamResponse({ userMessage, _chatSelections, threadId }: { userMessage: string, _chatSelections?: StagingSelectionItem[], threadId: string }) {
+	async addUserMessageAndStreamResponse({ userMessage, _chatSelections, threadId, displayMessage, modeOverride }: { userMessage: string, _chatSelections?: StagingSelectionItem[], threadId: string, displayMessage?: string, modeOverride?: ChatMode }) {
 		const thread = this.state.allThreads[threadId];
 		if (!thread) return
 		if (this._refuseIfWorktreeRemoved(threadId)) return
@@ -1599,6 +1710,8 @@ We only need to do it for files that were edited since `from`, ie files between 
 					...thread,
 					lastModified: new Date().toISOString(),
 					messages: newMessages,
+					compaction: compactionAfterCut(thread.compaction, newMessages.length),
+					plan: planAfterCut(newMessages, thread.plan),
 				}
 			};
 			this._storeAllThreads(newThreads);
@@ -1606,11 +1719,11 @@ We only need to do it for files that were edited since `from`, ie files between 
 		}
 
 		// Now call the original method to add the user message and stream the response
-		await this._addUserMessageAndStreamResponse({ userMessage, _chatSelections, threadId });
+		await this._addUserMessageAndStreamResponse({ userMessage, _chatSelections, threadId, displayMessage, modeOverride });
 
 	}
 
-	editUserMessageAndStreamResponse: IChatThreadService['editUserMessageAndStreamResponse'] = async ({ userMessage, messageIdx, threadId }) => {
+	editUserMessageAndStreamResponse: IChatThreadService['editUserMessageAndStreamResponse'] = async ({ userMessage, messageIdx, threadId, displayMessage, modeOverride }) => {
 
 		const thread = this.state.allThreads[threadId]
 		if (!thread) return // should never happen
@@ -1630,13 +1743,92 @@ We only need to do it for files that were edited since `from`, ie files between 
 				...this.state.allThreads,
 				[thread.id]: {
 					...thread,
-					messages: slicedMessages
+					messages: slicedMessages,
+					compaction: compactionAfterCut(thread.compaction, slicedMessages.length),
+					plan: planAfterCut(slicedMessages, thread.plan),
 				}
 			}
 		})
 
 		// re-add the message and stream it
-		this._addUserMessageAndStreamResponse({ userMessage, _chatSelections: currSelns, threadId })
+		this._addUserMessageAndStreamResponse({ userMessage, _chatSelections: currSelns, threadId, displayMessage, modeOverride })
+	}
+
+	private readonly _compacting = new Map<string, { requestId?: string, stoppedBecause?: 'user' | 'timeout' }>()
+	isCompacting(threadId: string) { return this._compacting.has(threadId) }
+
+	/** the user sent a message on this chat: the summary in flight is no longer wanted */
+	private _cancelCompaction(threadId: string, why: 'user' | 'timeout') {
+		const c = this._compacting.get(threadId)
+		if (!c) return
+		c.stoppedBecause = why
+		if (c.requestId) this._llmMessageService.abort(c.requestId)
+	}
+
+	async compactThread(threadId: string): Promise<void> {
+		const thread = this.state.allThreads[threadId]
+		if (!thread || this.streamState[threadId]?.isRunning || this._compacting.has(threadId)) return
+		const cut = compactionCut(thread.messages)
+		if (cut === null) {
+			this._notificationService.info('Nothing to compact yet.')
+			return
+		}
+		const messageAtCut = thread.messages[cut]
+		const entry: { requestId?: string, stoppedBecause?: 'user' | 'timeout' } = {}
+		this._compacting.set(threadId, entry)
+		this._onDidChangeCurrentThread.fire()
+		const timer = setTimeout(() => this._cancelCompaction(threadId, 'timeout'), COMPACT_TIMEOUT_MS)
+		try {
+			const { modelSelection, modelSelectionOptions } = this._currentModelSelectionProps()
+			// the previous summary plus the turns after it; over half the context window, the oldest turns go first
+			const contextWindow = modelSelection ? getModelCapabilities(modelSelection.providerName, modelSelection.modelName, this._settingsService.state.overridesOfModel).contextWindow : 0
+			const transcript = compactionInput(thread.messages, cut, thread.compaction, Math.floor(contextWindow / 2) * CHARS_PER_TOKEN)
+			const { messages, separateSystemMessage } = this._convertToLLMMessagesService.prepareLLMSimpleMessages({
+				simpleMessages: [{ role: 'user', content: transcript }],
+				systemMessage: COMPACT_SYSTEM_PROMPT,
+				modelSelection,
+				featureName: 'Chat',
+			})
+			const summary = await new Promise<string>((resolve, reject) => {
+				const requestId = this._llmMessageService.sendLLMMessage({
+					messagesType: 'chatMessages',
+					messages,
+					separateSystemMessage,
+					chatMode: null,
+					toolPolicy: null,
+					modelSelection,
+					modelSelectionOptions,
+					overridesOfModel: this._settingsService.state.overridesOfModel,
+					onText: () => { },
+					onFinalMessage: ({ fullText }) => resolve(fullText.trim()),
+					onError: (e) => reject(new Error(e.message)),
+					onAbort: () => reject(new Error('cancelled')),
+					logging: { loggingName: 'ZeroEgress - Compact' },
+				})
+				if (!requestId) { reject(new Error('no model is selected')); return }
+				entry.requestId = requestId
+				if (entry.stoppedBecause) this._llmMessageService.abort(requestId)
+			})
+			if (entry.stoppedBecause === 'user') return
+			if (!summary) throw new Error('the model returned no summary')
+			const latest = this.state.allThreads[threadId]
+			// the chat changed while the summary was written (restored, edited): drop it, the user already moved on
+			if (!latest || !compactionStillValid(latest.messages, cut, messageAtCut)) return
+			const newThreads = {
+				...this.state.allThreads,
+				[threadId]: { ...latest, compaction: { summary, uptoIdx: cut, at: new Date().toISOString() } },
+			}
+			this._storeAllThreads(newThreads)
+			this._setState({ allThreads: newThreads })
+		} catch (e) {
+			if (entry.stoppedBecause === 'user') return
+			const msg = entry.stoppedBecause === 'timeout' ? 'it took too long.' : getErrorMessage(e)
+			this._notificationService.error(`Couldn't compact this chat: ${msg}`)
+		} finally {
+			clearTimeout(timer)
+			this._compacting.delete(threadId)
+			this._onDidChangeCurrentThread.fire()
+		}
 	}
 
 	// ---------- the rest ----------
@@ -1657,7 +1849,8 @@ We only need to do it for files that were edited since `from`, ie files between 
 			// URIs of user selections
 			if (m.role === 'user') {
 				for (const sel of m.selections ?? []) {
-					addURI(sel.uri)
+					const selUri = selectionUri(sel)
+					if (selUri) addURI(selUri)
 				}
 			}
 			// URIs of files that have been read
@@ -1967,6 +2160,38 @@ We only need to do it for files that were edited since `from`, ie files between 
 	}
 
 
+	/** Called by _runToolCall when the agent runs update_plan: replaces the steps, clears editedAt, and clears approvedAt only for a plan-mode write. */
+	setPlanFromAgent(threadId: string, steps: PlanStep[], madeInPlanMode: boolean): void {
+		const thread = this.state.allThreads[threadId]
+		if (!thread) return
+		const plan = nextPlan(thread.plan, steps, madeInPlanMode, new Date().toISOString())
+		const newThreads: ChatThreads = { ...this.state.allThreads, [threadId]: { ...thread, plan } }
+		this._storeAllThreads(newThreads)
+		this._setState({ allThreads: newThreads })
+	}
+
+	/** Called when the user edits the plan: replaces the steps, sets editedAt, and keeps approvedAt. */
+	setPlanSteps(threadId: string, steps: PlanStep[]): void {
+		const thread = this.state.allThreads[threadId]
+		if (!thread?.plan) return
+		const now = new Date().toISOString()
+		const newThreads: ChatThreads = { ...this.state.allThreads, [threadId]: { ...thread, plan: { ...thread.plan, steps, updatedAt: now, editedAt: now } } }
+		this._storeAllThreads(newThreads)
+		this._setState({ allThreads: newThreads })
+	}
+
+	async approvePlan(threadId: string): Promise<void> {
+		const thread = this.state.allThreads[threadId]
+		if (!thread?.plan) return
+		const steps: PlanStep[] = thread.plan.steps.map((s, i) => ({ ...s, status: i === 0 ? 'current' : 'todo' }))
+		const plan = { ...thread.plan, steps, approvedAt: new Date().toISOString() }
+		const newThreads: ChatThreads = { ...this.state.allThreads, [threadId]: { ...thread, plan } }
+		this._storeAllThreads(newThreads)
+		this._setState({ allThreads: newThreads })
+		await selectBuiltInMode(this._settingsService, 'agent') // the approved run uses Agent, not a read-only custom mode
+		await this.addUserMessageAndStreamResponse({ userMessage: 'Approved. Carry out the plan.', threadId })
+	}
+
 	closeTab(threadId: string): void {
 		const { tabs, next } = closeTabOf(this.state.openTabIds, threadId, this.state.currentThreadId)
 		this._setState({ openTabIds: tabs })
@@ -1984,6 +2209,8 @@ We only need to do it for files that were edited since `from`, ie files between 
 			await this.abortRunning(threadId)
 		}
 		if (!this.state.allThreads[threadId]) return // deleted meanwhile
+		this._modeOverrides.delete(threadId)
+		this._runSeqs.delete(threadId)
 
 		// delete the thread
 		let newThreads: ChatThreads = { ...this.state.allThreads };
@@ -2006,14 +2233,15 @@ We only need to do it for files that were edited since `from`, ie files between 
 		this._changeOwnersService.releaseThread(threadId)
 	}
 
-	startBackgroundThread(agent: BackgroundAgentInfo, messages: ChatMessage[], prompt: string): string {
+	startBackgroundThread(agent: BackgroundAgentInfo, messages: ChatMessage[], prompt: string, opts?: { displayMessage?: string, modeOverride?: ChatMode }): string {
 		// the prompt goes in synchronously (no selections, so its content is the prompt itself), and the run starts in the same tick,
 		// so the thread never shows as idle without a message, and a delete right away finds the run to abort
-		const userMessage: ChatMessage = { role: 'user', content: prompt, displayContent: prompt, selections: [], state: defaultMessageState }
+		const userMessage: ChatMessage = { role: 'user', content: prompt, displayContent: opts?.displayMessage ?? prompt, selections: [], state: defaultMessageState }
 		const newThread: ThreadType = { ...newThreadObject(), agent, messages: [...messages, userMessage] }
 		const newThreads: ChatThreads = { ...this.state.allThreads, [newThread.id]: newThread }
 		this._storeAllThreads(newThreads)
 		this._setState({ allThreads: newThreads }) // the current (docked) thread stays as it is
+		if (opts?.modeOverride) this._modeOverrides.set(newThread.id, opts.modeOverride)
 		this._wrapRunAgentToNotify(this._runChatAgent({ threadId: newThread.id, ...this._currentModelSelectionProps() }), newThread.id)
 		return newThread.id
 	}

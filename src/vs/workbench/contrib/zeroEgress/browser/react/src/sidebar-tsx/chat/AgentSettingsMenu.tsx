@@ -7,37 +7,15 @@
 // full Settings page shows. Allowed commands are this workspace's list.
 
 import React, { useState } from 'react';
-import { Settings, X } from 'lucide-react';
+import { ChevronLeft, Pencil, Settings, X } from 'lucide-react';
 import { useAccessor, useCommandAllowList, useSettingsState } from '../../util/services.js';
 // no runtime imports from vs/ here: the bundle flattens this folder, so a relative path one level deeper breaks
-import { settingsForTerminalAutoRun, terminalAutoRunOf, ZERO_EGRESS_OPEN_SETTINGS_ACTION_ID } from '../composerDeps.js';
-import type { TerminalAutoRun } from '../composerDeps.js';
-import { MenuHeading, MenuRow, onRadioGroupKeyDown, Popover } from './Popover.js';
-
-const Segmented = <T extends string>({ label, value, options, onChange }: {
-	label: string;
-	value: T;
-	options: readonly { value: T; label: string }[];
-	onChange: (v: T) => void;
-}) => {
-	// one row for the menu's ↑/↓ (Popover); ←/→ change the selection, as in a radio group. No radio is a Tab stop:
-	// Tab leaves the menu
-	return <div role='radiogroup' aria-label={label} className='flex rounded-[6px] border border-ze-border-2 overflow-hidden shrink-0'
-		onKeyDown={e => onRadioGroupKeyDown(e, i => { if (options[i] && options[i].value !== value) { onChange(options[i].value); } })}
-	>
-		{options.map(o => <button
-			key={o.value}
-			type='button'
-			role='radio'
-			tabIndex={-1}
-			aria-checked={o.value === value}
-			className={`px-2 py-0.5 text-xs outline-none focus-visible:bg-[var(--vscode-list-hoverBackground)] ${o.value === value
-				? 'bg-[var(--vscode-list-inactiveSelectionBackground)] text-ze-fg-1'
-				: 'text-ze-fg-3 hover:text-ze-fg-1 hover:bg-[var(--vscode-list-hoverBackground)]'}`}
-			onClick={e => { e.stopPropagation(); onChange(o.value); }}
-		>{o.label}</button>)}
-	</div>;
-};
+import { contextPercent, contextWindowK, settingsForTerminalAutoRun, terminalAutoRunOf, ZERO_EGRESS_OPEN_SETTINGS_ACTION_ID } from '../composerDeps.js';
+import type { CustomMode, TerminalAutoRun } from '../composerDeps.js';
+import { CustomModeForm, iconOfCustomMode, useCustomModes } from './CustomModeForm.js';
+import { MenuHeading, MenuRow, Popover } from './Popover.js';
+import { useCompactBusy, useContextUse } from './ContextMeter.js';
+import { Segmented } from './Segmented.js';
 
 const SettingRow = ({ label, children }: { label: string; children: React.ReactNode }) => {
 	return <div className='flex items-center justify-between gap-2 px-2 py-1 text-sm text-ze-fg-1'>
@@ -53,19 +31,26 @@ const terminalOptions: readonly { value: TerminalAutoRun; label: string }[] = [
 ];
 const onOffOptions = [{ value: 'off', label: 'Off' }, { value: 'on', label: 'On' }] as const;
 
-export const AgentSettingsMenu = () => {
+export const AgentSettingsMenu = ({ threadId }: { threadId: string }) => {
+	const contextUse = useContextUse(threadId);
+	const busy = useCompactBusy(threadId);
 	const accessor = useAccessor();
 	const settingsService = accessor.get('IZeroEgressSettingsService');
 	const commandAllowListService = accessor.get('ICommandAllowListService');
 	const commandService = accessor.get('ICommandService');
+	const chatContext = accessor.get('IChatContextService');
 	const globalSettings = useSettingsState().globalSettings;
 	const allowed = useCommandAllowList();
 
 	const [anchor, setAnchor] = useState<HTMLButtonElement | null>(null);
 	const [open, setOpen] = useState(false);
 	const [showList, setShowList] = useState(false);
-	const close = () => { setOpen(false); setShowList(false); };
+	const customModes = useCustomModes();
+	// null = the settings, 'list' = the custom modes, otherwise the form (a mode, or 'new')
+	const [modesView, setModesView] = useState<null | 'list' | 'new' | CustomMode>(null);
+	const close = () => { setOpen(false); setShowList(false); setModesView(null); };
 
+	const hasFolder = chatContext.hasWorkspaceFolder();
 	const terminal = terminalAutoRunOf(globalSettings);
 	const setApprove = (key: 'edits' | 'MCP tools', on: boolean) => {
 		// keep the other keys of autoApprove, as the full Settings page does
@@ -91,7 +76,33 @@ export const AgentSettingsMenu = () => {
 				<Settings size={13} />
 			</button>
 		</span>
-		<Popover anchor={anchor} open={open} onClose={close} placement='top-end' className='w-72' label='Agent settings'>
+		<Popover anchor={anchor} open={open} onClose={close} placement='top-end' className='w-72' label='Agent settings' form={modesView !== null && modesView !== 'list'} initialFocus={modesView === null ? 'selected' : 'none'} maxHeight={640}>
+			{modesView === 'list' ? <>
+				<MenuRow onSelect={() => setModesView(null)}>
+					<ChevronLeft size={12} className='shrink-0 self-center' />
+					<span>Custom modes</span>
+				</MenuRow>
+				{customModes.map(m => {
+					const Icon = iconOfCustomMode(m.icon);
+					return <div key={m.id} className='flex items-center'>
+						<div className='flex-1 min-w-0 flex items-center gap-2 px-2 py-1 text-sm text-ze-fg-1'>
+							<Icon size={12} className='shrink-0' />
+							<span className='truncate'>{m.name}</span>
+						</div>
+						<button
+							type='button'
+							role='menuitem'
+							tabIndex={-1}
+							aria-label={`Edit ${m.name}`}
+							className='shrink-0 size-5 flex items-center justify-center rounded text-ze-fg-3 hover:text-ze-fg-1 hover:bg-[var(--vscode-list-hoverBackground)] focus:bg-[var(--vscode-list-hoverBackground)] outline-none'
+							onClick={e => { e.stopPropagation(); setModesView(m); }}
+						><Pencil size={11} /></button>
+					</div>;
+				})}
+				<MenuRow onSelect={() => setModesView('new')}>
+					<span>New custom mode…</span>
+				</MenuRow>
+			</> : modesView ? <CustomModeForm mode={modesView === 'new' ? null : modesView} onDone={() => setModesView('list')} /> : <>
 			<MenuHeading>Agent settings</MenuHeading>
 			<SettingRow label='Auto-run terminal'>
 				<Segmented label='Auto-run terminal' value={terminal} options={terminalOptions} onChange={setTerminal} />
@@ -121,9 +132,25 @@ export const AgentSettingsMenu = () => {
 						><X size={11} /></button>
 					</div>)}
 			</div> : null}
+			<MenuRow onSelect={() => setModesView('list')}>
+				<span>Custom modes</span>
+				<span className='ml-auto text-xs text-ze-fg-3'>{customModes.length} ›</span>
+			</MenuRow>
+			<MenuRow disabled={!hasFolder} onSelect={() => { close(); void chatContext.openProjectRules(); }}>
+				<span>Project rules</span>
+				<span className='ml-auto text-xs text-ze-fg-3'>{hasFolder ? '.zeroegressrules ›' : 'Open a folder first'}</span>
+			</MenuRow>
+			{contextUse ? <>
+				<MenuHeading>Context</MenuHeading>
+				<div className='px-2 py-1 text-sm text-ze-fg-1'>{contextUse.estimated ? '≈' : ''}{contextPercent(contextUse)}% of {contextWindowK(contextUse)}k used</div>
+				<MenuRow disabled={busy.disabled} onSelect={() => { close(); void accessor.get('IChatThreadService').compactThread(threadId); }}>
+					<span>{busy.compacting ? 'Compacting…' : 'Compact'}</span>
+				</MenuRow>
+			</> : null}
 			<MenuRow onSelect={() => { close(); commandService.executeCommand(ZERO_EGRESS_OPEN_SETTINGS_ACTION_ID); }}>
 				<span>All settings…</span>
 			</MenuRow>
+			</>}
 		</Popover>
 	</>;
 };

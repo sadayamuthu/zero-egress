@@ -10,7 +10,7 @@
 // selected radio; ←/→ inside a group are the group's own. It renders in place, not in a portal, so it stays inside the
 // panel's style scope.
 
-import React, { useEffect, useRef } from 'react';
+import React, { useCallback, useEffect, useRef } from 'react';
 import { autoUpdate, flip, offset, shift, size, useFloating } from '@floating-ui/react';
 import type { Placement } from '@floating-ui/react';
 
@@ -99,7 +99,7 @@ export const MenuHeading = ({ children }: { children: React.ReactNode }) => {
 	return <div className='px-2 pt-1.5 pb-0.5 text-[10px] uppercase tracking-wider text-ze-fg-3 select-none'>{children}</div>;
 };
 
-export const Popover = ({ anchor, open, onClose, children, placement = 'top-start', className = '', label, initialFocus = 'selected', flush = false, maxHeight = 420 }: {
+export const Popover = ({ anchor, open, onClose, children, placement = 'top-start', className = '', label, initialFocus = 'selected', flush = false, maxHeight = 420, form = false }: {
 	anchor: HTMLElement | null;
 	open: boolean;
 	onClose: () => void;
@@ -114,6 +114,8 @@ export const Popover = ({ anchor, open, onClose, children, placement = 'top-star
 	flush?: boolean;
 	/** the tallest the panel gets, in px; less when the window has less room */
 	maxHeight?: number;
+	/** the content is a form: Tab and the arrow keys belong to its fields (Escape still closes) */
+	form?: boolean;
 }) => {
 	const { refs, floatingStyles } = useFloating({
 		open,
@@ -135,6 +137,10 @@ export const Popover = ({ anchor, open, onClose, children, placement = 'top-star
 	});
 
 	const panelRef = useRef<HTMLDivElement | null>(null);
+	// a stable ref callback: an inline one is detached (null) and re-attached on every render, and a child's autoFocus
+	// firing in that window would see no panel and close the menu
+	const setFloating = refs.setFloating;
+	const setPanel = useCallback((el: HTMLDivElement | null) => { panelRef.current = el; setFloating(el); }, [setFloating]);
 	const onCloseRef = useRef(onClose);
 	onCloseRef.current = onClose;
 
@@ -154,7 +160,8 @@ export const Popover = ({ anchor, open, onClose, children, placement = 'top-star
 		// without a menu to close
 		const onFocusIn = (e: FocusEvent) => {
 			const target = e.target as Node | null;
-			if (!target || panelRef.current?.contains(target) || anchor?.contains(target)) {
+			// no panel right now (between a ref detach and attach): nothing to judge focus against
+			if (!target || !panelRef.current || panelRef.current.contains(target) || anchor?.contains(target)) {
 				return;
 			}
 			onCloseRef.current();
@@ -190,6 +197,9 @@ export const Popover = ({ anchor, open, onClose, children, placement = 'top-star
 			e.preventDefault();
 			e.stopPropagation();
 			close();
+			return;
+		}
+		if (form && e.key !== 'Escape') {
 			return;
 		}
 		if (e.key === 'Tab') {
@@ -231,8 +241,8 @@ export const Popover = ({ anchor, open, onClose, children, placement = 'top-star
 	};
 
 	return <div
-		ref={el => { panelRef.current = el; refs.setFloating(el); }}
-		role='menu'
+		ref={setPanel}
+		role={form ? 'dialog' : 'menu'}
 		aria-label={label}
 		tabIndex={-1}
 		style={floatingStyles}

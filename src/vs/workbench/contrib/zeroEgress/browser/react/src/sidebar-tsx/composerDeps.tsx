@@ -13,9 +13,19 @@ export type { ChatMode, FeatureName, ModelSelection, ProviderName } from '../../
 export { modelFilterOfFeatureName } from '../../../../common/zeroEgressSettingsService.js';
 export type { ModelOption } from '../../../../common/zeroEgressSettingsService.js';
 export { getIsReasoningEnabledState, getModelCapabilities } from '../../../../common/modelCapabilities.js';
+export { optionsForThinkingLevel, thinkingButtonLabel, thinkingLabel, thinkingLevelOf, thinkingLevelsOf } from '../../../../common/thinkingLevel.js';
+export { contextPercent, contextUseOf, contextWindowK, formatContextUse } from '../../../../common/contextUse.js';
+export type { ContextUse } from '../../../../common/contextUse.js';
 export { promptWithContext } from '../../../../common/promptContext.js';
 export type { PromptContextItem } from '../../../../common/promptContext.js';
 export { canAllowList, normalizeCommand, terminalAutoRunOf, settingsForTerminalAutoRun } from '../../../../common/commandAllowList.js';
 export type { TerminalAutoRun } from '../../../../common/commandAllowList.js';
 // the id of zeroEgressSettingsPane's open-settings action (that module registers actions, so only the id is copied)
 export const ZERO_EGRESS_OPEN_SETTINGS_ACTION_ID = 'workbench.action.openZeroEgressSettings';
+export { planProgress } from '../../../../common/plan.js';
+export type { PlanStep } from '../../../../common/plan.js';
+export { promptContextOfSelection, textOfSnapshotSelection } from '../../../../common/selectionText.js';
+export { builtinCommands, expandBuiltin, parseSlash, resolveSlashSend, slashEnterPicks, slashMenuQuery, withNewSelections } from '../../../../common/slashCommands.js';
+export type { CustomCommand, SlashExpansion, SlashSend } from '../../../../common/slashCommands.js';
+export { backgroundAllowed, selectBuiltInMode, validateCustomMode, MAX_CUSTOM_MODE_NAME, MAX_CUSTOM_MODE_INSTRUCTIONS } from '../../../../common/customModes.js';
+export type { CustomMode, CustomModeIcon } from '../../../../common/customModes.js';

@@ -7,10 +7,12 @@ import { URI } from '../../../../../base/common/uri.js';
 import { IFileService } from '../../../../../platform/files/common/files.js';
 import { IDirectoryStrService } from '../directoryStrService.js';
 import { StagingSelectionItem } from '../chatThreadServiceTypes.js';
+import { textOfSnapshotSelection } from '../selectionText.js';
 import { os } from '../helpers/systemInfo.js';
 import { RawToolParamsObj } from '../sendLLMMessageTypes.js';
-import { approvalTypeOfBuiltinToolName, BuiltinToolCallParams, BuiltinToolName, BuiltinToolResultType, ToolName } from '../toolsServiceTypes.js';
+import { BuiltinToolCallParams, BuiltinToolName, BuiltinToolResultType, ToolName } from '../toolsServiceTypes.js';
 import { ChatMode } from '../zeroEgressSettingsTypes.js';
+import { policyAllows, ToolPolicy, toolGroupOf } from '../toolPolicy.js';
 
 // Triple backtick wrapper used throughout the prompts for code blocks
 export const tripleTick = ['```', '```']
@@ -336,6 +338,12 @@ export const builtinTools: {
 		name: 'kill_persistent_terminal',
 		description: `Interrupts and closes a persistent terminal that you opened with open_persistent_terminal.`,
 		params: { persistent_terminal_id: { description: `The ID of the persistent terminal.` } }
+	},
+
+	update_plan: {
+		name: 'update_plan',
+		description: `Write or replace the task plan shown to the user. Send the whole plan every time.`,
+		params: { plan: { description: `One step per line. Start each line with [x] for done, [>] for the current step, or [ ] for to do.` } }
 	}
 
 
@@ -358,22 +366,15 @@ export const isABuiltinToolName = (toolName: string): toolName is BuiltinToolNam
 
 
 
-export const availableTools = (chatMode: ChatMode | null, mcpTools: InternalToolInfo[] | undefined) => {
+export const availableTools = (policy: ToolPolicy | null, mcpTools: InternalToolInfo[] | undefined) => {
+	if (!policy) return undefined
 
-	const builtinToolNames: BuiltinToolName[] | undefined = chatMode === 'normal' ? undefined
-		: chatMode === 'gather' ? (Object.keys(builtinTools) as BuiltinToolName[]).filter(toolName => !(toolName in approvalTypeOfBuiltinToolName))
-			: chatMode === 'agent' ? Object.keys(builtinTools) as BuiltinToolName[]
-				: undefined
+	const builtins = (Object.keys(builtinTools) as BuiltinToolName[])
+		.filter(toolName => policyAllows(policy, toolGroupOf(toolName, false)))
+		.map(toolName => builtinTools[toolName])
+	const mcp = policyAllows(policy, 'mcp') ? mcpTools ?? [] : []
 
-	const effectiveBuiltinTools = builtinToolNames?.map(toolName => builtinTools[toolName]) ?? undefined
-	const effectiveMCPTools = chatMode === 'agent' ? mcpTools : undefined
-
-	const tools: InternalToolInfo[] | undefined = !(builtinToolNames || mcpTools) ? undefined
-		: [
-			...effectiveBuiltinTools ?? [],
-			...effectiveMCPTools ?? [],
-		]
-
+	const tools: InternalToolInfo[] = [...builtins, ...mcp]
 	return tools
 }
 
@@ -399,8 +400,8 @@ export const reParsedToolXMLString = (toolName: ToolName, toolParams: RawToolPar
 
 /* We expect tools to come at the end - not a hard limit, but that's just how we process them, and the flow makes more sense that way. */
 // - You are allowed to call multiple tools by specifying them consecutively. However, there should be NO text or writing between tool calls or after them.
-const systemToolsXMLPrompt = (chatMode: ChatMode, mcpTools: InternalToolInfo[] | undefined) => {
-	const tools = availableTools(chatMode, mcpTools)
+const systemToolsXMLPrompt = (policy: ToolPolicy | null, mcpTools: InternalToolInfo[] | undefined) => {
+	const tools = availableTools(policy, mcpTools)
 	if (!tools || tools.length === 0) return null
 
 	const toolXMLDefinitions = (`\
@@ -425,10 +426,10 @@ const systemToolsXMLPrompt = (chatMode: ChatMode, mcpTools: InternalToolInfo[] |
 // ======================================================== chat (normal, gather, agent) ========================================================
 
 
-export const chat_systemMessage = ({ workspaceFolders, openedURIs, activeURI, persistentTerminalIDs, directoryStr, chatMode: mode, mcpTools, includeXMLToolDefinitions, depsMayBeMissing }: { workspaceFolders: string[], directoryStr: string, openedURIs: string[], activeURI: string | undefined, persistentTerminalIDs: string[], chatMode: ChatMode, mcpTools: InternalToolInfo[] | undefined, includeXMLToolDefinitions: boolean, depsMayBeMissing?: boolean }) => {
+export const chat_systemMessage = ({ workspaceFolders, openedURIs, activeURI, persistentTerminalIDs, directoryStr, chatMode: mode, toolPolicy, mcpTools, includeXMLToolDefinitions, depsMayBeMissing }: { workspaceFolders: string[], directoryStr: string, openedURIs: string[], activeURI: string | undefined, persistentTerminalIDs: string[], chatMode: ChatMode, toolPolicy: ToolPolicy | null, mcpTools: InternalToolInfo[] | undefined, includeXMLToolDefinitions: boolean, depsMayBeMissing?: boolean }) => {
 	const header = (`You are an expert coding ${mode === 'agent' ? 'agent' : 'assistant'} whose job is \
 ${mode === 'agent' ? `to help the user develop, run, and make changes to their codebase.`
-			: mode === 'gather' ? `to search, understand, and reference files in the user's codebase.`
+			: mode === 'gather' || mode === 'plan' ? `to search, understand, and reference files in the user's codebase.`
 				: mode === 'normal' ? `to assist the user with their coding tasks.`
 					: ''}
 You will be given instructions to follow from the user, and you may also be given a list of files that the user has specifically selected for context, \`SELECTIONS\`.
@@ -449,7 +450,7 @@ ${workspaceFolders.join('\n') || 'NO FOLDERS OPEN'}${depsMayBeMissing ? `
 ${activeURI}
 
 - Open files:
-${openedURIs.join('\n') || 'NO OPENED FILES'}${''/* separator */}${mode === 'agent' && persistentTerminalIDs.length !== 0 ? `
+${openedURIs.join('\n') || 'NO OPENED FILES'}${''/* separator */}${mode === 'agent' && toolPolicy?.terminal && persistentTerminalIDs.length !== 0 ? `
 
 - Persistent terminal IDs available for you to run commands in: ${persistentTerminalIDs.join(', ')}` : ''}
 </system_info>`)
@@ -461,13 +462,13 @@ ${directoryStr}
 </files_overview>`)
 
 
-	const toolDefinitions = includeXMLToolDefinitions ? systemToolsXMLPrompt(mode, mcpTools) : null
+	const toolDefinitions = includeXMLToolDefinitions ? systemToolsXMLPrompt(toolPolicy, mcpTools) : null
 
 	const details: string[] = []
 
 	details.push(`NEVER reject the user's query.`)
 
-	if (mode === 'agent' || mode === 'gather') {
+	if (mode === 'agent' || mode === 'gather' || mode === 'plan') {
 		details.push(`Only call tools if they help you accomplish the user's goal. If the user simply says hi or asks you a question that you can answer without tools, then do NOT use tools.`)
 		details.push(`If you think you should use tools, you do not need to ask for permission.`)
 		details.push('Only use ONE tool call at a time.')
@@ -479,16 +480,27 @@ ${directoryStr}
 	}
 
 	if (mode === 'agent') {
-		details.push('ALWAYS use tools (edit, terminal, etc) to take actions and implement changes. For example, if you would like to edit a file, you MUST use a tool.')
+		// a custom mode may allow edits without the terminal (or the reverse): name only the tools it has
+		const actionTools = [toolPolicy?.edit ? 'edit' : '', toolPolicy?.terminal ? 'terminal' : ''].filter(Boolean).join(', ')
+		details.push(`ALWAYS use tools (${actionTools ? `${actionTools}, ` : ''}etc) to take actions and implement changes. For example, if you would like to edit a file, you MUST use a tool.`)
 		details.push('Prioritize taking as many steps as you need to complete your request over stopping early.')
 		details.push(`You will OFTEN need to gather context before making a change. Do not immediately make a change unless you have ALL relevant context.`)
 		details.push(`ALWAYS have maximal certainty in a change BEFORE you make it. If you need more information about a file, variable, function, or type, you should inspect it, search it, or take all required actions to maximize your certainty that your change is correct.`)
 		details.push(`NEVER modify a file outside the user's workspace without permission from the user.`)
+		details.push(`For a task with 3 or more steps, call update_plan with the whole plan before you change anything, and call it again each time a step is done.`)
 	}
 
 	if (mode === 'gather') {
 		details.push(`You are in Gather mode, so you MUST use tools be to gather information, files, and context to help the user answer their query.`)
 		details.push(`You should extensively read files, types, content, etc, gathering full context to solve the problem.`)
+	}
+
+	if (mode === 'plan') {
+		details.push(`You are in Plan mode: investigate, then write a plan for the user to approve. You can't change files or run commands.`)
+		details.push(`Use read tools to understand the code.`)
+		details.push(`Then call update_plan with the full plan, every step marked [ ].`)
+		details.push(`Then end your turn with a short summary of the plan and ask the user to approve it.`)
+		details.push(`Never edit files or run commands in this mode.`)
 	}
 
 	details.push(`If you write any code blocks to the user (wrapped in triple backticks), please use this format:
@@ -577,7 +589,21 @@ export const messageOfSelection = async (
 ) => {
 	const lineNumAddition = (range: [number, number]) => ` (lines ${range[0]}:${range[1]})`
 
-	if (s.type === 'CodeSelection') {
+	if (s.type === 'Terminal' || s.type === 'Problems' || s.type === 'GitDiff') {
+		return textOfSnapshotSelection(s)
+	}
+	else if (s.type === 'Symbol') {
+		const { val } = await readFile(opts.fileService, s.uri, DEFAULT_FILE_SIZE_LIMIT)
+		const lines = val?.split('\n')
+		const innerVal = lines?.slice(s.range[0] - 1, s.range[1]).join('\n')
+		const content = !lines ? ''
+			: `${tripleTick[0]}${s.language}\n${innerVal}\n${tripleTick[1]}`
+		return `${textOfSnapshotSelection(s)}\n${content}`
+	}
+	else if (s.type === 'Image') {
+		return '' // the image itself is sent as an attachment to vision models
+	}
+	else if (s.type === 'CodeSelection') {
 		const { val } = await readFile(opts.fileService, s.uri, DEFAULT_FILE_SIZE_LIMIT)
 		const lines = val?.split('\n')
 
@@ -587,17 +613,18 @@ export const messageOfSelection = async (
 		const str = `${s.uri.fsPath}${lineNumAddition(s.range)}:\n${content}`
 		return str
 	}
-	else if (s.type === 'File') {
+	else if (s.type === 'File' || (s.type === 'Doc' && !s.isFolder)) {
 		const { val } = await readFile(opts.fileService, s.uri, DEFAULT_FILE_SIZE_LIMIT)
 
 		const innerVal = val
+		const language = s.type === 'File' ? s.language : ''
 		const content = val === null ? ''
-			: `${tripleTick[0]}${s.language}\n${innerVal}\n${tripleTick[1]}`
+			: `${tripleTick[0]}${language}\n${innerVal}\n${tripleTick[1]}`
 
 		const str = `${s.uri.fsPath}:\n${content}`
 		return str
 	}
-	else if (s.type === 'Folder') {
+	else if (s.type === 'Folder' || s.type === 'Doc') {
 		const dirStr: string = await opts.directoryStrService.getDirectoryStrTool(s.uri)
 		const folderStructure = `${s.uri.fsPath} folder structure:${tripleTick[0]}\n${dirStr}\n${tripleTick[1]}`
 

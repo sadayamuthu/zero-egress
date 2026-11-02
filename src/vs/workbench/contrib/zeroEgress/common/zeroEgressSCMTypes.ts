@@ -31,6 +31,19 @@ export interface IZeroEgressSCMService {
 	 * @param path Path to the git repository
 	 */
 	gitLog(path: string): Promise<string>
+	/**
+	 * Get the diff (capped in the main process) of the working tree against a branch (or HEAD when null)
+	 *
+	 * @param path Path to the git repository
+	 * @param against Branch name, or null for HEAD
+	 */
+	gitDiff(path: string, against: string | null): Promise<{ text: string; truncated: boolean }>
+	/**
+	 * Get the local branch names
+	 *
+	 * @param path Path to the git repository
+	 */
+	gitBranches(path: string): Promise<string[]>
 }
 
 export const IZeroEgressSCMService = createDecorator<IZeroEgressSCMService>('zeroEgressSCMService')

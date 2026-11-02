@@ -7,6 +7,8 @@ import { InternalToolInfo } from './prompt/prompts.js'
 import { ToolName, ToolParamName } from './toolsServiceTypes.js'
 import { ChatMode, ModelSelection, ModelSelectionOptions, OverridesOfModel, ProviderName, RefreshableProviderName, SettingsOfProvider } from './zeroEgressSettingsTypes.js'
 import { AuditWorkspace } from './auditTypes.js'
+import { TokenUsage } from './tokenUsage.js'
+import { ToolPolicy } from './toolPolicy.js'
 
 
 export const errorDetails = (fullError: Error | null): string | null => {
@@ -41,9 +43,13 @@ export type AnthropicLLMChatMessage = {
 		{ type: 'text'; text: string; } | { type: 'tool_result'; tool_use_id: string; content: string; }
 	)[]
 }
+export type OpenAIUserPart = { type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } }
 export type OpenAILLMChatMessage = {
-	role: 'system' | 'user' | 'developer';
+	role: 'system' | 'developer';
 	content: string;
+} | {
+	role: 'user';
+	content: string | OpenAIUserPart[];
 } | {
 	role: 'assistant',
 	content: string | (AnthropicReasoning | { type: 'text'; text: string })[];
@@ -93,7 +99,7 @@ export type RawToolCallObj = {
 export type AnthropicReasoning = ({ type: 'thinking'; thinking: any; signature: string; } | { type: 'redacted_thinking', data: any })
 
 export type OnText = (p: { fullText: string; fullReasoning: string; toolCall?: RawToolCallObj }) => void
-export type OnFinalMessage = (p: { fullText: string; fullReasoning: string; toolCall?: RawToolCallObj; anthropicReasoning: AnthropicReasoning[] | null }) => void // id is tool_use_id
+export type OnFinalMessage = (p: { fullText: string; fullReasoning: string; toolCall?: RawToolCallObj; anthropicReasoning: AnthropicReasoning[] | null; usage?: TokenUsage }) => void // id is tool_use_id
 export type OnError = (p: { message: string; fullError: Error | null }) => void
 export type OnAbort = () => void
 export type AbortRef = { current: (() => void) | null }
@@ -104,12 +110,15 @@ type SendLLMType = {
 	messagesType: 'chatMessages';
 	messages: LLMChatMessage[]; // the type of raw chat messages that we send to Anthropic, OAI, etc
 	separateSystemMessage: string | undefined;
+	// for prompts, audit and logging only; tool gating uses `toolPolicy`
 	chatMode: ChatMode | null;
+	toolPolicy: ToolPolicy | null;
 } | {
 	messagesType: 'FIMMessage';
 	messages: LLMFIMMessage;
 	separateSystemMessage?: undefined;
 	chatMode?: undefined;
+	toolPolicy?: undefined;
 }
 export type ServiceSendLLMMessageParams = {
 	onText: OnText;

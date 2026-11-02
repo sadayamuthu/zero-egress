@@ -53,6 +53,7 @@ export type ZeroEgressStaticModelInfo = { // not stateful
 	supportsSystemMessage: false | 'system-role' | 'developer-role' | 'separated'; // typically you should use 'system-role'. 'separated' means the system message is passed as a separate field (e.g. anthropic)
 	specialToolFormat?: 'openai-style' | 'anthropic-style' | 'gemini-style', // typically you should use 'openai-style'. null means "can't call tools by default", and asks the LLM to output XML in agent mode
 	supportsFIM: boolean; // whether the model was specifically designed for autocomplete or "FIM" ("fill-in-middle" format)
+	supportsVision?: boolean; // whether the model can read images (sent as image_url content parts)
 
 	additionalOpenAIPayload?: { [key: string]: string } // additional payload in the message body for requests that are openai-compatible (ollama, vllm, openai, openrouter, etc)
 
@@ -95,6 +96,7 @@ export const modelOverrideKeys = [
 	'supportsSystemMessage',
 	'specialToolFormat',
 	'supportsFIM',
+	'supportsVision',
 	'reasoningCapabilities',
 	'additionalOpenAIPayload'
 ] as const
@@ -248,6 +250,12 @@ const openSourceModelOptions_assumingOAICompat = {
 		reasoningCapabilities: { supportsReasoning: true, canTurnOffReasoning: true, canIOReasoning: true, openSourceThinkTags: ['<think>', '</think>'] },
 		contextWindow: 32_768, reservedOutputTokenSpace: 8_192,
 	},
+	'gpt-oss': {
+		supportsFIM: false,
+		supportsSystemMessage: 'system-role',
+		reasoningCapabilities: { supportsReasoning: true, canTurnOffReasoning: false, canIOReasoning: true, reasoningSlider: { type: 'effort_slider', values: ['low', 'medium', 'high'], default: 'medium' } },
+		contextWindow: 128_000, reservedOutputTokenSpace: 8_192,
+	},
 	// FIM only
 	'starcoder2': {
 		supportsFIM: true,
@@ -274,6 +282,14 @@ const openSourceModelOptions_assumingOAICompat = {
 
 
 
+// Ollama-style model names of the families that can read images
+export const isVisionModelName = (modelName: string): boolean => {
+	const lower = modelName.toLowerCase()
+	if (lower === 'gemma3:1b' || lower.startsWith('gemma3:1b-') || lower.startsWith('gemma3:270m') || lower.startsWith('gemma3n')) return false // the small gemma3 sizes and gemma3n are text-only here
+	return ['llava', 'llama3.2-vision', 'qwen2.5vl', 'minicpm-v', 'mistral-small3.1', 'gemma3']
+		.some(prefix => lower.startsWith(prefix) || lower.includes('/' + prefix))
+}
+
 // keep modelName, but use the fallback's defaults
 const extensiveModelOptionsFallback: ZeroEgressStaticProviderInfo['modelOptionsFallback'] = (modelName, fallbackKnownValues) => {
 
@@ -294,10 +310,12 @@ const extensiveModelOptionsFallback: ZeroEgressStaticProviderInfo['modelOptionsF
 			supportsSystemMessage: supportsSystemMessage,
 			cost: { input: 0, output: 0 },
 			downloadable: false,
+			...(isVisionModelName(modelName) ? { supportsVision: true } : {}),
 			...fallbackKnownValues
 		};
 	}
 
+	if (lower.includes('gpt-oss')) return toFallback(openSourceModelOptions_assumingOAICompat, 'gpt-oss')
 	if (lower.includes('deepseek-r1') || lower.includes('deepseek-reasoner')) return toFallback(openSourceModelOptions_assumingOAICompat, 'deepseekR1')
 	if (lower.includes('deepseek') && lower.includes('v2')) return toFallback(openSourceModelOptions_assumingOAICompat, 'deepseekCoderV2')
 	if (lower.includes('deepseek')) return toFallback(openSourceModelOptions_assumingOAICompat, 'deepseekCoderV3')
@@ -412,6 +430,15 @@ const ollamaModelOptions = {
 		supportsSystemMessage: 'system-role',
 		reasoningCapabilities: { supportsReasoning: true, canIOReasoning: false, canTurnOffReasoning: false, openSourceThinkTags: ['<think>', '</think>'] },
 	},
+	'gpt-oss:20b': {
+		contextWindow: 128_000,
+		reservedOutputTokenSpace: 8_192,
+		cost: { input: 0, output: 0 },
+		downloadable: { sizeGb: 14 },
+		supportsFIM: false,
+		supportsSystemMessage: 'system-role',
+		reasoningCapabilities: { supportsReasoning: true, canTurnOffReasoning: false, canIOReasoning: true, reasoningSlider: { type: 'effort_slider', values: ['low', 'medium', 'high'], default: 'medium' } },
+	},
 	'devstral:latest': {
 		contextWindow: 131_000,
 		reservedOutputTokenSpace: 8_192,
@@ -459,9 +486,10 @@ const ollamaSettings: ZeroEgressStaticProviderInfo = {
 	modelOptionsFallback: (modelName) => extensiveModelOptionsFallback(modelName, { downloadable: { sizeGb: 'not-known' } }),
 	modelOptions: ollamaModelOptions,
 	providerReasoningIOSettings: {
-		// reasoning: we need to filter out reasoning <think> tags manually
+		// reasoning: Ollama's /v1 streams it in delta.reasoning (verified on qwen3:0.6b). The <think>-tag parser can't run
+		// alongside: its wrapper replaces fullReasoning, which would drop the delta text.
 		input: { includeInPayload: openAICompatIncludeInPayloadReasoning },
-		output: { needsManualParse: true },
+		output: { nameOfFieldInDelta: 'reasoning' },
 	},
 }
 
@@ -507,7 +535,7 @@ export const getModelCapabilities = (
 		return { ...result, ...overrides, modelName: result.modelName, isUnrecognizedModel: false };
 	}
 
-	return { modelName, ...defaultModelOptions, ...overrides, isUnrecognizedModel: true };
+	return { modelName, ...defaultModelOptions, ...(isVisionModelName(modelName) ? { supportsVision: true } : {}), ...overrides, isUnrecognizedModel: true };
 }
 
 // non-model settings

@@ -10,9 +10,12 @@ import OpenAI, { ClientOptions } from 'openai';
 /* eslint-enable */
 
 import { LLMChatMessage, LLMFIMMessage, ModelListParams, OllamaModelResponse, OnError, OnFinalMessage, OnText, RawToolCallObj, RawToolParamsObj } from '../../common/sendLLMMessageTypes.js';
-import { ChatMode, displayInfoOfProviderName, ModelSelectionOptions, OverridesOfModel, ProviderName, SettingsOfProvider } from '../../common/zeroEgressSettingsTypes.js';
-import { getSendableReasoningInfo, getModelCapabilities, getProviderCapabilities, defaultProviderSettings } from '../../common/modelCapabilities.js';
+import { displayInfoOfProviderName, ModelSelectionOptions, OverridesOfModel, ProviderName, SettingsOfProvider } from '../../common/zeroEgressSettingsTypes.js';
+import { getModelCapabilities, getProviderCapabilities, defaultProviderSettings } from '../../common/modelCapabilities.js';
+import { reasoningBodyOf } from '../../common/thinkingLevel.js';
+import { TokenUsage, usageOfChunk } from '../../common/tokenUsage.js';
 import { extractReasoningWrapper, extractXMLToolsWrapper } from './extractGrammar.js';
+import { ToolPolicy } from '../../common/toolPolicy.js';
 import { availableTools, InternalToolInfo } from '../../common/prompt/prompts.js';
 
 type InternalCommonMessageParams = {
@@ -30,7 +33,7 @@ type InternalCommonMessageParams = {
 type SendChatParams_Internal = InternalCommonMessageParams & {
 	messages: LLMChatMessage[];
 	separateSystemMessage: string | undefined;
-	chatMode: ChatMode | null;
+	toolPolicy: ToolPolicy | null;
 	mcpTools: InternalToolInfo[] | undefined;
 }
 type SendFIMParams_Internal = InternalCommonMessageParams & { messages: LLMFIMMessage; separateSystemMessage: string | undefined; }
@@ -133,8 +136,8 @@ const toOpenAICompatibleTool = (toolInfo: InternalToolInfo) => {
 	} satisfies OpenAI.Chat.Completions.ChatCompletionTool
 }
 
-const openAITools = (chatMode: ChatMode | null, mcpTools: InternalToolInfo[] | undefined) => {
-	const allowedTools = availableTools(chatMode, mcpTools)
+const openAITools = (toolPolicy: ToolPolicy | null, mcpTools: InternalToolInfo[] | undefined) => {
+	const allowedTools = availableTools(toolPolicy, mcpTools)
 	if (!allowedTools || Object.keys(allowedTools).length === 0) return null
 
 	const openAITools: OpenAI.Chat.Completions.ChatCompletionTool[] = []
@@ -161,39 +164,43 @@ const rawToolCallObjOfParamsStr = (name: string, toolParamsStr: string, id: stri
 
 // ------------ OPENAI-COMPATIBLE ------------
 
+// providers whose server rejected `stream_options`; we stop sending it for the rest of the session
+const providersWithoutStreamUsage = new Set<ProviderName>()
+const isStreamOptionsRejection = (error: unknown) =>
+	error instanceof OpenAI.APIError && error.status === 400 && /stream_options/i.test(error.message ?? '')
 
-const _sendOpenAICompatibleChat = async ({ messages, onText, onFinalMessage, onError, settingsOfProvider, modelSelectionOptions, modelName: modelName_, _setAborter, providerName, chatMode, separateSystemMessage, overridesOfModel, mcpTools }: SendChatParams_Internal) => {
+
+const _sendOpenAICompatibleChat = async ({ messages, onText, onFinalMessage, onError, settingsOfProvider, modelSelectionOptions, modelName: modelName_, _setAborter, providerName, toolPolicy, separateSystemMessage, overridesOfModel, mcpTools }: SendChatParams_Internal) => {
+	const capabilities = getModelCapabilities(providerName, modelName_, overridesOfModel) // user's modelName_ here
 	const {
 		modelName,
 		specialToolFormat,
 		reasoningCapabilities,
 		additionalOpenAIPayload,
-	} = getModelCapabilities(providerName, modelName_, overridesOfModel)
+	} = capabilities
 
 	const { providerReasoningIOSettings } = getProviderCapabilities(providerName)
 
 	// reasoning
 	const { canIOReasoning, openSourceThinkTags } = reasoningCapabilities || {}
-	const reasoningInfo = getSendableReasoningInfo('Chat', providerName, modelName_, modelSelectionOptions, overridesOfModel) // user's modelName_ here
-
-	const includeInPayload = {
-		...providerReasoningIOSettings?.input?.includeInPayload?.(reasoningInfo),
-		...additionalOpenAIPayload
-	}
+	// the thinking level goes in the request body (not the client options)
+	const reasoningBody = reasoningBodyOf(providerName, capabilities, modelSelectionOptions)
 
 	// tools
-	const potentialTools = openAITools(chatMode, mcpTools)
+	const potentialTools = openAITools(toolPolicy, mcpTools)
 	const nativeToolsObj = potentialTools && specialToolFormat === 'openai-style' ?
 		{ tools: potentialTools } as const
 		: {}
 
 	// instance
-	const openai: OpenAI = await newOpenAICompatibleSDK({ providerName, settingsOfProvider, includeInPayload })
+	const openai: OpenAI = await newOpenAICompatibleSDK({ providerName, settingsOfProvider })
 	const options: OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming = {
 		model: modelName,
 		messages: messages as any,
 		stream: true,
+		...(providersWithoutStreamUsage.has(providerName) ? {} : { stream_options: { include_usage: true } }),
 		...nativeToolsObj,
+		...reasoningBody,
 		...additionalOpenAIPayload
 		// max_completion_tokens: maxTokens,
 	}
@@ -209,7 +216,7 @@ const _sendOpenAICompatibleChat = async ({ messages, onText, onFinalMessage, onE
 
 	// manually parse out tool results if XML
 	if (!specialToolFormat) {
-		const { newOnText, newOnFinalMessage } = extractXMLToolsWrapper(onText, onFinalMessage, chatMode, mcpTools)
+		const { newOnText, newOnFinalMessage } = extractXMLToolsWrapper(onText, onFinalMessage, toolPolicy, mcpTools)
 		onText = newOnText
 		onFinalMessage = newOnFinalMessage
 	}
@@ -220,13 +227,27 @@ const _sendOpenAICompatibleChat = async ({ messages, onText, onFinalMessage, onE
 	let toolName = ''
 	let toolId = ''
 	let toolParamsStr = ''
+	let usage: TokenUsage | undefined
 
-	openai.chat.completions
-		.create(options)
+	const createStream = async () => {
+		try { return await openai.chat.completions.create(options) }
+		catch (error) {
+			if (!options.stream_options || !isStreamOptionsRejection(error)) throw error
+			providersWithoutStreamUsage.add(providerName)
+			delete options.stream_options
+			return await openai.chat.completions.create(options)
+		}
+	}
+
+	createStream()
 		.then(async response => {
 			_setAborter(() => response.controller.abort())
 			// when receive text
 			for await (const chunk of response) {
+				// token counts arrive on the last chunk, which has `choices: []`
+				usage = usageOfChunk(chunk) ?? usage
+				if (!chunk.choices?.[0]) continue
+
 				// message
 				const newText = chunk.choices[0]?.delta?.content ?? ''
 				fullTextSoFar += newText
@@ -265,7 +286,7 @@ const _sendOpenAICompatibleChat = async ({ messages, onText, onFinalMessage, onE
 			else {
 				const toolCall = rawToolCallObjOfParamsStr(toolName, toolParamsStr, toolId)
 				const toolCallObj = toolCall ? { toolCall } : {}
-				onFinalMessage({ fullText: fullTextSoFar, fullReasoning: fullReasoningSoFar, anthropicReasoning: null, ...toolCallObj });
+				onFinalMessage({ fullText: fullTextSoFar, fullReasoning: fullReasoningSoFar, anthropicReasoning: null, ...(usage ? { usage } : {}), ...toolCallObj });
 			}
 		})
 		// when error/fail - this catches errors of both .create() and .then(for await)

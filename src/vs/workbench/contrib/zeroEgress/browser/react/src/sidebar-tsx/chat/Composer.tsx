@@ -7,20 +7,25 @@
 // the text area (@ mentions a file), then a row with the mode and model menus, a slot for the context meter, ⚙ and
 // Send/Stop. ⏎ sends; ⌘⏎ with an empty box accepts this chat's changes only; Escape stops a running chat.
 // "Run in: Background" on an empty docked chat makes Send start a background agent with the prompt instead.
+// A / command (the menu opens on a lone "/word") expands to its prompt before anything is sent; in the background
+// path that prompt and its staged context are what the agent gets (modes do not apply there, and /compact does nothing).
 
 import React, { KeyboardEvent, useCallback, useEffect, useState } from 'react';
-import { useAccessor, useChatThreadsState, useChatThreadsStreamState, useSettingsState } from '../../util/services.js';
+import { useAccessor, useActiveURI, useChatThreadsState, useChatThreadsStreamState, useSettingsState } from '../../util/services.js';
 import { TextAreaFns, ZeroEgressInputBox2 } from '../../util/inputs.js';
 import { ButtonStop, ButtonSubmit, getRelative, SelectedFiles } from '../SidebarChat.js';
 // no runtime imports from vs/ here: the bundle flattens this folder, so a relative path one level deeper breaks
-import { isFeatureNameDisabled, promptWithContext, ZERO_EGRESS_CTRL_L_ACTION_ID, ZERO_EGRESS_SHOW_AGENTS_ACTION_ID } from '../composerDeps.js';
-import type { PromptContextItem } from '../composerDeps.js';
+import { backgroundAllowed, builtinCommands, selectBuiltInMode, isFeatureNameDisabled, promptContextOfSelection, resolveSlashSend, slashEnterPicks, slashMenuQuery, withNewSelections, promptWithContext, ZERO_EGRESS_CTRL_L_ACTION_ID, ZERO_EGRESS_SHOW_AGENTS_ACTION_ID } from '../composerDeps.js';
+import type { ChatMode, CustomCommand, PromptContextItem } from '../composerDeps.js';
 import type { StagingSelectionItem } from '../../../../../common/chatThreadServiceTypes.js';
 import { useThreadReview } from '../useThreadReview.js';
 import { AgentSettingsMenu } from './AgentSettingsMenu.js';
+import { ContextMeter } from './ContextMeter.js';
 import { ModeMenu, RunIn, RunInSection } from './ModeMenu.js';
 import { ModelMenu } from './ModelMenu.js';
 import { ReviewBar } from './ReviewBar.js';
+import { gatherSlashContext } from './slashContext.js';
+import { flattenSlashSections, SlashItem, SlashMenu, SlashSection } from './SlashMenu.js';
 
 /** what the chat view around the box needs from it: the suggestions on an empty chat send through it */
 export interface ComposerApi {
@@ -40,9 +45,14 @@ export const Composer = ({ threadId, variant, inputDisabledReason, textAreaRef, 
 	const commandService = accessor.get('ICommandService');
 	const chatThreadsService = accessor.get('IChatThreadService');
 	const settingsState = useSettingsState();
+	const settingsService = accessor.get('IZeroEgressSettingsService');
+	const contextService = accessor.get('IChatContextService');
+	const languageService = accessor.get('ILanguageService');
+	const { uri: activeUri } = useActiveURI();
 
 	const thread = useChatThreadsState().allThreads[threadId];
 	const messages = thread?.messages ?? [];
+	const isAgentThread = variant === 'agents' || !!thread?.agent;
 	const hasUserMessage = messages.some(m => m.role === 'user');
 	const selections = thread?.state.stagingSelections ?? [];
 	const setSelections = useCallback((s: StagingSelectionItem[]) => { chatThreadsService.setCurrentThreadState({ stagingSelections: s }, threadId); }, [chatThreadsService, threadId]);
@@ -77,8 +87,10 @@ export const Composer = ({ threadId, variant, inputDisabledReason, textAreaRef, 
 						: !bgAvailability ? 'Checking whether background agents are available.'
 							: null
 	);
+	const BACKGROUND_NEEDS_AGENT = 'Switch to Agent to run in the background.';
 	const moveToBackground = async () => {
 		if (moveDisabledReason || isMoving) { return; }
+		if (!backgroundAllowed(settingsState.globalSettings)) { accessor.get('INotificationService').info(BACKGROUND_NEEDS_AGENT); return; }
 		setIsMoving(true);
 		try {
 			await accessor.get('IBackgroundAgentsService').startAgent('', threadId);
@@ -110,27 +122,76 @@ export const Composer = ({ threadId, variant, inputDisabledReason, textAreaRef, 
 		textAreaFnsRef.current?.setValue('');
 		textAreaRef.current?.focus(); // focus input after submit
 	};
+	const loadingCustomRef = React.useRef(false);
+	const customRef = React.useRef<CustomCommand[] | null>(null); // null: not loaded yet
+	const [custom, setCustom] = useState<CustomCommand[]>([]);
 	const onSubmit = async (_forceSubmit?: string) => {
-		if (isDisabled && !_forceSubmit) { return; }
-		if (isRunning || isStarting) { return; }
-		const userMessage = _forceSubmit || textAreaRef.current?.value || '';
+		if ((isDisabled && !_forceSubmit) || isFeatureNameDisabled('Chat', settingsState)) { return; }
+		if (isRunning || isStarting || loadingCustomRef.current) { return; }
+		// background agents run as Agent: Plan and custom modes would be dropped, so the box keeps the text
+		if (startsInBackground && !backgroundAllowed(settingsState.globalSettings)) { accessor.get('INotificationService').info(BACKGROUND_NEEDS_AGENT); return; }
+		const userMessage0 = _forceSubmit || textAreaRef.current?.value || '';
+
+		let userMessage = userMessage0;
+
+		// ----- / commands -----
+		// project commands: the list the menu loaded, or one load when the user typed a whole command without opening it
+		if (customRef.current === null && userMessage.trimStart().startsWith('/')) {
+			loadingCustomRef.current = true; // blocks a second Enter while the list loads
+			setIsStarting(true);
+			try { customRef.current = await contextService.customCommands().catch(() => []); } finally { loadingCustomRef.current = false; setIsStarting(false); }
+		}
+		const send = resolveSlashSend(userMessage, { hasSelection: !!contextService.currentSelection() }, customRef.current ?? []);
+		let sendSelections = selections;
+		if (send.isCommand) {
+			// /plan and /compact act on the side panel chat's own mode and history, not on an agent's
+			if ((send.compact || send.setMode) && (startsInBackground || isAgentThread)) {
+				accessor.get('INotificationService').info('/plan and /compact work in the side panel chat.');
+				return; // the box keeps what was typed
+			}
+			if (send.compact) {
+				await chatThreadsService.compactThread(threadId);
+				clearInput();
+				return;
+			}
+			if (send.setMode) {
+				await selectBuiltInMode(settingsService, send.setMode);
+				if (!send.prompt) { clearInput(); return; }
+			}
+			if (send.addContext?.length) {
+				const added = await gatherSlashContext(send.addContext, {
+					contextService, activeUri, languageOf: uri => languageService.guessLanguageIdByFilepathOrFirstLine(uri) || '',
+					notify: m => accessor.get('INotificationService').info(m),
+				});
+				if (!added) { return; }
+				sendSelections = withNewSelections(selections, added);
+				setSelections(sendSelections);
+			}
+		}
+		const displayMessage = send.displayMessage;
+		const modeOverride = send.modeOverride;
+		userMessage = send.prompt;
 
 		if (startsInBackground) {
 			const prompt = userMessage.trim();
 			if (!prompt) { return; }
 			// the agent's first message is plain text: the staged chips go into it as workspace-relative paths
-			const context: PromptContextItem[] = selections.map(sel => {
-				// getRelative gives back the fsPath itself for a file outside the workspace: that one stays absolute
-				const relative = getRelative(sel.uri, accessor);
-				const absolute = relative === undefined || relative === sel.uri.fsPath;
-				const path = absolute ? sel.uri.fsPath : relative;
-				return sel.type === 'Folder' ? { kind: 'folder', path, absolute }
-					: sel.type === 'CodeSelection' ? { kind: 'selection', path, range: sel.range, absolute }
-						: { kind: 'file', path, absolute };
+			// terminal output, problems and git diffs go in as text; images are not sent to background agents yet
+			if (sendSelections.some(sel => sel.type === 'Image')) {
+				accessor.get('INotificationService').info("Images aren't sent to background agents yet.");
+			}
+			const context: PromptContextItem[] = sendSelections.flatMap((sel): PromptContextItem[] => {
+				const item = promptContextOfSelection(sel, uri => {
+					// getRelative gives back the fsPath itself for a file outside the workspace: that one stays absolute
+					const relative = getRelative(uri as Parameters<typeof getRelative>[0], accessor);
+					const absolute = relative === undefined || relative === uri.fsPath;
+					return { path: absolute ? uri.fsPath : relative, absolute };
+				});
+				return item ? [item] : [];
 			});
 			setIsStarting(true);
 			try {
-				await accessor.get('IBackgroundAgentsService').startAgent(promptWithContext(prompt, context));
+				await accessor.get('IBackgroundAgentsService').startAgent(promptWithContext(prompt, context), undefined, { displayMessage, modeOverride });
 				clearInput();
 				setRunIn('folder');
 				await commandService.executeCommand(ZERO_EGRESS_SHOW_AGENTS_ACTION_ID);
@@ -143,7 +204,7 @@ export const Composer = ({ threadId, variant, inputDisabledReason, textAreaRef, 
 		}
 
 		try {
-			await chatThreadsService.addUserMessageAndStreamResponse({ userMessage, threadId });
+			await chatThreadsService.addUserMessageAndStreamResponse({ userMessage, threadId, displayMessage, modeOverride });
 		} catch (e) {
 			console.error('Error while sending message in chat:', e);
 		}
@@ -156,8 +217,70 @@ export const Composer = ({ threadId, variant, inputDisabledReason, textAreaRef, 
 		apiRef.current = { submit: text => { onSubmit(text); } };
 	}
 
-	const onChangeText = useCallback((newStr: string) => { setInstructionsAreEmpty(!newStr); }, []);
+	// ----- the / menu -----
+	const [cardEl, setCardEl] = useState<HTMLDivElement | null>(null);
+	const [typed, setTyped] = useState('');
+	const [slashIdx, setSlashIdx] = useState(0);
+	const [slashClosed, setSlashClosed] = useState(false);
+	const slashMovedRef = React.useRef(false); // the arrow keys moved the highlight since the text last changed
+	const slashPickedRef = React.useRef(false); // a pick rewrites the text itself: that change must not reopen the menu
+	const onChangeText = useCallback((newStr: string) => {
+		setInstructionsAreEmpty(!newStr);
+		setTyped(newStr);
+		setSlashIdx(0);
+		slashMovedRef.current = false;
+		setSlashClosed(slashPickedRef.current);
+	}, []);
+	const slashQuery = slashMenuQuery(typed);
+	// the project's commands load each time the menu opens (cached while it is open)
+	const slashIsOpen = slashQuery !== null;
+	useEffect(() => {
+		if (!slashIsOpen) { return; }
+		let live = true;
+		void contextService.customCommands().catch(() => []).then(list => { if (live) { customRef.current = list; setCustom(list); } });
+		return () => { live = false; };
+	}, [slashIsOpen, contextService]);
+	const builtinNames = new Set(builtinCommands.map(c => c.name));
+	const slashSections: SlashSection[] = [{
+		heading: 'Commands',
+		items: slashQuery === null ? [] : builtinCommands.filter(c => c.name.startsWith(slashQuery)),
+	}, {
+		heading: 'Yours',
+		items: slashQuery === null ? [] : custom.filter(c => !builtinNames.has(c.name) && c.name.startsWith(slashQuery))
+			.map(c => ({ name: c.name, detail: '.zeroegress/commands', title: c.description })),
+	}];
+	const slashItems = flattenSlashSections(slashSections);
+	const slashOpen = !slashClosed && slashQuery !== null && slashItems.length > 0 && !inputDisabledReason;
+	const runSlashItem = (item: SlashItem) => {
+		if (isFeatureNameDisabled('Chat', settingsState)) { return; }
+		slashPickedRef.current = true;
+		setSlashClosed(true);
+		textAreaFnsRef.current?.setValue('/' + item.name);
+		slashPickedRef.current = false;
+		void onSubmit('/' + item.name);
+	};
 	const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+		if (slashOpen && !e.nativeEvent.isComposing) {
+			const active = slashItems[Math.min(slashIdx, slashItems.length - 1)];
+			if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+				e.preventDefault();
+				slashMovedRef.current = true;
+				setSlashIdx(i => (i + (e.key === 'ArrowDown' ? 1 : slashItems.length - 1)) % slashItems.length);
+				return;
+			} else if (e.key === 'Enter' && !e.shiftKey && !e.metaKey && !e.ctrlKey) {
+				e.preventDefault();
+				if (slashEnterPicks(slashQuery ?? '', slashMovedRef.current)) { runSlashItem(active); }
+				return; // a bare "/": nothing runs and the menu stays open
+			} else if (e.key === 'Tab' && !e.shiftKey) {
+				e.preventDefault();
+				textAreaFnsRef.current?.setValue('/' + active.name + ' ');
+				return;
+			} else if (e.key === 'Escape') {
+				e.preventDefault();
+				setSlashClosed(true);
+				return;
+			}
+		}
 		if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && instructionsAreEmpty && hasPendingChanges) {
 			e.preventDefault();
 			review.acceptOrRejectMine('accept');
@@ -166,6 +289,32 @@ export const Composer = ({ threadId, variant, inputDisabledReason, textAreaRef, 
 		} else if (e.key === 'Escape' && isRunning) {
 			onAbort();
 		}
+	};
+
+	// image files on the clipboard become image chips; any other paste is left alone
+	const onPaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+		const images = Array.from(e.clipboardData?.files ?? []).filter(f => f.type.startsWith('image/'));
+		if (!images.length) return;
+		e.preventDefault();
+		// text that came with the images still goes in at the cursor
+		const text = e.clipboardData.getData('text/plain');
+		const ta = textAreaRef.current;
+		if (text && ta) {
+			const start = ta.selectionStart, end = ta.selectionEnd;
+			textAreaFnsRef.current?.setValue(ta.value.slice(0, start) + text + ta.value.slice(end));
+			ta.setSelectionRange(start + text.length, start + text.length);
+		}
+		const contextService = accessor.get('IChatContextService');
+		void (async () => {
+			for (const file of images) {
+				try {
+					const sel = await contextService.imageFromClipboard(new Uint8Array(await file.arrayBuffer()), file.type);
+					if (sel) chatThreadsService.addNewStagingSelection(sel);
+				} catch (err) {
+					accessor.get('INotificationService').error(err instanceof Error ? err.message : String(err));
+				}
+			}
+		})();
 	};
 
 	const keybindingString = accessor.get('IKeybindingService').lookupKeybinding(ZERO_EGRESS_CTRL_L_ACTION_ID)?.getLabel();
@@ -182,6 +331,7 @@ export const Composer = ({ threadId, variant, inputDisabledReason, textAreaRef, 
 	return <div>
 		{reviewBar}
 		<div
+			ref={setCardEl}
 			className={`flex flex-col gap-1 p-2 relative input text-left shrink-0 bg-ze-bg-2 transition-colors duration-200
 				border border-ze-border-2 focus-within:border-ze-accent hover:border-ze-border-1
 				max-h-[80vh] overflow-y-auto
@@ -199,12 +349,22 @@ export const Composer = ({ threadId, variant, inputDisabledReason, textAreaRef, 
 					placeholder={`Ask, or @ a file…${keybindingString ? ` (${keybindingString} adds the selection)` : ''}`}
 					onChangeText={onChangeText}
 					onKeyDown={onKeyDown}
+					onPaste={onPaste}
 					onFocus={() => { chatThreadsService.setCurrentlyFocusedMessageIdx(undefined, threadId); }}
 					ref={textAreaRef}
 					fnsRef={textAreaFnsRef}
 					multiline={true}
 				/>
 			</div>
+
+			<SlashMenu
+				anchor={cardEl}
+				open={slashOpen}
+				sections={slashSections}
+				activeIdx={slashIdx}
+				onPick={runSlashItem}
+				onClose={() => setSlashClosed(true)}
+			/>
 
 			{/* 3. mode, model, meter slot, ⚙, send */}
 			{/* a narrow panel wraps the right-hand group onto its own line rather than clipping it */}
@@ -217,8 +377,8 @@ export const Composer = ({ threadId, variant, inputDisabledReason, textAreaRef, 
 					<ModelMenu featureName='Chat' />
 				</div>
 				<div className='flex items-center gap-1 shrink-0 ml-auto'>
-					<span data-slot='context-meter' />
-					<AgentSettingsMenu />
+					<ContextMeter threadId={threadId} />
+					<AgentSettingsMenu threadId={threadId} />
 					{isRunning
 						? <ButtonStop onClick={onAbort} aria-label='Stop' />
 						: startsInBackground

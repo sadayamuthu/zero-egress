@@ -6,6 +6,7 @@
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { promptWithContext } from '../promptContext.js';
+import { promptContextOfSelection } from '../selectionText.js';
 
 suite('promptContext', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
@@ -51,5 +52,23 @@ suite('promptContext', () => {
 			promptWithContext('Explain', [{ kind: 'file', path: 'b.ts' }, { kind: 'selection', path: '/src/a.ts', range: [40, 62] }]),
 			'Explain\n\nContext:\n- b.ts\n- src/a.ts:L40-L62',
 		);
+	});
+
+	test('a snapshot item text appears after the paths', () => {
+		const out = promptWithContext('Fix', [{ kind: 'snapshot', text: 'Problems:\na.ts:1 error: x' }, { kind: 'file', path: 'a.ts' }]);
+		assert.strictEqual(out, 'Fix\n\nContext:\n- a.ts\n\nAttached:\nProblems:\na.ts:1 error: x');
+	});
+
+	test('a Problems selection with a uri is a snapshot, not a file line', () => {
+		const item = promptContextOfSelection(
+			{ type: 'Problems', uri: { fsPath: '/w/a.ts' } as any, items: [{ path: 'a.ts', line: 1, severity: 'error', message: 'x' }] },
+			uri => ({ path: uri.fsPath, absolute: false }),
+		);
+		assert.deepStrictEqual(item, { kind: 'snapshot', text: 'Problems:\na.ts:1 error: x' });
+		assert.ok(!promptWithContext('p', [item!]).includes('Context:'));
+	});
+
+	test('an image has no background-agent chip', () => {
+		assert.strictEqual(promptContextOfSelection({ type: 'Image', uri: { fsPath: '/a.png' } as any, name: 'a.png', mime: 'image/png', bytes: 1 }, uri => ({ path: uri.fsPath, absolute: false })), undefined);
 	});
 });

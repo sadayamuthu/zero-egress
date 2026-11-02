@@ -3,6 +3,7 @@ import { RawMCPToolCall } from './mcpServiceTypes.js';
 import { ToolRunContext } from './backgroundAgentTypes.js';
 import { builtinTools } from './prompt/prompts.js';
 import { RawToolParamsObj } from './sendLLMMessageTypes.js';
+import { PlanStep } from './plan.js';
 
 
 
@@ -62,6 +63,8 @@ export type BuiltinToolCallParams = {
 	'open_persistent_terminal': { cwd: string | null },
 	'run_persistent_command': { command: string; persistentTerminalId: string },
 	'kill_persistent_terminal': { persistentTerminalId: string },
+	// ---
+	'update_plan': { plan: string, steps: PlanStep[] }, // plan is the raw text the model sent (the declared param); steps is its parsePlan
 }
 
 // RESULT OF TOOL CALL
@@ -84,6 +87,8 @@ export type BuiltinToolResultType = {
 	'run_persistent_command': { result: string; resolveReason: TerminalResolveReason; },
 	'open_persistent_terminal': { persistentTerminalId: string },
 	'kill_persistent_terminal': {},
+	// ---
+	'update_plan': { count: number },
 }
 
 

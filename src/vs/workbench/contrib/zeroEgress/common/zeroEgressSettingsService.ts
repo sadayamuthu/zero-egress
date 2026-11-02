@@ -300,6 +300,10 @@ class ZeroEgressSettingsService extends Disposable implements IZeroEgressSetting
 
 			// add useCommandAllowList feature (default on)
 			if (readS.globalSettings.useCommandAllowList === undefined) readS.globalSettings.useCommandAllowList = true;
+
+			// add custom modes
+			if (readS.globalSettings.customModes === undefined) readS.globalSettings.customModes = [];
+			if (readS.globalSettings.activeCustomModeId === undefined) readS.globalSettings.activeCustomModeId = null;
 		}
 		catch (e) {
 			readS = defaultState()

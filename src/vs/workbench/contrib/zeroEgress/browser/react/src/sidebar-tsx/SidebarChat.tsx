@@ -7,6 +7,8 @@ import React, { createContext, useContext, ButtonHTMLAttributes, FormEvent, Form
 
 
 import { useAccessor, useChatThreadsState, useChatThreadsStreamState, useSettingsState, useActiveURI, useFullChatThreadsStreamState } from '../util/services.js';
+import { getModelCapabilities, resolveSlashSend, withNewSelections } from './composerDeps.js';
+import { gatherSlashContext } from './chat/slashContext.js';
 import { ScrollType } from '../../../../../../../editor/common/editorCommon.js';
 
 import { ChatMarkdownRender, ChatMessageLocation, getApplyBoxId } from '../markdown/ChatMarkdownRender.js';
@@ -18,8 +20,8 @@ import { ZERO_EGRESS_OPEN_SETTINGS_ACTION_ID } from '../../../zeroEgressSettings
 import { FeatureName } from '../../../../../../../workbench/contrib/zeroEgress/common/zeroEgressSettingsTypes.js';
 import { ICommandService } from '../../../../../../../platform/commands/common/commands.js';
 import { WarningBox } from '../zero-egress-settings-tsx/WarningBox.js';
-import { AlertTriangle, File, Ban, ChevronRight, Dot, FileIcon, Pencil, Undo, Undo2, X, Flag, Copy as CopyIcon, Info, CirclePlus, Ellipsis, CircleEllipsis, Folder, ALargeSmall, TypeOutline, Text } from 'lucide-react';
-import { ChatMessage, CheckpointEntry, StagingSelectionItem, ToolMessage } from '../../../../common/chatThreadServiceTypes.js';
+import { AlertTriangle, File, Ban, ChevronRight, Dot, FileIcon, Pencil, Undo, Undo2, X, Flag, Copy as CopyIcon, Info, CirclePlus, Ellipsis, CircleEllipsis, Folder, ALargeSmall, TypeOutline, Text, Braces, SquareTerminal, TriangleAlert, GitBranch, BookOpen, Image as ImageIcon, Paperclip } from 'lucide-react';
+import { ChatMessage, CheckpointEntry, selectionUri, StagingSelectionItem, ToolMessage } from '../../../../common/chatThreadServiceTypes.js';
 import { approvalTypeOfBuiltinToolName, BuiltinToolCallParams, BuiltinToolName, ToolName, LintErrorItem, ToolApprovalType, toolApprovalTypes } from '../../../../common/toolsServiceTypes.js';
 import { CopyButton, EditToolAcceptRejectButtonsHTML, JumpToFileButton, JumpToTerminalButton, StatusIndicatorForApplyButton, useApplyStreamState, useEditToolStreamState } from '../markdown/ApplyBlockHoverButtons.js';
 import { IsRunningType } from '../../../chatThreadService.js';
@@ -28,6 +30,7 @@ import { builtinToolNames, isABuiltinToolName, MAX_FILE_CHARS_PAGE, MAX_TERMINAL
 import { RawToolCallObj } from '../../../../common/sendLLMMessageTypes.js';
 import ErrorBoundary from './ErrorBoundary.js';
 import { ConflictCard } from './chat/ConflictCard.js';
+import { PlanCard } from './chat/PlanCard.js';
 import { LineCounts, StepName, StepRow } from './chat/StepRow.js';
 import type { StepIcon } from './chat/StepRow.js';
 import { ApprovalButton, ApprovalCard, ApprovalCardShell } from './chat/ApprovalCard.js';
@@ -462,6 +465,11 @@ export const SelectedFiles = (
 	const commandService = accessor.get('ICommandService')
 	const modelReferenceService = accessor.get('IZeroEgressModelService')
 
+	// an Image chip warns when the current Chat model can't read images
+	const settingsState = useSettingsState()
+	const chatModel = settingsState.modelSelectionOfFeature['Chat']
+	const chatModelCanSeeImages = !chatModel || !!getModelCapabilities(chatModel.providerName, chatModel.modelName, settingsState.overridesOfModel).supportsVision
+
 
 
 
@@ -526,14 +534,33 @@ export const SelectedFiles = (
 				const thisKey = selection.type === 'CodeSelection' ? selection.type + selection.language + selection.range + selection.state.wasAddedAsCurrentFile + selection.uri.fsPath
 					: selection.type === 'File' ? selection.type + selection.language + selection.state.wasAddedAsCurrentFile + selection.uri.fsPath
 						: selection.type === 'Folder' ? selection.type + selection.language + selection.state + selection.uri.fsPath
-							: i
+							: selection.type === 'Symbol' ? selection.type + selection.name + selection.range + selection.uri.fsPath
+								: selection.type === 'Doc' || selection.type === 'Image' ? selection.type + selection.name + selection.uri.fsPath
+									: selection.type === 'Terminal' ? selection.type + selection.title + selection.capturedAt
+										: selection.type === 'GitDiff' ? selection.type + selection.against
+											: selection.type === 'Problems' ? selection.type + (selection.uri?.fsPath ?? '')
+												: i
 
 				const SelectionIcon = (
 					selection.type === 'File' ? File
 						: selection.type === 'Folder' ? Folder
 							: selection.type === 'CodeSelection' ? Text
-								: (undefined as never)
+								: selection.type === 'Symbol' ? Braces
+									: selection.type === 'Terminal' ? SquareTerminal
+										: selection.type === 'Problems' ? TriangleAlert
+											: selection.type === 'GitDiff' ? GitBranch
+												: selection.type === 'Doc' ? BookOpen
+													: selection.type === 'Image' ? ImageIcon
+														: Paperclip // unknown type from a newer build
 				)
+				const selUri = selectionUri(selection)
+				const chipLabel = selection.type === 'Terminal' ? selection.title || 'Terminal'
+					: selection.type === 'Problems' ? (selection.uri ? `Problems · ${getBasename(selection.uri.fsPath)} (${selection.items.length})` : `Problems (${selection.items.length})`)
+						: selection.type === 'GitDiff' ? (selection.against === null ? 'Git diff' : `Git diff (${selection.against})`)
+							: selection.type === 'Symbol' ? selection.name
+								: selection.type === 'Doc' || selection.type === 'Image' ? selection.name
+									: selUri && (selection.type === 'File' || selection.type === 'CodeSelection' || selection.type === 'Folder') ? getBasename(selUri.fsPath)
+										: 'Context'
 
 				return <div // container for summarybox and code
 					key={thisKey}
@@ -542,7 +569,7 @@ export const SelectedFiles = (
 					{/* tooltip for file path */}
 					<span className="truncate overflow-hidden text-ellipsis"
 						data-tooltip-id='ze-tooltip'
-						data-tooltip-content={getRelative(selection.uri, accessor)}
+						data-tooltip-content={selUri ? getRelative(selUri, accessor) : undefined}
 						data-tooltip-place='top'
 						data-tooltip-delay-show={3000}
 					>
@@ -579,8 +606,17 @@ export const SelectedFiles = (
 										])
 									}
 								}
-								else if (selection.type === 'CodeSelection') {
+								else if (selection.type === 'CodeSelection' || selection.type === 'Symbol') {
 									zeroEgressOpenFileFn(selection.uri, accessor, selection.range);
+								}
+								else if (selection.type === 'Doc') {
+									if (!selection.isFolder) zeroEgressOpenFileFn(selection.uri, accessor);
+								}
+								else if (selection.type === 'Problems') {
+									commandService.executeCommand('workbench.actions.view.problems');
+								}
+								else if (selection.type === 'GitDiff') {
+									commandService.executeCommand('workbench.view.scm');
 								}
 								else if (selection.type === 'Folder') {
 									// TODO!!! reveal in tree
@@ -590,8 +626,13 @@ export const SelectedFiles = (
 							{<SelectionIcon size={10} />}
 
 							{ // file name and range
-								getBasename(selection.uri.fsPath)
-								+ (selection.type === 'CodeSelection' ? ` (${selection.range[0]}-${selection.range[1]})` : '')
+								chipLabel
+								+ (selection.type === 'CodeSelection' || selection.type === 'Symbol' ? ` (${selection.range[0]}-${selection.range[1]})` : '')
+							}
+
+							{selection.type === 'Image' && !chatModelCanSeeImages ?
+								<span style={{ color: 'var(--vscode-editorWarning-foreground)' }}>{` · model can't read images`}</span>
+								: null
 							}
 
 							{selection.type === 'File' && selection.state.wasAddedAsCurrentFile && messageIdx === undefined && currentURI?.fsPath === selection.uri.fsPath ?
@@ -869,6 +910,7 @@ const UserMessageComponent = ({ chatMessage, messageIdx, isCheckpointGhost, curr
 	const accessor = useAccessor()
 	const chatThreadsService = accessor.get('IChatThreadService')
 	const threadId = useThreadId()
+	const { uri: activeUri } = useActiveURI()
 
 	// global state
 	let isBeingEdited = false
@@ -950,6 +992,23 @@ const UserMessageComponent = ({ chatMessage, messageIdx, isCheckpointGhost, curr
 			if (!textAreaRefState) return;
 			if (messageIdx === undefined) return;
 
+			// an edited / command is expanded and sent like a new one: its prompt, its context, its mode for this message
+			const contextService = accessor.get('IChatContextService')
+			const custom = textAreaRefState.value.trimStart().startsWith('/') ? await contextService.customCommands().catch(() => []) : []
+			const send = resolveSlashSend(textAreaRefState.value, { hasSelection: !!contextService.currentSelection() }, custom)
+			if (send.isCommand && (send.compact || send.setMode)) {
+				accessor.get('INotificationService').info('/plan and /compact work from the message box at the bottom, not when editing a message.')
+				return // the edit stays open with what was typed
+			}
+			if (send.addContext?.length) {
+				const added = await gatherSlashContext(send.addContext, {
+					contextService, activeUri, languageOf: uri => accessor.get('ILanguageService').guessLanguageIdByFilepathOrFirstLine(uri) || '',
+					notify: m => accessor.get('INotificationService').info(m),
+				})
+				if (!added) return
+				setStagingSelections(withNewSelections(stagingSelections, added))
+			}
+
 			// cancel any streams on this thread
 			await chatThreadsService.abortRunning(threadId)
 
@@ -958,9 +1017,9 @@ const UserMessageComponent = ({ chatMessage, messageIdx, isCheckpointGhost, curr
 			chatThreadsService.setCurrentlyFocusedMessageIdx(undefined, threadId)
 
 			// stream the edit
-			const userMessage = textAreaRefState.value;
+			const userMessage = send.prompt;
 			try {
-				await chatThreadsService.editUserMessageAndStreamResponse({ userMessage, messageIdx, threadId })
+				await chatThreadsService.editUserMessageAndStreamResponse({ userMessage, messageIdx, threadId, displayMessage: send.displayMessage, modeOverride: send.modeOverride })
 			} catch (e) {
 				console.error('Error while editing message:', e)
 			}
@@ -1287,6 +1346,7 @@ const titleOfBuiltinToolName = {
 
 	'read_lint_errors': { done: `Read lint errors`, proposed: 'Read lint errors', running: loadingTitleWrapper('Reading lint errors') },
 	'search_in_file': { done: 'Searched in file', proposed: 'Search in file', running: loadingTitleWrapper('Searching in file') },
+	'update_plan': { done: 'Updated the plan', proposed: 'Update the plan', running: loadingTitleWrapper('Updating the plan') },
 } as const satisfies Record<BuiltinToolName, { done: any, proposed: any, running: any }>
 
 
@@ -1594,13 +1654,16 @@ const EditToolHeaderButtons = ({ applyBoxId, uri, codeStr, toolName, threadId }:
 
 
 
-const InvalidTool = ({ toolName, message, mcpServerName }: { toolName: ToolName, message: string, mcpServerName: string | undefined }) => {
+const InvalidTool = ({ toolName, message, mcpServerName, refused }: { toolName: ToolName, message: string, mcpServerName: string | undefined, refused?: boolean }) => {
 	const accessor = useAccessor()
 	const title = getTitle({ name: toolName, type: 'invalid_params', mcpServerName })
-	const desc1 = 'Invalid parameters'
+	const desc1 = refused ? "isn't available in this mode" : 'Invalid parameters'
 	const icon: StepIcon = 'error'
 	const isError = true
 	const componentParams: ToolHeaderParams = { title, desc1, isError, icon }
+
+	// a refused tool reads no params and has nothing to apply: just the line
+	if (refused) return <ToolHeaderWrapper {...componentParams} />
 
 	componentParams.children = <ToolChildrenWrapper>
 		<CodeChildren className='bg-ze-bg-3'>
@@ -2274,6 +2337,19 @@ const builtinToolNameToComponent: { [T in BuiltinToolName]: { resultWrapper: Res
 			return <ToolHeaderWrapper {...componentParams} />
 		},
 	},
+	'update_plan': {
+		resultWrapper: ({ toolMessage, messageIdx, threadId }) => {
+			const messages = useChatThreadsState().allThreads[threadId]?.messages ?? []
+			if (toolMessage.type !== 'success') return null // the plan card shows the plan itself, nothing to show for a request or a refusal
+			let latestIdx = -1
+			for (let i = messages.length - 1; i >= 0; i--) {
+				const m = messages[i]
+				if (m.role === 'tool' && m.name === 'update_plan' && m.type === 'success') { latestIdx = i; break }
+			}
+			if (messageIdx === latestIdx) return <PlanCard threadId={threadId} />
+			return <StepRow icon='ok' label='Updated the plan' />
+		},
+	},
 	'kill_persistent_terminal': {
 		resultWrapper: ({ toolMessage }) => {
 			const accessor = useAccessor()
@@ -2393,7 +2469,7 @@ const _ChatBubble = ({ threadId, chatMessage, currCheckpointIdx, isCommitted, me
 
 		if (chatMessage.type === 'invalid_params') {
 			return <div className={`${isCheckpointGhost ? 'opacity-50' : ''}`}>
-				<InvalidTool toolName={chatMessage.name} message={chatMessage.content} mcpServerName={chatMessage.mcpServerName} />
+				<InvalidTool toolName={chatMessage.name} message={chatMessage.content} mcpServerName={chatMessage.mcpServerName} refused={chatMessage.refused} />
 			</div>
 		}
 
@@ -2549,8 +2625,9 @@ const ChatThreadViewInner = ({ threadId, variant, inputDisabledReason }: { threa
 	const previousMessagesHTML = useMemo(() => {
 		// const lastMessageIdx = previousMessages.findLastIndex(v => v.role !== 'checkpoint')
 		// tool request shows up as Editing... if in progress
+		const compaction = currentThread?.compaction
 		return previousMessages.map((message, i) => {
-			return <ChatBubble
+			const bubble = <ChatBubble
 				key={i}
 				currCheckpointIdx={currCheckpointIdx}
 				chatMessage={message}
@@ -2560,10 +2637,20 @@ const ChatThreadViewInner = ({ threadId, variant, inputDisabledReason }: { threa
 				threadId={threadId}
 				_scrollToBottom={() => scrollToBottom(scrollContainerRef)}
 			/>
+			// the divider sits where the summary ends; it expands to the summary
+			if (compaction && i === compaction.uptoIdx) {
+				return <React.Fragment key={i}>
+					<StepRow icon='think' label='Earlier turns summarized' className='my-2'>
+						<div className='whitespace-pre-wrap text-sm py-1'>{compaction.summary}</div>
+					</StepRow>
+					{bubble}
+				</React.Fragment>
+			}
+			return bubble
 		})
-	}, [previousMessages, threadId, currCheckpointIdx, isRunning])
+	}, [previousMessages, currentThread?.compaction, threadId, currCheckpointIdx, isRunning])
 
-	const streamingChatIdx = previousMessagesHTML.length
+	const streamingChatIdx = previousMessages.length
 	const currStreamingMessageHTML = reasoningSoFar || displayContentSoFar || isRunning ?
 		<ChatBubble
 			key={'curr-streaming-msg'}

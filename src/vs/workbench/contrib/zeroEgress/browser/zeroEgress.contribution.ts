@@ -39,6 +39,7 @@ import './terminalToolService.js'
 
 // register Thread History
 import './chatThreadService.js'
+import './chatContextService.js'
 
 // ping
 import './metricsPollService.js'

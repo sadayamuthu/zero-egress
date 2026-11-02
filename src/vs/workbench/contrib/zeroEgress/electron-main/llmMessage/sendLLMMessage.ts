@@ -8,6 +8,7 @@ import { IMetricsService } from '../../common/metricsService.js';
 import { displayInfoOfProviderName } from '../../common/zeroEgressSettingsTypes.js';
 import { sendLLMMessageToProviderImplementation } from './sendLLMMessage.impl.js';
 import { IAuditMainService } from '../audit/auditMainService.js';
+import { redactImagesForAudit } from '../../common/imageContent.js';
 import { AuditWorkspace } from '../../common/auditTypes.js';
 
 
@@ -24,6 +25,7 @@ export const sendLLMMessage = async ({
 	modelSelectionOptions,
 	overridesOfModel,
 	chatMode,
+	toolPolicy,
 	separateSystemMessage,
 	mcpTools,
 	requestId,
@@ -71,7 +73,7 @@ export const sendLLMMessage = async ({
 				modelName,
 				chatMode: chatMode ?? null,
 				systemPrompt: separateSystemMessage ?? '',
-				messages: messagesType === 'chatMessages' ? (messages_ as unknown[]) : [messages_],
+				messages: messagesType === 'chatMessages' ? (redactImagesForAudit(messages_) as unknown[]) : [messages_],
 				tools: mcpTools ?? [],
 				workspace: auditWorkspace ?? { folderUri: null, repoName: null, gitRemote: null, gitBranch: null, gitCommit: null },
 				identity,
@@ -152,7 +154,7 @@ export const sendLLMMessage = async ({
 		}
 		const { sendFIM, sendChat } = implementation
 		if (messagesType === 'chatMessages') {
-			await sendChat({ messages: messages_, onText, onFinalMessage, onError, settingsOfProvider, modelSelectionOptions, overridesOfModel, modelName, _setAborter, providerName, separateSystemMessage, chatMode, mcpTools })
+			await sendChat({ messages: messages_, onText, onFinalMessage, onError, settingsOfProvider, modelSelectionOptions, overridesOfModel, modelName, _setAborter, providerName, separateSystemMessage, toolPolicy: toolPolicy ?? null, mcpTools })
 			return
 		}
 		if (messagesType === 'FIMMessage') {

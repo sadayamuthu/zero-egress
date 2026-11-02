@@ -6,6 +6,7 @@
 import { URI } from '../../../../base/common/uri.js';
 import { ZeroEgressFileSnapshot } from './editCodeServiceTypes.js';
 import { AnthropicReasoning, RawToolParamsObj } from './sendLLMMessageTypes.js';
+import { TokenUsage } from './tokenUsage.js';
 import { ToolCallParams, ToolName, ToolResult } from './toolsServiceTypes.js';
 
 export type ToolMessage<T extends ToolName> = {
@@ -16,7 +17,7 @@ export type ToolMessage<T extends ToolName> = {
 	mcpServerName: string | undefined; // the server name at the time of the call
 } & (
 		// in order of events:
-		| { type: 'invalid_params', result: null, name: T, }
+		| { type: 'invalid_params', result: null, name: T, refused?: true } // `refused`: the run's tool policy disallows the tool; it carries no params
 
 		// params were validated, awaiting user. `conflict`: the path has another docked chat's unreviewed changes (shown as
 		// the conflict card, never auto-approved); `uri` is the tool's target, `ownerThreadId` the chat that owns those changes,
@@ -68,6 +69,7 @@ export type ChatMessage =
 		reasoningMs?: number; // how long the model reasoned (first reasoning token to the first answer token or the end); missing in older chats
 
 		anthropicReasoning: AnthropicReasoning[] | null; // anthropic reasoning
+		usage?: TokenUsage; // token counts from the provider; missing in older chats
 	}
 	| ToolMessage<ToolName>
 	| DecorativeCanceledTool
@@ -91,7 +93,43 @@ export type StagingSelectionItem = {
 	uri: URI;
 	language?: undefined;
 	state?: undefined;
+} | {
+	type: 'Symbol';
+	uri: URI;
+	range: [number, number];
+	name: string;
+	kind: string;
+	language: string;
+} | {
+	type: 'Terminal';
+	title: string;
+	text: string;
+	capturedAt: string; // ISO string
+} | {
+	type: 'Problems';
+	uri?: URI;
+	items: { path: string; line: number; severity: 'error' | 'warning'; message: string }[];
+} | {
+	type: 'GitDiff';
+	against: string | null; // null: working changes against HEAD
+	text: string;
+	truncated: boolean;
+} | {
+	type: 'Doc';
+	uri: URI;
+	name: string;
+	isFolder: boolean;
+} | {
+	type: 'Image';
+	uri: URI;
+	name: string;
+	mime: 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif';
+	bytes: number;
 }
+
+// the uri a selection points at, if any (snapshot types such as Terminal and GitDiff have none)
+export const selectionUri = (s: StagingSelectionItem): URI | undefined =>
+	(s as { uri?: URI } | undefined)?.uri ?? undefined
 
 
 // a link to a symbol (an underlined link to a piece of code)

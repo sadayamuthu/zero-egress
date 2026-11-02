@@ -1,4 +1,6 @@
 import { Disposable } from '../../../../base/common/lifecycle.js';
+import { ToolPolicy } from '../common/toolPolicy.js';
+import { CHARS_PER_TOKEN } from '../common/contextUse.js';
 import { deepClone } from '../../../../base/common/objects.js';
 import { IModelService } from '../../../../editor/common/services/model.js';
 import { registerSingleton, InstantiationType } from '../../../../platform/instantiation/common/extensions.js';
@@ -6,9 +8,11 @@ import { createDecorator } from '../../../../platform/instantiation/common/insta
 import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
 import { ChatMessage } from '../common/chatThreadServiceTypes.js';
+import { applyCompaction, Compaction } from '../common/compaction.js';
+import { formatPlan, PlanStep } from '../common/plan.js';
 import { getIsReasoningEnabledState, getReservedOutputTokenSpace, getModelCapabilities } from '../common/modelCapabilities.js';
 import { reParsedToolXMLString, chat_systemMessage } from '../common/prompt/prompts.js';
-import { AnthropicLLMChatMessage, AnthropicReasoning, GeminiLLMChatMessage, LLMChatMessage, LLMFIMMessage, OpenAILLMChatMessage, RawToolParamsObj } from '../common/sendLLMMessageTypes.js';
+import { AnthropicLLMChatMessage, AnthropicReasoning, GeminiLLMChatMessage, LLMChatMessage, LLMFIMMessage, OpenAILLMChatMessage, OpenAIUserPart, RawToolParamsObj } from '../common/sendLLMMessageTypes.js';
 import { IZeroEgressSettingsService } from '../common/zeroEgressSettingsService.js';
 import { ChatMode, FeatureName, ModelSelection, ProviderName } from '../common/zeroEgressSettingsTypes.js';
 import { IDirectoryStrService } from '../common/directoryStrService.js';
@@ -19,6 +23,12 @@ import { URI } from '../../../../base/common/uri.js';
 import { EndOfLinePreference } from '../../../../editor/common/model.js';
 import { ToolName } from '../common/toolsServiceTypes.js';
 import { IMCPService } from '../common/mcpService.js';
+import { encodeBase64 } from '../../../../base/common/buffer.js';
+import { IFileService } from '../../../../platform/files/common/files.js';
+import { checkProjectRulesFile, PROJECT_RULES_FILE } from './projectRules.js';
+import { LatestOnly } from '../common/projectFiles.js';
+import { IMAGE_MAX_BYTES } from '../common/selectionText.js';
+import { MAX_IMAGES_PER_MESSAGE, imageMessageIndex, mergeUserImages, noteForImage, prefixUserContent, toOpenAIUserContent } from '../common/imageContent.js';
 
 export const EMPTY_MESSAGE = '(empty message)'
 
@@ -33,6 +43,7 @@ type SimpleLLMMessage = {
 } | {
 	role: 'user';
 	content: string;
+	images?: { mime: string; base64: string; name: string }[]; // read at prepare time; turned into image_url parts (or notes) in prepareOpenAIOrAnthropicMessages
 } | {
 	role: 'assistant';
 	content: string;
@@ -41,7 +52,6 @@ type SimpleLLMMessage = {
 
 
 
-const CHARS_PER_TOKEN = 4 // assume abysmal chars per token
 const TRIM_TO_LEN = 120
 
 
@@ -227,13 +237,22 @@ const prepareMessages_XML_tools = (messages: SimpleLLMMessage[], supportsAnthrop
 			if (c.role === 'tool')
 				c.content = `<${c.name}_result>\n${c.content}\n</${c.name}_result>`
 
+			const images = c.role === 'user' ? c.images : undefined
 			if (llmChatMessages.length === 0 || llmChatMessages[llmChatMessages.length - 1].role !== 'user')
 				llmChatMessages.push({
 					role: 'user',
-					content: c.content
-				})
-			else
-				llmChatMessages[llmChatMessages.length - 1].content += '\n\n' + c.content
+					content: c.content,
+					...(images ? { images } : {}),
+				} as OpenAILLMChatMessage)
+			else {
+				const prev = llmChatMessages[llmChatMessages.length - 1] as { content: string, images?: unknown[] }
+				prev.content += '\n\n' + c.content
+				if (images) {
+					const merged = mergeUserImages((prev.images ?? []) as { name: string }[], images)
+					prev.images = merged.images
+					if (merged.notes.length) prev.content += '\n' + merged.notes.join('\n')
+				}
+			}
 		}
 	}
 	return llmChatMessages
@@ -251,6 +270,7 @@ const prepareOpenAIOrAnthropicMessages = ({
 	supportsAnthropicReasoning,
 	contextWindow,
 	reservedOutputTokenSpace,
+	supportsVision,
 }: {
 	messages: SimpleLLMMessage[],
 	systemMessage: string,
@@ -260,6 +280,7 @@ const prepareOpenAIOrAnthropicMessages = ({
 	supportsAnthropicReasoning: boolean,
 	contextWindow: number,
 	reservedOutputTokenSpace: number | null | undefined,
+	supportsVision?: boolean,
 }): { messages: AnthropicOrOpenAILLMMessage[], separateSystemMessage: string | undefined } => {
 
 	reservedOutputTokenSpace = Math.max(
@@ -280,6 +301,18 @@ const prepareOpenAIOrAnthropicMessages = ({
 
 	// ================ trim ================
 	messages = messages.map(m => ({ ...m, content: m.role !== 'tool' ? m.content.trim() : m.content }))
+
+	// images become image_url parts only for vision models on OpenAI-format messages; elsewhere they are described in text
+	const sendsImageParts = !!supportsVision && specialToolFormat !== 'anthropic-style'
+	if (!sendsImageParts) {
+		for (const m of messages) {
+			if (m.role === 'user' && m.images?.length) {
+				const reason = supportsVision ? 'format' : 'no-vision'
+				m.content = [m.content, ...m.images.map(i => noteForImage(i.name, reason))].filter(Boolean).join('\n')
+				delete m.images
+			}
+		}
+	}
 
 	type MesType = (typeof messages)[0]
 
@@ -380,6 +413,14 @@ const prepareOpenAIOrAnthropicMessages = ({
 	else if (specialToolFormat === 'openai-style') {
 		llmChatMessages = prepareMessages_openai_tools(messages as SimpleLLMMessage[])
 	}
+	// user messages that still carry images become OpenAI content parts (text is already trimmed; image parts are never cut)
+	for (const m of llmChatMessages) {
+		const withImages = m as { role: string, content: unknown, images?: { mime: string; base64: string }[] }
+		if (withImages.role !== 'user' || !withImages.images) continue
+		const images = withImages.images
+		delete withImages.images
+		if (typeof withImages.content === 'string') withImages.content = toOpenAIUserContent(withImages.content, images)
+	}
 	const llmMessages = llmChatMessages
 
 
@@ -398,9 +439,13 @@ const prepareOpenAIOrAnthropicMessages = ({
 	}
 	// if does not support system message
 	else {
+		const first = llmMessages[0].content
+		const sysPrefix = `<SYSTEM_MESSAGE>\n${newSysMsg}\n</SYSTEM_MESSAGE>\n`
 		const newFirstMessage = {
 			role: 'user',
-			content: `<SYSTEM_MESSAGE>\n${newSysMsg}\n</SYSTEM_MESSAGE>\n${llmMessages[0].content}`
+			content: typeof first === 'string' || (Array.isArray(first) && llmMessages[0].role === 'user')
+				? prefixUserContent(first as string | OpenAIUserPart[], sysPrefix) as any
+				: `${sysPrefix}${first}`
 		} as const
 		llmMessages.splice(0, 1) // delete first message
 		llmMessages.unshift(newFirstMessage) // add new first message
@@ -420,8 +465,8 @@ const prepareOpenAIOrAnthropicMessages = ({
 		}
 		else {
 			// allowed to be empty if has a tool in it or following it
-			if (currMsg.content.find(c => c.type === 'tool_result' || c.type === 'tool_use')) {
-				currMsg.content = currMsg.content.filter(c => !(c.type === 'text' && !c.text)) as any
+			if ((currMsg.content as { type: string }[]).find(c => c.type === 'tool_result' || c.type === 'tool_use')) {
+				currMsg.content = (currMsg.content as { type: string, text?: string }[]).filter(c => !(c.type === 'text' && !c.text)) as any
 				continue
 			}
 			if (nextMsg?.role === 'tool') continue
@@ -430,7 +475,7 @@ const prepareOpenAIOrAnthropicMessages = ({
 			for (const c of currMsg.content) {
 				if (c.type === 'text') c.text = c.text || EMPTY_MESSAGE
 			}
-			if (currMsg.content.length === 0) currMsg.content = [{ type: 'text', text: EMPTY_MESSAGE }]
+			if (currMsg.content.length === 0) currMsg.content = [{ type: 'text', text: EMPTY_MESSAGE }] as any
 		}
 	}
 
@@ -501,7 +546,8 @@ const prepareMessages = (params: {
 	supportsAnthropicReasoning: boolean,
 	contextWindow: number,
 	reservedOutputTokenSpace: number | null | undefined,
-	providerName: ProviderName
+	providerName: ProviderName,
+	supportsVision?: boolean,
 }): { messages: LLMChatMessage[], separateSystemMessage: string | undefined } => {
 
 	const specialFormat = params.specialToolFormat // this is just for ts stupidness
@@ -524,7 +570,7 @@ export interface IConvertToLLMMessageService {
 	readonly _serviceBrand: undefined;
 	prepareLLMSimpleMessages: (opts: { simpleMessages: SimpleLLMMessage[], systemMessage: string, modelSelection: ModelSelection | null, featureName: FeatureName }) => { messages: LLMChatMessage[], separateSystemMessage: string | undefined }
 	/** `agentRoot`: set for background agents; the system message then describes only that folder. */
-	prepareLLMChatMessages: (opts: { chatMessages: ChatMessage[], chatMode: ChatMode, modelSelection: ModelSelection | null, agentRoot?: { folder: string, depsMayBeMissing: boolean, agentId: string } }) => Promise<{ messages: LLMChatMessage[], separateSystemMessage: string | undefined }>
+	prepareLLMChatMessages: (opts: { chatMessages: ChatMessage[], chatMode: ChatMode, toolPolicy: ToolPolicy | null, modelSelection: ModelSelection | null, agentRoot?: { folder: string, depsMayBeMissing: boolean, agentId: string }, compaction?: Compaction, plan?: PlanStep[], modeInstructions?: string }) => Promise<{ messages: LLMChatMessage[], separateSystemMessage: string | undefined }>
 	prepareFIMMessage(opts: { messages: LLMFIMMessage, }): { prefix: string, suffix: string, stopTokens: string[] }
 }
 
@@ -543,8 +589,37 @@ class ConvertToLLMMessageService extends Disposable implements IConvertToLLMMess
 		@IZeroEgressSettingsService private readonly zeroEgressSettingsService: IZeroEgressSettingsService,
 		@IZeroEgressModelService private readonly zeroEgressModelService: IZeroEgressModelService,
 		@IMCPService private readonly mcpService: IMCPService,
+		@IFileService private readonly fileService: IFileService,
 	) {
 		super()
+		this._refreshAllRulesAllowed()
+		this._register(this.workspaceContextService.onDidChangeWorkspaceFolders(() => this._refreshAllRulesAllowed()))
+		this._register(this.fileService.onDidFilesChange(e => {
+			for (const f of this.workspaceContextService.getWorkspace().folders) {
+				if (e.contains(URI.joinPath(f.uri, PROJECT_RULES_FILE))) void this._refreshRulesAllowed(f.uri)
+			}
+		}))
+	}
+
+	// folders (fsPath) whose .zeroegressrules is a plain, small file. Unknown = not allowed, so a symlinked file is never read.
+	private readonly _rulesAllowed = new Set<string>()
+	private readonly _rulesChecks = new LatestOnly() // checks can finish out of order: only the newest per folder applies
+
+	private async _refreshRulesAllowed(folderUri: URI) {
+		const key = folderUri.fsPath
+		const gen = this._rulesChecks.start(key)
+		this._rulesAllowed.delete(key) // not allowed while the file is being checked again
+		const ok = (await checkProjectRulesFile(this.fileService, URI.joinPath(folderUri, PROJECT_RULES_FILE))) === 'ok'
+		if (!this._rulesChecks.isLatest(key, gen)) return
+		if (ok) this._rulesAllowed.add(folderUri.fsPath)
+		else this._rulesAllowed.delete(folderUri.fsPath)
+	}
+
+	private _refreshAllRulesAllowed() {
+		const folders = this.workspaceContextService.getWorkspace().folders
+		const keep = new Set(folders.map(f => f.uri.fsPath))
+		for (const k of [...this._rulesAllowed]) if (!keep.has(k)) this._rulesAllowed.delete(k)
+		for (const f of folders) void this._refreshRulesAllowed(f.uri)
 	}
 
 	// Read .zeroegressrules files from workspace folders
@@ -553,7 +628,8 @@ class ConvertToLLMMessageService extends Disposable implements IConvertToLLMMess
 			const workspaceFolders = this.workspaceContextService.getWorkspace().folders;
 			let zeroEgressRules = '';
 			for (const folder of workspaceFolders) {
-				const uri = URI.joinPath(folder.uri, '.zeroegressrules')
+				if (!this._rulesAllowed.has(folder.uri.fsPath)) continue
+				const uri = URI.joinPath(folder.uri, PROJECT_RULES_FILE)
 				const { model } = this.zeroEgressModelService.getModel(uri)
 				if (!model) continue
 				zeroEgressRules += model.getValue(EndOfLinePreference.LF) + '\n\n';
@@ -578,7 +654,7 @@ class ConvertToLLMMessageService extends Disposable implements IConvertToLLMMess
 
 
 	// system message
-	private _generateChatMessagesSystemMessage = async (chatMode: ChatMode, specialToolFormat: 'openai-style' | 'anthropic-style' | 'gemini-style' | undefined, agentRoot: { folder: string, depsMayBeMissing: boolean, agentId: string } | undefined) => {
+	private _generateChatMessagesSystemMessage = async (chatMode: ChatMode, toolPolicy: ToolPolicy | null, specialToolFormat: 'openai-style' | 'anthropic-style' | 'gemini-style' | undefined, agentRoot: { folder: string, depsMayBeMissing: boolean, agentId: string } | undefined) => {
 		// a background agent works only in its worktree: describe that folder, not the user's workspace or editors
 		const workspaceFolders = agentRoot ? [agentRoot.folder] : this.workspaceContextService.getWorkspace().folders.map(f => f.uri.fsPath)
 
@@ -588,7 +664,7 @@ class ConvertToLLMMessageService extends Disposable implements IConvertToLLMMess
 		const directoryStr = agentRoot ?
 			`Directory of ${agentRoot.folder}:\n` + await this.directoryStrService.getDirectoryStrTool(URI.file(agentRoot.folder)).catch(() => '(could not read the folder)')
 			: await this.directoryStrService.getAllDirectoriesStr({
-				cutOffMessage: chatMode === 'agent' || chatMode === 'gather' ?
+				cutOffMessage: chatMode === 'agent' || chatMode === 'gather' || chatMode === 'plan' ?
 					`...Directories string cut off, use tools to read more...`
 					: `...Directories string cut off, ask user for more if necessary...`
 			})
@@ -599,7 +675,7 @@ class ConvertToLLMMessageService extends Disposable implements IConvertToLLMMess
 
 		// each thread sees only its own persistent terminals (docked: the ones no background agent owns)
 		const persistentTerminalIDs = terminalIdsVisibleTo(this.terminalToolService.listPersistentTerminalIds(), id => this.terminalToolService.ownerOfPersistentTerminal(id), agentRoot?.agentId)
-		const systemMessage = chat_systemMessage({ workspaceFolders, openedURIs, directoryStr, activeURI, persistentTerminalIDs, chatMode, mcpTools, includeXMLToolDefinitions, depsMayBeMissing: agentRoot?.depsMayBeMissing ?? false })
+		const systemMessage = chat_systemMessage({ workspaceFolders, openedURIs, directoryStr, activeURI, persistentTerminalIDs, chatMode, toolPolicy, mcpTools, includeXMLToolDefinitions, depsMayBeMissing: agentRoot?.depsMayBeMissing ?? false })
 		return systemMessage
 	}
 
@@ -608,10 +684,29 @@ class ConvertToLLMMessageService extends Disposable implements IConvertToLLMMess
 
 	// --- LLM Chat messages ---
 
-	private _chatMessagesToSimpleMessages(chatMessages: ChatMessage[]): SimpleLLMMessage[] {
+	/** Reads an image selection's bytes now (it may have changed since it was picked). Returns the image, or a note saying why it was not sent. */
+	private async _readImage(sel: { uri: URI, name: string, mime: string }): Promise<{ image: { mime: string; base64: string; name: string } } | { note: string }> {
+		try {
+			const stat = await this.fileService.stat(sel.uri)
+			if (stat.size > IMAGE_MAX_BYTES) return { note: noteForImage(sel.name, 'too-large') }
+			const file = await this.fileService.readFile(sel.uri)
+			if (file.value.byteLength > IMAGE_MAX_BYTES) return { note: noteForImage(sel.name, 'too-large') }
+			return { image: { mime: sel.mime, base64: encodeBase64(file.value), name: sel.name } }
+		}
+		catch {
+			return { note: noteForImage(sel.name, 'missing') }
+		}
+	}
+
+	private async _chatMessagesToSimpleMessages(chatMessages: ChatMessage[], supportsVision: boolean): Promise<SimpleLLMMessage[]> {
 		const simpleLLMMessages: SimpleLLMMessage[] = []
 
-		for (const m of chatMessages) {
+		// only the latest user message carries image bytes; earlier ones leave a text note per image
+		const userIdxs = chatMessages.flatMap((m, i) => m.role === 'user' ? [i] : [])
+		const imageIdx = imageMessageIndex(userIdxs)
+
+		for (let idx = 0; idx < chatMessages.length; idx += 1) {
+			const m = chatMessages[idx]
 			if (m.role === 'checkpoint') continue
 			if (m.role === 'interrupted_streaming_tool') continue
 			if (m.role === 'assistant') {
@@ -631,9 +726,27 @@ class ConvertToLLMMessageService extends Disposable implements IConvertToLLMMess
 				})
 			}
 			else if (m.role === 'user') {
+				const imageSels = (m.selections ?? []).filter((s): s is Extract<typeof s, { type: 'Image' }> => s.type === 'Image')
+				const images: { mime: string; base64: string; name: string }[] = []
+				const notes: string[] = []
+				if (imageSels.length && !supportsVision) { // prepareOpenAIOrAnthropicMessages writes the notes; no file is read
+					for (const sel of imageSels) images.push({ mime: sel.mime, base64: '', name: sel.name })
+				}
+				else if (imageSels.length && idx !== imageIdx) {
+					for (const sel of imageSels) notes.push(noteForImage(sel.name, 'sent-earlier'))
+				}
+				else if (imageSels.length) {
+					const results = await Promise.all(imageSels.slice(0, MAX_IMAGES_PER_MESSAGE).map(sel => this._readImage(sel)))
+					for (const res of results) {
+						if ('image' in res) images.push(res.image)
+						else notes.push(res.note)
+					}
+					for (const sel of imageSels.slice(MAX_IMAGES_PER_MESSAGE)) notes.push(noteForImage(sel.name, 'cap'))
+				}
 				simpleLLMMessages.push({
 					role: m.role,
-					content: m.content,
+					content: notes.length ? [m.content, ...notes].filter(Boolean).join('\n') : m.content,
+					...(images.length ? { images } : {}),
 				})
 			}
 		}
@@ -673,7 +786,7 @@ class ConvertToLLMMessageService extends Disposable implements IConvertToLLMMess
 		})
 		return { messages, separateSystemMessage };
 	}
-	prepareLLMChatMessages: IConvertToLLMMessageService['prepareLLMChatMessages'] = async ({ chatMessages, chatMode, modelSelection, agentRoot }) => {
+	prepareLLMChatMessages: IConvertToLLMMessageService['prepareLLMChatMessages'] = async ({ chatMessages, chatMode, toolPolicy, modelSelection, agentRoot, compaction, plan, modeInstructions }) => {
 		if (modelSelection === null) return { messages: [], separateSystemMessage: undefined }
 
 		const { overridesOfModel } = this.zeroEgressSettingsService.state
@@ -683,11 +796,15 @@ class ConvertToLLMMessageService extends Disposable implements IConvertToLLMMess
 			specialToolFormat,
 			contextWindow,
 			supportsSystemMessage,
+			supportsVision,
 		} = getModelCapabilities(providerName, modelName, overridesOfModel)
 
 		const { disableSystemMessage } = this.zeroEgressSettingsService.state.globalSettings;
-		const fullSystemMessage = await this._generateChatMessagesSystemMessage(chatMode, specialToolFormat, agentRoot)
-		const systemMessage = disableSystemMessage ? '' : fullSystemMessage;
+		const fullSystemMessage = await this._generateChatMessagesSystemMessage(chatMode, toolPolicy, specialToolFormat, agentRoot)
+		// the plan steers only runs that may write it (Agent, Plan): Gather and Chat runs don't follow it
+		const withPlan = plan && toolPolicy?.plan ? `${fullSystemMessage}\n\nCURRENT PLAN (the user may have edited it; follow it):\n${formatPlan(plan)}` : fullSystemMessage;
+		// modeInstructions arrives already headed `MODE INSTRUCTIONS (custom mode “<name>”):`
+		const systemMessage = disableSystemMessage ? '' : (modeInstructions ? `${withPlan}\n\n${modeInstructions}` : withPlan);
 
 		const modelSelectionOptions = this.zeroEgressSettingsService.state.optionsOfModelSelection['Chat'][modelSelection.providerName]?.[modelSelection.modelName]
 
@@ -695,7 +812,7 @@ class ConvertToLLMMessageService extends Disposable implements IConvertToLLMMess
 		const aiInstructions = this._getCombinedAIInstructions();
 		const isReasoningEnabled = getIsReasoningEnabledState('Chat', providerName, modelName, modelSelectionOptions, overridesOfModel)
 		const reservedOutputTokenSpace = getReservedOutputTokenSpace(providerName, modelName, { isReasoningEnabled, overridesOfModel })
-		const llmMessages = this._chatMessagesToSimpleMessages(chatMessages)
+		const llmMessages = await this._chatMessagesToSimpleMessages(applyCompaction(chatMessages, compaction), !!supportsVision)
 
 		const { messages, separateSystemMessage } = prepareMessages({
 			messages: llmMessages,
@@ -707,6 +824,7 @@ class ConvertToLLMMessageService extends Disposable implements IConvertToLLMMess
 			contextWindow,
 			reservedOutputTokenSpace,
 			providerName,
+			supportsVision: !!supportsVision,
 		})
 		return { messages, separateSystemMessage };
 	}

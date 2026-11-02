@@ -8,7 +8,7 @@ import { endsWithAnyPrefixOf, SurroundingsRemover } from '../../common/helpers/e
 import { availableTools, InternalToolInfo } from '../../common/prompt/prompts.js'
 import { OnFinalMessage, OnText, RawToolCallObj, RawToolParamsObj } from '../../common/sendLLMMessageTypes.js'
 import { ToolName, ToolParamName } from '../../common/toolsServiceTypes.js'
-import { ChatMode } from '../../common/zeroEgressSettingsTypes.js'
+import { ToolPolicy } from '../../common/toolPolicy.js'
 
 
 // =============== reasoning ===============
@@ -263,12 +263,12 @@ const parseXMLPrefixToToolCall = <T extends ToolName,>(toolName: T, toolId: stri
 export const extractXMLToolsWrapper = (
 	onText: OnText,
 	onFinalMessage: OnFinalMessage,
-	chatMode: ChatMode | null,
+	toolPolicy: ToolPolicy | null,
 	mcpTools: InternalToolInfo[] | undefined,
 ): { newOnText: OnText, newOnFinalMessage: OnFinalMessage } => {
 
-	if (!chatMode) return { newOnText: onText, newOnFinalMessage: onFinalMessage }
-	const tools = availableTools(chatMode, mcpTools)
+	if (!toolPolicy) return { newOnText: onText, newOnFinalMessage: onFinalMessage }
+	const tools = availableTools(toolPolicy, mcpTools)
 	if (!tools) return { newOnText: onText, newOnFinalMessage: onFinalMessage }
 
 	const toolOfToolName: ToolOfToolName = {}

@@ -10,13 +10,15 @@
 export type PromptContextItem =
 	| { readonly kind: 'file'; readonly path: string; readonly absolute?: boolean }
 	| { readonly kind: 'folder'; readonly path: string; readonly absolute?: boolean }
-	| { readonly kind: 'selection'; readonly path: string; readonly range: readonly [number, number]; readonly absolute?: boolean };
+	| { readonly kind: 'selection'; readonly path: string; readonly range: readonly [number, number]; readonly absolute?: boolean }
+	/** text captured at send time (terminal output, problems, a git diff); listed after the paths */
+	| { readonly kind: 'snapshot'; readonly text: string };
 
 /** a workspace-relative path without a leading or trailing separator, with forward slashes */
 const cleanRelative = (path: string) => path.replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+$/, '');
 
 /** the path as shown: absolute paths keep their form; a folder ends with one separator of the path's own kind */
-const shown = (item: PromptContextItem) => {
+const shown = (item: Exclude<PromptContextItem, { kind: 'snapshot' }>) => {
 	if (!item.absolute) {
 		return item.kind === 'folder' ? `${cleanRelative(item.path)}/` : cleanRelative(item.path);
 	}
@@ -30,15 +32,24 @@ const shown = (item: PromptContextItem) => {
 
 /**
  * `prompt`, then a blank line, `Context:` and one line per chip: `- <path>` for a file, `- <path>/` for a folder,
- * `- <path>:L<start>-L<end>` for a code selection. Workspace paths are relative; others stay absolute. No chips: the
+ * `- <path>:L<start>-L<end>` for a code selection. Snapshot chips follow as their own blocks under `Attached:`. Workspace paths are relative; others stay absolute. No chips: the
  * prompt unchanged.
  */
 export function promptWithContext(prompt: string, items: readonly PromptContextItem[]): string {
 	if (items.length === 0) {
 		return prompt;
 	}
-	const lines = items.map(item => item.kind === 'selection'
+	const paths = items.filter((item): item is Exclude<PromptContextItem, { kind: 'snapshot' }> => item.kind !== 'snapshot');
+	const snapshots = items.filter((item): item is Extract<PromptContextItem, { kind: 'snapshot' }> => item.kind === 'snapshot');
+	const lines = paths.map(item => item.kind === 'selection'
 		? `- ${shown(item)}:L${item.range[0]}-L${item.range[1]}`
 		: `- ${shown(item)}`);
-	return `${prompt}\n\nContext:\n${lines.join('\n')}`;
+	let out = prompt;
+	if (lines.length > 0) {
+		out += `\n\nContext:\n${lines.join('\n')}`;
+	}
+	if (snapshots.length > 0) {
+		out += `\n\nAttached:\n${snapshots.map(item => item.text).join('\n\n')}`;
+	}
+	return out;
 }
