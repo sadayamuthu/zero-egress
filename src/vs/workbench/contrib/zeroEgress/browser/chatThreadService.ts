@@ -61,8 +61,8 @@ import { IConfigurationService } from '../../../../platform/configuration/common
 import { AGENTS_MAX_CONCURRENT_DEFAULT, AGENTS_MAX_CONCURRENT_SETTING } from '../common/zeroEgressConfiguration.js';
 import { clampConcurrency, parallelRequestsOf } from '../common/zeroEgressSettingsTypes.js';
 import { nextPlan, PlanStep, ThreadPlan } from '../common/plan.js';
-import { resolveRunMode, RunMode } from '../common/customModes.js';
-import { refusalOf, ToolPolicy, toolPolicyOfMode } from '../common/toolPolicy.js';
+import { runModeFor } from '../common/customModes.js';
+import { refusalOf, ToolPolicy } from '../common/toolPolicy.js';
 
 
 // related to retrying when LLM message has error
@@ -1057,13 +1057,8 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 		const backgroundAgent = this.state.allThreads[threadId]?.agent
 		// a / command's mode wins, background agents included: it can only take tools away (gather, normal)
 		const modeOverride = this._modeOverrides.get(threadId)
-		// precedence: / command override, then background agent (agent), then the global mode (custom or built-in).
-		// an override or a background agent never uses a custom mode's tools or instructions
-		const runMode: RunMode = modeOverride
-			? { chatMode: modeOverride, toolPolicy: toolPolicyOfMode(modeOverride), label: modeOverride }
-			: backgroundAgent
-				? { chatMode: 'agent', toolPolicy: toolPolicyOfMode('agent'), label: 'Agent' }
-				: resolveRunMode(this._settingsService.state.globalSettings)
+		// precedence (runModeFor): / command override, then background agent, then the global mode (custom or built-in)
+		const runMode = runModeFor({ modeOverride, isBackground: !!backgroundAgent, gs: this._settingsService.state.globalSettings })
 		const { chatMode, toolPolicy, extraInstructions } = runMode
 		// a newer run of this chat owns the override; an older one ending late must not delete it
 		const runSeq = (this._runSeqs.get(threadId) ?? 0) + 1

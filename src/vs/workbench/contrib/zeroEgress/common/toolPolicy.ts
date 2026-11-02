@@ -4,21 +4,12 @@
  *--------------------------------------------------------------------------------------*/
 
 import { approvalTypeOfBuiltinToolName, BuiltinToolName } from './toolsServiceTypes.js';
-import { ChatMode } from './zeroEgressSettingsTypes.js';
+import type { ToolPolicy } from './customModes.js';
 
-/** Which groups of tools a run may use. Read tools are always allowed when a policy exists; `null` means no tools at all. */
-export type ToolPolicy = { edit: boolean; terminal: boolean; mcp: boolean; plan: boolean }
+export { toolPolicyOfMode } from './customModes.js'
+export type { ToolPolicy } from './customModes.js'
 
 export type ToolGroup = 'read' | 'edit' | 'terminal' | 'mcp' | 'plan'
-
-export function toolPolicyOfMode(mode: ChatMode): ToolPolicy | null {
-	switch (mode) {
-		case 'agent': return { edit: true, terminal: true, mcp: true, plan: true }
-		case 'gather': return { edit: false, terminal: false, mcp: false, plan: false }
-		case 'plan': return { edit: false, terminal: false, mcp: false, plan: true }
-		default: return null
-	}
-}
 
 export function toolGroupOf(toolName: string, isMCP: boolean): ToolGroup {
 	if (isMCP) return 'mcp'

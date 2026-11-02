@@ -6,7 +6,6 @@
 // Custom modes live only in app settings (never read from the project). They decide which tools a model may call.
 // No runtime vs/ imports: the chat React bundle re-exports this file.
 
-import type { ToolPolicy } from './toolPolicy.js';
 import type { ChatMode, GlobalSettings } from './zeroEgressSettingsTypes.js';
 
 export type CustomModeIcon = 'sparkles' | 'shield' | 'eye' | 'wrench' | 'book' | 'bug' | 'rocket' | 'pen'
@@ -21,8 +20,11 @@ export const MAX_CUSTOM_MODE_INSTRUCTIONS = 4000
 const builtInLabelOfMode: Record<ChatMode, string> = { agent: 'Agent', plan: 'Plan', gather: 'Gather', normal: 'Chat' }
 const builtInLabels = Object.values(builtInLabelOfMode)
 
-// kept in step with toolPolicyOfMode (toolPolicy.ts), which this file can't import at runtime
-const builtInPolicyOfMode = (mode: ChatMode): ToolPolicy | null => {
+/** Which groups of tools a run may use. Read tools are always allowed when a policy exists; `null` means no tools at all. */
+export type ToolPolicy = { edit: boolean; terminal: boolean; mcp: boolean; plan: boolean }
+
+/** the one built-in mode -> policy table (toolPolicy.ts re-exports it) */
+export function toolPolicyOfMode(mode: ChatMode): ToolPolicy | null {
 	switch (mode) {
 		case 'agent': return { edit: true, terminal: true, mcp: true, plan: true }
 		case 'gather': return { edit: false, terminal: false, mcp: false, plan: false }
@@ -31,20 +33,29 @@ const builtInPolicyOfMode = (mode: ChatMode): ToolPolicy | null => {
 	}
 }
 
+const builtInRunMode = (chatMode: ChatMode): RunMode => ({ chatMode, toolPolicy: toolPolicyOfMode(chatMode), label: builtInLabelOfMode[chatMode] })
+
 export function resolveRunMode(gs: Pick<GlobalSettings, 'chatMode' | 'customModes' | 'activeCustomModeId'>): RunMode {
-	const custom = gs.activeCustomModeId ? gs.customModes?.find(m => m.id === gs.activeCustomModeId) : undefined
-	if (!custom) {
-		return { chatMode: gs.chatMode, toolPolicy: builtInPolicyOfMode(gs.chatMode), label: builtInLabelOfMode[gs.chatMode] }
-	}
-	const { edit, terminal, mcp } = custom.tools
-	const instructions = custom.instructions.trim()
+	const custom = gs.activeCustomModeId && Array.isArray(gs.customModes) ? gs.customModes.find(m => m?.id === gs.activeCustomModeId) : undefined
+	if (!custom) return builtInRunMode(gs.chatMode)
+	// stored data may be malformed: only a real `true` grants a tool
+	const edit = custom.tools?.edit === true, terminal = custom.tools?.terminal === true, mcp = custom.tools?.mcp === true
+	const name = String(custom.name ?? '').replace(/[\r\n”]/g, ' ').trim().slice(0, MAX_CUSTOM_MODE_NAME).trim()
+	const instructions = String(custom.instructions ?? '').slice(0, MAX_CUSTOM_MODE_INSTRUCTIONS).trim()
 	return {
 		chatMode: (edit || terminal) ? 'agent' : 'gather',
 		toolPolicy: { edit, terminal, mcp, plan: edit || terminal },
-		label: custom.name,
-		extraInstructions: instructions ? `MODE INSTRUCTIONS (custom mode “${custom.name}”):\n${instructions}` : undefined,
+		label: name,
+		extraInstructions: instructions ? `MODE INSTRUCTIONS (custom mode “${name}”):\n${instructions}` : undefined,
 		customModeId: custom.id,
 	}
+}
+
+/** What a run uses: a / command's mode, else Agent for background agents, else the chosen mode. Only the last may carry custom tools or instructions. */
+export function runModeFor({ modeOverride, isBackground, gs }: { modeOverride?: ChatMode; isBackground: boolean; gs: Pick<GlobalSettings, 'chatMode' | 'customModes' | 'activeCustomModeId'> }): RunMode {
+	if (modeOverride) return builtInRunMode(modeOverride)
+	if (isBackground) return builtInRunMode('agent')
+	return resolveRunMode(gs)
 }
 
 export function validateCustomMode(m: CustomMode, others: CustomMode[]): string | null {

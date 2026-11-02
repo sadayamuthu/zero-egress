@@ -6,6 +6,7 @@
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { availableTools, InternalToolInfo } from '../prompt/prompts.js';
+import { resolveRunMode } from '../customModes.js';
 import { refusalOf, toolGroupOf, toolPolicyOfMode } from '../toolPolicy.js';
 
 suite('toolPolicy', () => {
@@ -60,6 +61,12 @@ suite('toolPolicy', () => {
 		const agent = toolPolicyOfMode('agent');
 		for (const [n, mcp] of [['edit_file', false], ['run_command', false], ['mcp_thing', true], ['read_file', false]] as const) {
 			assert.strictEqual(refusalOf(agent, n, mcp), null);
+		}
+	});
+
+	test('resolveRunMode uses the built-in policy table', () => {
+		for (const m of ['agent', 'gather', 'normal', 'plan'] as const) {
+			assert.deepStrictEqual(resolveRunMode({ chatMode: m, customModes: [], activeCustomModeId: null }).toolPolicy, toolPolicyOfMode(m));
 		}
 	});
 });

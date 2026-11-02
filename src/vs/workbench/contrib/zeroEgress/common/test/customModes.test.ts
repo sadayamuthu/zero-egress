@@ -5,7 +5,7 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { CustomMode, resolveRunMode, validateCustomMode } from '../customModes.js';
+import { CustomMode, resolveRunMode, runModeFor, validateCustomMode } from '../customModes.js';
 
 const mode = (o: { name?: string; instructions?: string; tools?: Partial<CustomMode['tools']> }): CustomMode => ({
 	id: 'm1', name: o.name ?? 'Mine', icon: 'eye', instructions: o.instructions ?? '',
@@ -39,5 +39,43 @@ suite('customModes', () => {
 		assert.strictEqual(validateCustomMode(mode({ name: '' }), []), 'Give the mode a name.');
 		assert.strictEqual(validateCustomMode(mode({ name: 'agent' }), []), 'Another mode already has this name.');
 		assert.strictEqual(validateCustomMode(mode({ name: 'Ok' }), []), null);
+	});
+
+	test('non-boolean tool values never grant access', () => {
+		const m = { ...mode({}), tools: { edit: 'false', terminal: 1, mcp: 'true' } } as unknown as CustomMode;
+		const r = resolveRunMode({ chatMode: 'agent', customModes: [m], activeCustomModeId: 'm1' });
+		assert.strictEqual(r.chatMode, 'gather');
+		assert.deepStrictEqual(r.toolPolicy, { edit: false, terminal: false, mcp: false, plan: false });
+	});
+
+	test('corrupted customModes falls back', () => {
+		const r = resolveRunMode({ chatMode: 'plan', customModes: {} as unknown as CustomMode[], activeCustomModeId: 'm1' });
+		assert.strictEqual(r.chatMode, 'plan');
+		assert.strictEqual(r.customModeId, undefined);
+	});
+
+	test('caps are enforced at use time', () => {
+		const long = mode({ name: '  ' + 'x”\ny'.repeat(20) + '  ', instructions: 'a'.repeat(5000) });
+		const r = resolveRunMode({ chatMode: 'agent', customModes: [long], activeCustomModeId: 'm1' });
+		const [header, body] = r.extraInstructions!.split('):\n');
+		assert.strictEqual(body.length, 4000);
+		assert.ok(r.label.length <= 24);
+		assert.ok(!/[\n”]/.test(header.slice('MODE INSTRUCTIONS (custom mode “'.length, -1)));
+	});
+
+	test('run precedence', () => {
+		const gs = { chatMode: 'agent' as const, customModes: [mode({ instructions: 'hi' })], activeCustomModeId: 'm1' };
+		const custom = runModeFor({ isBackground: false, gs });
+		assert.strictEqual(custom.customModeId, 'm1');
+		const bg = runModeFor({ isBackground: true, gs });
+		assert.strictEqual(bg.chatMode, 'agent');
+		assert.strictEqual(bg.label, 'Agent');
+		assert.strictEqual(bg.extraInstructions, undefined);
+		assert.strictEqual(bg.customModeId, undefined);
+		const ov = runModeFor({ modeOverride: 'gather', isBackground: true, gs });
+		assert.strictEqual(ov.label, 'Gather');
+		assert.deepStrictEqual(ov.toolPolicy, { edit: false, terminal: false, mcp: false, plan: false });
+		assert.strictEqual(ov.extraInstructions, undefined);
+		assert.strictEqual(runModeFor({ modeOverride: 'normal', isBackground: false, gs }).label, 'Chat');
 	});
 });
