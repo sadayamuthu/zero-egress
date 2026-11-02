@@ -60,7 +60,7 @@ import { IDisposable } from '../../../../base/common/lifecycle.js';
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { AGENTS_MAX_CONCURRENT_DEFAULT, AGENTS_MAX_CONCURRENT_SETTING } from '../common/zeroEgressConfiguration.js';
 import { clampConcurrency, parallelRequestsOf } from '../common/zeroEgressSettingsTypes.js';
-import { nextPlan, PlanStep, ThreadPlan } from '../common/plan.js';
+import { nextPlan, planAfterCut, planForPrompt, PlanStep, ThreadPlan } from '../common/plan.js';
 import { runModeFor, selectBuiltInMode } from '../common/customModes.js';
 import { refusalOf, ToolPolicy } from '../common/toolPolicy.js';
 
@@ -1120,7 +1120,7 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 					modeInstructions: extraInstructions,
 					agentRoot,
 					compaction: this.state.allThreads[threadId]?.compaction,
-					plan: this.state.allThreads[threadId]?.plan?.steps,
+					plan: planForPrompt(this.state.allThreads[threadId]?.plan, toolPolicy),
 				})
 
 				if (interruptedWhenIdle) {
@@ -1570,10 +1570,15 @@ We only need to do it for files that were edited since `from`, ie files between 
 		}
 
 		this._setThreadState(threadId, { currCheckpointIdx: toIdx })
-		// the messages after the checkpoint are dropped on the next send; a summary reaching past it goes now
+		// the messages after the checkpoint are dropped on the next send; a summary or plan reaching past it goes now
 		const restored = this.state.allThreads[threadId]
-		if (restored?.compaction && !compactionAfterCut(restored.compaction, toIdx + 1)) {
-			const { compaction: _gone, ...rest } = restored
+		const keptMessages = restored ? restored.messages.slice(0, toIdx + 1) : []
+		const compactionGoes = !!restored?.compaction && !compactionAfterCut(restored.compaction, toIdx + 1)
+		const planGoes = !!restored?.plan && !planAfterCut(keptMessages, restored.plan)
+		if (restored && (compactionGoes || planGoes)) {
+			const rest = { ...restored }
+			if (compactionGoes) { delete rest.compaction }
+			if (planGoes) { delete rest.plan }
 			const newThreads = { ...this.state.allThreads, [threadId]: rest }
 			this._storeAllThreads(newThreads)
 			this._setState({ allThreads: newThreads })
@@ -1694,6 +1699,7 @@ We only need to do it for files that were edited since `from`, ie files between 
 					lastModified: new Date().toISOString(),
 					messages: newMessages,
 					compaction: compactionAfterCut(thread.compaction, newMessages.length),
+					plan: planAfterCut(newMessages, thread.plan),
 				}
 			};
 			this._storeAllThreads(newThreads);
@@ -1727,6 +1733,7 @@ We only need to do it for files that were edited since `from`, ie files between 
 					...thread,
 					messages: slicedMessages,
 					compaction: compactionAfterCut(thread.compaction, slicedMessages.length),
+					plan: planAfterCut(slicedMessages, thread.plan),
 				}
 			}
 		})

@@ -795,7 +795,8 @@ class ConvertToLLMMessageService extends Disposable implements IConvertToLLMMess
 
 		const { disableSystemMessage } = this.zeroEgressSettingsService.state.globalSettings;
 		const fullSystemMessage = await this._generateChatMessagesSystemMessage(chatMode, toolPolicy, specialToolFormat, agentRoot)
-		const withPlan = plan ? `${fullSystemMessage}\n\nCURRENT PLAN (the user may have edited it; follow it):\n${formatPlan(plan)}` : fullSystemMessage;
+		// the plan steers only runs that may write it (Agent, Plan): Gather and Chat runs don't follow it
+		const withPlan = plan && toolPolicy?.plan ? `${fullSystemMessage}\n\nCURRENT PLAN (the user may have edited it; follow it):\n${formatPlan(plan)}` : fullSystemMessage;
 		// modeInstructions arrives already headed `MODE INSTRUCTIONS (custom mode “<name>”):`
 		const systemMessage = disableSystemMessage ? '' : (modeInstructions ? `${withPlan}\n\n${modeInstructions}` : withPlan);
 

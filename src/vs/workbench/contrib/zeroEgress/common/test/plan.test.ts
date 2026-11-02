@@ -5,7 +5,8 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { formatPlan, nextPlan, parsePlan, planProgress, PlanStep, ThreadPlan } from '../plan.js';
+import { formatPlan, nextPlan, parsePlan, planAfterCut, planForPrompt, planProgress, PlanStep, ThreadPlan } from '../plan.js';
+import type { ChatMessage } from '../chatThreadServiceTypes.js';
 
 suite('plan', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
@@ -97,5 +98,25 @@ suite('plan', () => {
 		const n = nextPlan(undefined, steps, false, 't3');
 		assert.strictEqual(n.madeInPlanMode, false);
 		assert.strictEqual(n.approvedAt, undefined);
+	});
+
+	const planOf = (): ThreadPlan => ({ steps: [{ text: 'a', status: 'current' }], updatedAt: 't', madeInPlanMode: true });
+	const user = (): ChatMessage => ({ role: 'user', content: 'hi', displayContent: 'hi', selections: null, state: { stagingSelections: [], isBeingEdited: false } });
+	const planTool = (type: 'success' | 'tool_error'): ChatMessage => ({ role: 'tool', type, name: 'update_plan', id: '1', content: '', rawParams: {}, mcpServerName: undefined, params: { steps: '[ ] a' }, result: type === 'success' ? {} : 'err' } as unknown as ChatMessage);
+
+	test('planAfterCut drops a plan whose update_plan call was cut', () => {
+		const plan = planOf();
+		assert.strictEqual(planAfterCut([user()], plan), undefined);
+		assert.strictEqual(planAfterCut([user(), planTool('tool_error')], plan), undefined);
+		assert.strictEqual(planAfterCut([user(), planTool('success')], plan), plan);
+		assert.strictEqual(planAfterCut([user(), planTool('success')], undefined), undefined);
+	});
+
+	test('planForPrompt: only runs that may write the plan see it', () => {
+		const plan = planOf();
+		assert.deepStrictEqual(planForPrompt(plan, { plan: true }), plan.steps);
+		assert.strictEqual(planForPrompt(plan, { plan: false }), undefined);
+		assert.strictEqual(planForPrompt(plan, null), undefined);
+		assert.strictEqual(planForPrompt(undefined, { plan: true }), undefined);
 	});
 });

@@ -3,6 +3,8 @@
  *  Licensed under the Apache License, Version 2.0. See LICENSE.txt for more information.
  *--------------------------------------------------------------------------------------*/
 
+import type { ChatMessage } from './chatThreadServiceTypes.js'
+
 export type PlanStatus = 'done' | 'current' | 'todo'
 export type PlanStep = { text: string; status: PlanStatus }
 export type ThreadPlan = { steps: PlanStep[]; updatedAt: string; madeInPlanMode: boolean; approvedAt?: string; editedAt?: string }
@@ -81,4 +83,15 @@ export function planProgress(steps: PlanStep[]): { done: number; total: number }
 export function nextPlan(prev: ThreadPlan | undefined, steps: PlanStep[], madeInPlanMode: boolean, now: string): ThreadPlan {
 	if (madeInPlanMode) return { steps, updatedAt: now, madeInPlanMode: true }
 	return { steps, updatedAt: now, madeInPlanMode: prev?.madeInPlanMode ?? false, approvedAt: prev?.approvedAt }
+}
+
+/** the plan that survives a cut (restore, edit) leaving `messages`: none once no successful update_plan call remains */
+export function planAfterCut(messages: ChatMessage[], plan: ThreadPlan | undefined): ThreadPlan | undefined {
+	if (!plan) return undefined
+	return messages.some(m => m.role === 'tool' && m.name === 'update_plan' && m.type === 'success') ? plan : undefined
+}
+
+/** the plan steps shown to the model: only runs that may write the plan (Agent, Plan, editing custom modes) see it */
+export function planForPrompt(plan: ThreadPlan | undefined, toolPolicy: { plan: boolean } | null): PlanStep[] | undefined {
+	return plan && toolPolicy?.plan ? plan.steps : undefined
 }
