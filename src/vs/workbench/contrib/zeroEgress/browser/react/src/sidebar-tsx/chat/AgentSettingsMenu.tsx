@@ -38,6 +38,7 @@ export const AgentSettingsMenu = ({ threadId }: { threadId: string }) => {
 	const settingsService = accessor.get('IZeroEgressSettingsService');
 	const commandAllowListService = accessor.get('ICommandAllowListService');
 	const commandService = accessor.get('ICommandService');
+	const chatContext = accessor.get('IChatContextService');
 	const globalSettings = useSettingsState().globalSettings;
 	const allowed = useCommandAllowList();
 
@@ -49,6 +50,7 @@ export const AgentSettingsMenu = ({ threadId }: { threadId: string }) => {
 	const [modesView, setModesView] = useState<null | 'list' | 'new' | CustomMode>(null);
 	const close = () => { setOpen(false); setShowList(false); setModesView(null); };
 
+	const hasFolder = chatContext.hasWorkspaceFolder();
 	const terminal = terminalAutoRunOf(globalSettings);
 	const setApprove = (key: 'edits' | 'MCP tools', on: boolean) => {
 		// keep the other keys of autoApprove, as the full Settings page does
@@ -133,6 +135,10 @@ export const AgentSettingsMenu = ({ threadId }: { threadId: string }) => {
 			<MenuRow onSelect={() => setModesView('list')}>
 				<span>Custom modes</span>
 				<span className='ml-auto text-xs text-ze-fg-3'>{customModes.length} ›</span>
+			</MenuRow>
+			<MenuRow disabled={!hasFolder} onSelect={() => { close(); void chatContext.openProjectRules(); }}>
+				<span>Project rules</span>
+				<span className='ml-auto text-xs text-ze-fg-3'>{hasFolder ? '.zeroegressrules ›' : 'Open a folder first'}</span>
 			</MenuRow>
 			{contextUse ? <>
 				<MenuHeading>Context</MenuHeading>

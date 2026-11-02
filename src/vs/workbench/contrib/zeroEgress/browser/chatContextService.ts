@@ -14,6 +14,9 @@ import { ILanguageService } from '../../../../editor/common/languages/language.j
 import { IEnvironmentService } from '../../../../platform/environment/common/environment.js';
 import { IFileDialogService } from '../../../../platform/dialogs/common/dialogs.js';
 import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
+import { ICommandService } from '../../../../platform/commands/common/commands.js';
+import { IZeroEgressModelService } from '../common/zeroEgressModelService.js';
+import { checkProjectRulesFile, PROJECT_RULES_FILE } from './projectRules.js';
 import { IFileService } from '../../../../platform/files/common/files.js';
 import { InstantiationType, registerSingleton } from '../../../../platform/instantiation/common/extensions.js';
 import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
@@ -45,6 +48,8 @@ const SYMBOL_TIMEOUT_MS = 2000;
 const COMMANDS_DIR = '.zeroegress/commands';
 const COMMANDS_MAX_FILES = COMMAND_FILES_MAX;
 const COMMANDS_MAX_BYTES = COMMAND_FILE_MAX_BYTES;
+const PROJECT_RULES_HEADER = '# Rules for the agent in this project. Plain text; the agent reads this file with every message.\n';
+const PROJECT_RULES_LINK = ".zeroegressrules is a link, so ZeroEgress won't read it.";
 const UNSUPPORTED_IMAGE = 'Only PNG, JPEG, WebP and GIF images are supported.';
 
 export interface IChatContextService {
@@ -62,6 +67,9 @@ export interface IChatContextService {
 	pickImage(): Promise<Sel<'Image'> | null>;
 	imageFromClipboard(data: Uint8Array, mime: string): Promise<Sel<'Image'> | null>;
 	customCommands(): Promise<CustomCommand[]>;
+	hasWorkspaceFolder(): boolean;
+	/** opens <first folder>/.zeroegressrules, creating it with a header line if missing; never through a symlink */
+	openProjectRules(): Promise<void>;
 }
 
 export const IChatContextService = createDecorator<IChatContextService>('zeroEgressChatContextService');
@@ -86,6 +94,8 @@ class ChatContextService implements IChatContextService {
 		@IEnvironmentService private readonly environmentService: IEnvironmentService,
 		@INotificationService private readonly notificationService: INotificationService,
 		@IWorkspaceContextService private readonly workspaceService: IWorkspaceContextService,
+		@ICommandService private readonly commandService: ICommandService,
+		@IZeroEgressModelService private readonly zeroEgressModelService: IZeroEgressModelService,
 	) {
 		this.scm = ProxyChannel.toService<IZeroEgressSCMService>(mainProcessService.getChannel('zero-egress-channel-scm'));
 	}
@@ -268,6 +278,28 @@ class ChatContextService implements IChatContextService {
 			await this.fileService.writeFile(uri, VSBuffer.wrap(data));
 		}
 		return { type: 'Image', uri, name, mime: mime as Sel<'Image'>['mime'], bytes: data.byteLength };
+	}
+
+	hasWorkspaceFolder(): boolean {
+		return this.workspaceService.getWorkspace().folders.length > 0;
+	}
+
+	async openProjectRules(): Promise<void> {
+		const folder = this.workspaceService.getWorkspace().folders[0];
+		if (!folder) { return; }
+		const uri = joinPath(folder.uri, PROJECT_RULES_FILE);
+		let state = await checkProjectRulesFile(this.fileService, uri);
+		if (state === 'missing') {
+			await this.fileService.writeFile(uri, VSBuffer.fromString(PROJECT_RULES_HEADER));
+			state = await checkProjectRulesFile(this.fileService, uri);
+		}
+		if (state !== 'ok') {
+			this.notificationService.notify({ severity: Severity.Warning, message: PROJECT_RULES_LINK });
+			return;
+		}
+		// so new rules apply without a reload
+		await this.zeroEgressModelService.initializeModel(uri);
+		await this.commandService.executeCommand('vscode.open', uri);
 	}
 
 	/** <folder>/.zeroegress/commands/*.md of each workspace folder in order; the first of a name wins. Prompt text only; symlinks are never followed. */

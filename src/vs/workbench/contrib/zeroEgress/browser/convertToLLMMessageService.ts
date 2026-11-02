@@ -25,6 +25,7 @@ import { ToolName } from '../common/toolsServiceTypes.js';
 import { IMCPService } from '../common/mcpService.js';
 import { encodeBase64 } from '../../../../base/common/buffer.js';
 import { IFileService } from '../../../../platform/files/common/files.js';
+import { checkProjectRulesFile, PROJECT_RULES_FILE } from './projectRules.js';
 import { IMAGE_MAX_BYTES } from '../common/selectionText.js';
 import { MAX_IMAGES_PER_MESSAGE, imageMessageIndex, mergeUserImages, noteForImage, prefixUserContent, toOpenAIUserContent } from '../common/imageContent.js';
 
@@ -590,6 +591,29 @@ class ConvertToLLMMessageService extends Disposable implements IConvertToLLMMess
 		@IFileService private readonly fileService: IFileService,
 	) {
 		super()
+		this._refreshAllRulesAllowed()
+		this._register(this.workspaceContextService.onDidChangeWorkspaceFolders(() => this._refreshAllRulesAllowed()))
+		this._register(this.fileService.onDidFilesChange(e => {
+			for (const f of this.workspaceContextService.getWorkspace().folders) {
+				if (e.contains(URI.joinPath(f.uri, PROJECT_RULES_FILE))) void this._refreshRulesAllowed(f.uri)
+			}
+		}))
+	}
+
+	// folders (fsPath) whose .zeroegressrules is a plain, small file. Unknown = not allowed, so a symlinked file is never read.
+	private readonly _rulesAllowed = new Set<string>()
+
+	private async _refreshRulesAllowed(folderUri: URI) {
+		const ok = (await checkProjectRulesFile(this.fileService, URI.joinPath(folderUri, PROJECT_RULES_FILE))) === 'ok'
+		if (ok) this._rulesAllowed.add(folderUri.fsPath)
+		else this._rulesAllowed.delete(folderUri.fsPath)
+	}
+
+	private _refreshAllRulesAllowed() {
+		const folders = this.workspaceContextService.getWorkspace().folders
+		const keep = new Set(folders.map(f => f.uri.fsPath))
+		for (const k of [...this._rulesAllowed]) if (!keep.has(k)) this._rulesAllowed.delete(k)
+		for (const f of folders) void this._refreshRulesAllowed(f.uri)
 	}
 
 	// Read .zeroegressrules files from workspace folders
@@ -598,7 +622,8 @@ class ConvertToLLMMessageService extends Disposable implements IConvertToLLMMess
 			const workspaceFolders = this.workspaceContextService.getWorkspace().folders;
 			let zeroEgressRules = '';
 			for (const folder of workspaceFolders) {
-				const uri = URI.joinPath(folder.uri, '.zeroegressrules')
+				if (!this._rulesAllowed.has(folder.uri.fsPath)) continue
+				const uri = URI.joinPath(folder.uri, PROJECT_RULES_FILE)
 				const { model } = this.zeroEgressModelService.getModel(uri)
 				if (!model) continue
 				zeroEgressRules += model.getValue(EndOfLinePreference.LF) + '\n\n';
