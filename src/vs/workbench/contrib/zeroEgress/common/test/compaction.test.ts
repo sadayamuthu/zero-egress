@@ -5,7 +5,7 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { applyCompaction, compactionAfterCut, compactionCut, compactionStillValid, compactionTranscript } from '../compaction.js';
+import { applyCompaction, compactionAfterCut, compactionCut, compactionInput, compactionStillValid, compactionTranscript } from '../compaction.js';
 import type { ChatMessage } from '../chatThreadServiceTypes.js';
 
 const seq = (roles: string): ChatMessage[] => [...roles].map((r, i) => r === 'u'
@@ -63,5 +63,22 @@ suite('compaction', () => {
 		assert.strictEqual(compactionStillValid([...messages, ...seq('ua')], 2, at), true);
 		assert.strictEqual(compactionStillValid(messages.slice(0, 2), 2, at), false);
 		assert.strictEqual(compactionStillValid([...messages.slice(0, 2), ...seq('uaua')], 2, at), false);
+	});
+
+	test('input starts from the previous summary, not the start of the chat', () => {
+		const ms = seq('uauauaua');
+		assert.strictEqual(compactionInput(ms, 6, { summary: 'S', uptoIdx: 4, at: 't' }, 10000), 'Previous summary:\nS\n\nUSER: u4\n\nASSISTANT: a5');
+		assert.strictEqual(compactionInput(ms, 4, undefined, 10000), 'USER: u0\n\nASSISTANT: a1\n\nUSER: u2\n\nASSISTANT: a3');
+	});
+
+	test('over budget, input keeps the newest messages and the whole previous summary', () => {
+		const ms = seq('uauauaua');
+		// "USER: u4" is 8 chars, "ASSISTANT: a5" 13, joined by two newlines
+		const prev = { summary: 'S'.repeat(50), uptoIdx: 2, at: 't' };
+		const out = compactionInput(ms, 6, prev, 'Previous summary:\n'.length + 50 + 2 + 8 + 2 + 13);
+		assert.strictEqual(out, 'Previous summary:\n' + 'S'.repeat(50) + '\n\nUSER: u4\n\nASSISTANT: a5');
+		assert.strictEqual(compactionInput(ms, 4, undefined, 12), 'ASSISTANT: a3');
+		// the newest message is kept even when it alone is over budget
+		assert.strictEqual(compactionInput(ms, 4, undefined, 1), 'ASSISTANT: a3');
 	});
 });

@@ -40,7 +40,9 @@ import { truncate } from '../../../../base/common/strings.js';
 import { CHAT_OPEN_TABS_STORAGE_KEY, THREAD_STORAGE_KEY } from '../common/storageKeys.js';
 import { closeTab as closeTabOf, openTab, restoreTabs } from '../common/chatTabs.js';
 import { IConvertToLLMMessageService } from './convertToLLMMessageService.js';
-import { Compaction, COMPACT_SYSTEM_PROMPT, compactionAfterCut, compactionCut, compactionStillValid, compactionTranscript } from '../common/compaction.js';
+import { Compaction, COMPACT_SYSTEM_PROMPT, compactionAfterCut, compactionCut, compactionInput, compactionStillValid } from '../common/compaction.js';
+import { CHARS_PER_TOKEN } from '../common/contextUse.js';
+import { getModelCapabilities } from '../common/modelCapabilities.js';
 import { timeout } from '../../../../base/common/async.js';
 import { deepClone } from '../../../../base/common/objects.js';
 import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
@@ -1778,8 +1780,11 @@ We only need to do it for files that were edited since `from`, ie files between 
 		const timer = setTimeout(() => this._cancelCompaction(threadId, 'timeout'), COMPACT_TIMEOUT_MS)
 		try {
 			const { modelSelection, modelSelectionOptions } = this._currentModelSelectionProps()
+			// the previous summary plus the turns after it; over half the context window, the oldest turns go first
+			const contextWindow = modelSelection ? getModelCapabilities(modelSelection.providerName, modelSelection.modelName, this._settingsService.state.overridesOfModel).contextWindow : 0
+			const transcript = compactionInput(thread.messages, cut, thread.compaction, Math.floor(contextWindow / 2) * CHARS_PER_TOKEN)
 			const { messages, separateSystemMessage } = this._convertToLLMMessagesService.prepareLLMSimpleMessages({
-				simpleMessages: [{ role: 'user', content: compactionTranscript(thread.messages.slice(0, cut)) }],
+				simpleMessages: [{ role: 'user', content: transcript }],
 				systemMessage: COMPACT_SYSTEM_PROMPT,
 				modelSelection,
 				featureName: 'Chat',

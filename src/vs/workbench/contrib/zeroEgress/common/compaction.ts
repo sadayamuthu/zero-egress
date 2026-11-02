@@ -43,15 +43,38 @@ export function compactionAfterCut(c: Compaction | undefined, newLength: number)
 
 const trim = (s: string) => s.length > MAX_CHARS_PER_MESSAGE ? s.slice(0, MAX_CHARS_PER_MESSAGE) + '…' : s;
 
-/** the transcript sent to the model to summarize: "USER: …" / "ASSISTANT: …" / "TOOL <name>: …", each trimmed */
-export function compactionTranscript(messages: ChatMessage[]): string {
+const chunksOf = (messages: ChatMessage[]): string[] => {
 	const lines: string[] = [];
 	for (const m of messages) {
 		if (m.role === 'user') { lines.push('USER: ' + trim(m.content || m.displayContent)); }
 		else if (m.role === 'assistant') { lines.push('ASSISTANT: ' + trim(m.displayContent)); }
 		else if (m.role === 'tool') { lines.push(`TOOL ${m.name}: ` + trim(m.content)); }
 	}
-	return lines.join('\n\n');
+	return lines;
+};
+
+/** the transcript sent to the model to summarize: "USER: …" / "ASSISTANT: …" / "TOOL <name>: …", each trimmed */
+export function compactionTranscript(messages: ChatMessage[]): string {
+	return chunksOf(messages).join('\n\n');
+}
+
+/**
+ * What a new summary is written from: the previous summary (whole) and the turns after it up to `cut`. Over
+ * `budgetChars`, the oldest turns are dropped first, so the newest work always reaches the summary.
+ */
+export function compactionInput(messages: ChatMessage[], cut: number, prev: Compaction | undefined, budgetChars: number): string {
+	const from = prev && prev.uptoIdx <= cut ? prev.uptoIdx : 0;
+	const head = prev && prev.uptoIdx <= cut ? 'Previous summary:\n' + prev.summary : undefined;
+	const chunks = chunksOf(messages.slice(from, cut));
+	let used = head === undefined ? 0 : head.length;
+	const kept: string[] = [];
+	for (let i = chunks.length - 1; i >= 0; i--) {
+		const cost = chunks[i].length + (used > 0 ? 2 : 0);
+		if (kept.length > 0 && used + cost > budgetChars) { break; }
+		kept.unshift(chunks[i]);
+		used += cost;
+	}
+	return (head === undefined ? kept : [head, ...kept]).join('\n\n');
 }
 
 /** a summary computed for `messages[0..cut)` may be stored only if the chat still holds the same message at `cut` */
