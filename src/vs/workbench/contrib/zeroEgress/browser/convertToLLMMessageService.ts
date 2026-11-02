@@ -26,6 +26,7 @@ import { IMCPService } from '../common/mcpService.js';
 import { encodeBase64 } from '../../../../base/common/buffer.js';
 import { IFileService } from '../../../../platform/files/common/files.js';
 import { checkProjectRulesFile, PROJECT_RULES_FILE } from './projectRules.js';
+import { LatestOnly } from '../common/projectFiles.js';
 import { IMAGE_MAX_BYTES } from '../common/selectionText.js';
 import { MAX_IMAGES_PER_MESSAGE, imageMessageIndex, mergeUserImages, noteForImage, prefixUserContent, toOpenAIUserContent } from '../common/imageContent.js';
 
@@ -602,9 +603,14 @@ class ConvertToLLMMessageService extends Disposable implements IConvertToLLMMess
 
 	// folders (fsPath) whose .zeroegressrules is a plain, small file. Unknown = not allowed, so a symlinked file is never read.
 	private readonly _rulesAllowed = new Set<string>()
+	private readonly _rulesChecks = new LatestOnly() // checks can finish out of order: only the newest per folder applies
 
 	private async _refreshRulesAllowed(folderUri: URI) {
+		const key = folderUri.fsPath
+		const gen = this._rulesChecks.start(key)
+		this._rulesAllowed.delete(key) // not allowed while the file is being checked again
 		const ok = (await checkProjectRulesFile(this.fileService, URI.joinPath(folderUri, PROJECT_RULES_FILE))) === 'ok'
+		if (!this._rulesChecks.isLatest(key, gen)) return
 		if (ok) this._rulesAllowed.add(folderUri.fsPath)
 		else this._rulesAllowed.delete(folderUri.fsPath)
 	}

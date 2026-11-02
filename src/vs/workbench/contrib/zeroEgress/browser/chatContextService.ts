@@ -17,7 +17,8 @@ import { IWorkspaceContextService } from '../../../../platform/workspace/common/
 import { ICommandService } from '../../../../platform/commands/common/commands.js';
 import { IZeroEgressModelService } from '../common/zeroEgressModelService.js';
 import { checkProjectRulesFile, PROJECT_RULES_FILE } from './projectRules.js';
-import { IFileService } from '../../../../platform/files/common/files.js';
+import { FileOperationResult, IFileService, toFileOperationResult } from '../../../../platform/files/common/files.js';
+import { projectRulesRefusal } from '../common/projectFiles.js';
 import { InstantiationType, registerSingleton } from '../../../../platform/instantiation/common/extensions.js';
 import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
 import { IMainProcessService } from '../../../../platform/ipc/common/mainProcessService.js';
@@ -50,7 +51,6 @@ const COMMANDS_DIR = '.zeroegress/commands';
 const COMMANDS_MAX_FILES = COMMAND_FILES_MAX;
 const COMMANDS_MAX_BYTES = COMMAND_FILE_MAX_BYTES;
 const PROJECT_RULES_HEADER = '# Rules for the agent in this project. Plain text; the agent reads this file with every message.\n';
-const PROJECT_RULES_LINK = ".zeroegressrules is a link, so ZeroEgress won't read it.";
 const UNSUPPORTED_IMAGE = 'Only PNG, JPEG, WebP and GIF images are supported.';
 
 export interface IChatContextService {
@@ -292,11 +292,20 @@ class ChatContextService implements IChatContextService {
 		const uri = joinPath(folder.uri, PROJECT_RULES_FILE);
 		let state = await checkProjectRulesFile(this.fileService, uri);
 		if (state === 'missing') {
-			await this.fileService.writeFile(uri, VSBuffer.fromString(PROJECT_RULES_HEADER));
+			try {
+				// never overwrites: a file (or link) made in the meantime is checked below instead
+				await this.fileService.createFile(uri, VSBuffer.fromString(PROJECT_RULES_HEADER), { overwrite: false });
+			} catch (e) {
+				if (!(e instanceof Error && toFileOperationResult(e) === FileOperationResult.FILE_MODIFIED_SINCE)) {
+					this.notificationService.notify({ severity: Severity.Warning, message: `Couldn't create .zeroegressrules: ${e instanceof Error ? e.message : String(e)}` });
+					return;
+				}
+			}
 			state = await checkProjectRulesFile(this.fileService, uri);
 		}
+		if (state === 'missing') { return; }
 		if (state !== 'ok') {
-			this.notificationService.notify({ severity: Severity.Warning, message: PROJECT_RULES_LINK });
+			this.notificationService.notify({ severity: Severity.Warning, message: projectRulesRefusal(state) });
 			return;
 		}
 		// so new rules apply without a reload

@@ -4,17 +4,18 @@
  *--------------------------------------------------------------------------------------*/
 
 import { URI } from '../../../../base/common/uri.js';
-import { IFileService } from '../../../../platform/files/common/files.js';
-import { isReadableProjectRulesFile } from '../common/projectFiles.js';
+import { FileOperationResult, IFileService, toFileOperationResult } from '../../../../platform/files/common/files.js';
+import { ProjectRulesState, projectRulesStateOf } from '../common/projectFiles.js';
 
 export const PROJECT_RULES_FILE = '.zeroegressrules';
 
-/** 'missing' = nothing there; 'unsafe' = a link, a folder or too big; 'ok' = may be read */
-export async function checkProjectRulesFile(fileService: IFileService, uri: URI): Promise<'ok' | 'missing' | 'unsafe'> {
+/** 'missing' = nothing there; 'link' = a symlink; 'unsafe' = a folder, too big, or it couldn't be checked; 'ok' = may be read */
+export async function checkProjectRulesFile(fileService: IFileService, uri: URI): Promise<ProjectRulesState> {
 	try {
 		const s = await fileService.resolve(uri, { resolveMetadata: true });
-		return isReadableProjectRulesFile({ isFile: s.isFile, isSymbolicLink: s.isSymbolicLink, size: s.size }) ? 'ok' : 'unsafe';
-	} catch {
-		return 'missing';
+		return projectRulesStateOf({ isFile: s.isFile, isSymbolicLink: s.isSymbolicLink, size: s.size });
+	} catch (e) {
+		// only "not found" is missing: any other error (permissions, a broken link) is never read
+		return e instanceof Error && toFileOperationResult(e) === FileOperationResult.FILE_NOT_FOUND ? 'missing' : 'unsafe';
 	}
 }
