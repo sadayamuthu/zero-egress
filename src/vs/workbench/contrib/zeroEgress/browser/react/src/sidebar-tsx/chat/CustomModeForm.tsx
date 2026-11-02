@@ -34,8 +34,6 @@ export const useCustomModes = (): CustomMode[] => {
 	return Array.isArray(customModes) ? customModes.filter(m => !!m && typeof m.id === 'string') : [];
 };
 
-const fieldClass = 'w-full px-1.5 py-1 rounded text-sm bg-[var(--vscode-input-background)] text-[var(--vscode-input-foreground)] border border-[var(--vscode-input-border,transparent)] outline-none focus:border-[var(--vscode-focusBorder)]';
-const buttonClass = 'px-2 py-1 rounded-[6px] text-sm hover:bg-[var(--vscode-list-hoverBackground)] outline-none focus-visible:bg-[var(--vscode-list-hoverBackground)]';
 
 export const CustomModeForm = ({ mode, onDone }: { mode: CustomMode | null; onDone: () => void }) => {
 	const settingsService = useAccessor().get('IZeroEgressSettingsService');
@@ -71,7 +69,7 @@ export const CustomModeForm = ({ mode, onDone }: { mode: CustomMode | null; onDo
 			<input
 				type='text'
 				autoFocus
-				className={fieldClass}
+				className='w-full px-1.5 py-1 rounded text-sm bg-[var(--vscode-input-background)] text-[var(--vscode-input-foreground)] border border-[var(--vscode-input-border,transparent)] outline-none focus:border-[var(--vscode-focusBorder)]'
 				value={draft.name}
 				aria-invalid={tried && !!error}
 				onChange={e => setDraft(d => ({ ...d, name: e.target.value }))}
@@ -103,7 +101,7 @@ export const CustomModeForm = ({ mode, onDone }: { mode: CustomMode | null; onDo
 			Instructions
 			<textarea
 				rows={4}
-				className={`${fieldClass} resize-y`}
+				className='w-full px-1.5 py-1 rounded text-sm bg-[var(--vscode-input-background)] text-[var(--vscode-input-foreground)] border border-[var(--vscode-input-border,transparent)] outline-none focus:border-[var(--vscode-focusBorder)] resize-y'
 				value={draft.instructions}
 				onChange={e => setDraft(d => ({ ...d, instructions: e.target.value }))}
 			/>
@@ -111,10 +109,10 @@ export const CustomModeForm = ({ mode, onDone }: { mode: CustomMode | null; onDo
 		<div className='text-xs text-ze-fg-3'>Saved in the app settings, never in the project.</div>
 		{tried && error ? <div role='alert' className='text-xs text-[var(--vscode-errorForeground)]'>{error}</div> : null}
 		<div className='sticky bottom-0 -mb-2 pb-2 pt-1 flex items-center gap-1 bg-ze-bg-1'>
-			{mode ? <button type='button' className={`${buttonClass} text-[var(--vscode-errorForeground)]`} onClick={remove}>Delete mode</button> : null}
+			{mode ? <button type='button' className='px-2 py-0.5 rounded-[6px] text-xs text-[var(--vscode-errorForeground)] hover:bg-[var(--vscode-list-hoverBackground)] cursor-pointer' onClick={remove}>Delete mode</button> : null}
 			<span className='ml-auto' />
-			<button type='button' className={`${buttonClass} text-ze-fg-1`} onClick={onDone}>Cancel</button>
-			<button type='submit' className={`${buttonClass} text-ze-fg-1 font-medium`}>Save</button>
+			<button type='button' className='px-2 py-0.5 rounded-[6px] text-xs border border-ze-border-2 bg-ze-bg-2 text-ze-fg-1 hover:bg-ze-bg-2-hover cursor-pointer' onClick={onDone}>Cancel</button>
+			<button type='submit' className='px-2 py-0.5 rounded-[6px] text-xs font-medium bg-ze-accent text-ze-on-accent hover:bg-ze-accent-hover cursor-pointer'>Save</button>
 		</div>
 	</form>;
 };
