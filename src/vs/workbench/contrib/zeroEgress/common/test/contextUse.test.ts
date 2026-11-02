@@ -60,4 +60,22 @@ suite('contextUse', () => {
 		assert.strictEqual(formatContextUse({ usedTokens: 20316, contextWindow: 32768, fraction: 0.62, estimated: false }), '62% of 32k');
 		assert.strictEqual(formatContextUse({ usedTokens: 20316, contextWindow: 32768, fraction: 0.62, estimated: true }), '≈62% of 32k');
 	});
+
+	test('after Compact, the meter estimates from the summarized chat until the next counted reply', () => {
+		// u0 a1 u2 a3 u4 a5: Compact cut at u2 (the last two turns stay); a5's counts still cover the whole chat
+		const ms = [user(4000), assistant(4000, { promptTokens: 9000, completionTokens: 100 }), user(40), assistant(40, { promptTokens: 9100, completionTokens: 100 }), user(40), assistant(40, { promptTokens: 9200, completionTokens: 100 })];
+		const compaction = { summary: 's'.repeat(100), uptoIdx: 2, at: 't' };
+		const u = contextUseOf(ms, 32768, 0, compaction);
+		assert.strictEqual(u.estimated, true);
+		// 'Summary of the earlier conversation:\n' (37) + 100, then 4 × 40 chars
+		assert.strictEqual(u.usedTokens, Math.ceil((37 + 100) / 4) + 40);
+		// without the compaction the counts are used
+		assert.strictEqual(contextUseOf(ms, 32768, 0).usedTokens, 9300);
+	});
+
+	test('a counted reply sent after Compact is used as is', () => {
+		const ms = [user(4000), assistant(4000), user(40), assistant(40), user(40), assistant(40), user(40), assistant(40, { promptTokens: 500, completionTokens: 50 })];
+		const u = contextUseOf(ms, 32768, 0, { summary: 's', uptoIdx: 2, at: 't' });
+		assert.deepStrictEqual([u.usedTokens, u.estimated], [550, false]);
+	});
 });

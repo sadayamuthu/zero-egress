@@ -17,14 +17,17 @@ import { MenuHeading, MenuRow, Popover } from './Popover.js';
 /** the chat's context use against the selected Chat model's window; null when no model is selected */
 export const useContextUse = (threadId: string): ContextUse | null => {
 	const settingsState = useSettingsState();
-	const messages = useChatThreadsState().allThreads[threadId]?.messages;
+	const thread = useChatThreadsState().allThreads[threadId];
+	const messages = thread?.messages;
+	const compaction = thread?.compaction;
 	const sel = settingsState.modelSelectionOfFeature['Chat'];
 	const contextWindow = sel ? getModelCapabilities(sel.providerName, sel.modelName, settingsState.overridesOfModel).contextWindow : undefined;
 	return useMemo(() => {
 		if (!(typeof contextWindow === 'number' && contextWindow > 0 && Number.isFinite(contextWindow))) { return null; }
 		// the system prompt is built asynchronously in the browser service, so 0 here: the meter stays ≈ until the first reply
-		return contextUseOf(messages ?? [], contextWindow, 0);
-	}, [messages, contextWindow]);
+		// after Compact, an estimate from the summarized chat until a reply brings new counts
+		return contextUseOf(messages ?? [], contextWindow, 0, compaction);
+	}, [messages, contextWindow, compaction]);
 };
 
 /** Compact is off while the chat is replying or a summary is being written */

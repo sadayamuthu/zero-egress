@@ -7,6 +7,7 @@
 // estimate for what was added since), else an estimate from the text.
 
 import type { ChatMessage } from './chatThreadServiceTypes.js';
+import { applyCompaction, Compaction } from './compaction.js';
 
 export const CHARS_PER_TOKEN = 4 // assume abysmal chars per token
 
@@ -18,15 +19,31 @@ const charsOf = (m: ChatMessage): number => {
 	return 0;
 };
 
-export function contextUseOf(messages: ChatMessage[], contextWindow: number, systemChars: number): ContextUse {
+/**
+ * Whether the reply at `idx` was sent after `c` was made. Compact keeps the last two turns whole, so `uptoIdx` is the
+ * second-to-last user message at that time: a reply sent later follows at least a third user message from there.
+ */
+function sentAfterCompaction(messages: ChatMessage[], idx: number, c: Compaction): boolean {
+	let users = 0;
+	for (let i = c.uptoIdx; i < idx; i++) { if (messages[i]?.role === 'user') { users++; } }
+	return users >= 3;
+}
+
+export function contextUseOf(messages: ChatMessage[], contextWindow: number, systemChars: number, compaction?: Compaction): ContextUse {
 	let lastIdx = -1;
 	for (let i = messages.length - 1; i >= 0; i--) {
 		const m = messages[i];
 		if (m.role === 'assistant' && m.usage) { lastIdx = i; break; }
 	}
+	// the last counts predate the summary (they cover the whole chat): estimate from what the model now sees
+	const compacted = !!compaction && compaction.uptoIdx <= messages.length && (lastIdx < 0 || !sentAfterCompaction(messages, lastIdx, compaction));
 	let used: number;
 	let estimated: boolean;
-	if (lastIdx >= 0) {
+	if (compacted) {
+		const seen = applyCompaction(messages, compaction);
+		used = Math.ceil((systemChars + seen.reduce((n, m) => n + charsOf(m), 0)) / CHARS_PER_TOKEN);
+		estimated = true;
+	} else if (lastIdx >= 0) {
 		const m = messages[lastIdx];
 		used = m.role === 'assistant' && m.usage ? m.usage.promptTokens + m.usage.completionTokens : 0;
 		estimated = false;
