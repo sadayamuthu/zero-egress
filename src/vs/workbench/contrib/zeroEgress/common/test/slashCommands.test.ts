@@ -5,7 +5,7 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { expandBuiltin, expandCustom, parseCommandFile, parseSlash, resolveSlashSend, slashEnterPicks, withNewSelections } from '../slashCommands.js';
+import { isLoadableCommandEntry, expandBuiltin, expandCustom, parseCommandFile, parseSlash, resolveSlashSend, slashEnterPicks, withNewSelections } from '../slashCommands.js';
 
 suite('slashCommands', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
@@ -102,5 +102,23 @@ suite('slashCommands', () => {
 		const r = resolveSlashSend('/review', { hasSelection: false }, [c]);
 		assert.ok(r.prompt.startsWith('Review the pending changes'));
 		assert.strictEqual(r.modeOverride, 'gather');
+	});
+
+	test('frontmatter edge cases never leak the markers', () => {
+		assert.strictEqual(parseCommandFile('a.md', '---\nBody text', 's')?.body, 'Body text');
+		assert.strictEqual(parseCommandFile('a.md', '---\n---\nBody', 's')?.body, 'Body');
+		assert.strictEqual(parseCommandFile('a.md', '﻿---\r\ndescription: D\r\n---\r\nBody', 's')?.description, 'D');
+		assert.strictEqual(parseCommandFile('a.md', '﻿---\r\ndescription: D\r\n---\r\nBody', 's')?.body, 'Body');
+	});
+
+	test('which directory entries are loaded', () => {
+		const ok = { name: 'a.md', isFile: true, isSymbolicLink: false, size: 10, parentIsCommandsDir: true };
+		assert.strictEqual(isLoadableCommandEntry(ok), true);
+		assert.strictEqual(isLoadableCommandEntry({ ...ok, isSymbolicLink: true }), false);
+		assert.strictEqual(isLoadableCommandEntry({ ...ok, isFile: false }), false);
+		assert.strictEqual(isLoadableCommandEntry({ ...ok, size: undefined }), false);
+		assert.strictEqual(isLoadableCommandEntry({ ...ok, size: 20 * 1024 + 1 }), false);
+		assert.strictEqual(isLoadableCommandEntry({ ...ok, name: 'a.txt' }), false);
+		assert.strictEqual(isLoadableCommandEntry({ ...ok, parentIsCommandsDir: false }), false);
 	});
 });

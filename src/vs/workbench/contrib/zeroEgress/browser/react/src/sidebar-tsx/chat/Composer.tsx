@@ -120,18 +120,23 @@ export const Composer = ({ threadId, variant, inputDisabledReason, textAreaRef, 
 		textAreaFnsRef.current?.setValue('');
 		textAreaRef.current?.focus(); // focus input after submit
 	};
+	const loadingCustomRef = React.useRef(false);
 	const customRef = React.useRef<CustomCommand[] | null>(null); // null: not loaded yet
 	const [custom, setCustom] = useState<CustomCommand[]>([]);
 	const onSubmit = async (_forceSubmit?: string) => {
 		if ((isDisabled && !_forceSubmit) || isFeatureNameDisabled('Chat', settingsState)) { return; }
-		if (isRunning || isStarting) { return; }
+		if (isRunning || isStarting || loadingCustomRef.current) { return; }
 		const userMessage0 = _forceSubmit || textAreaRef.current?.value || '';
 
 		let userMessage = userMessage0;
 
 		// ----- / commands -----
 		// project commands: the list the menu loaded, or one load when the user typed a whole command without opening it
-		if (customRef.current === null && userMessage.trimStart().startsWith('/')) { customRef.current = await contextService.customCommands().catch(() => []); }
+		if (customRef.current === null && userMessage.trimStart().startsWith('/')) {
+			loadingCustomRef.current = true; // blocks a second Enter while the list loads
+			setIsStarting(true);
+			try { customRef.current = await contextService.customCommands().catch(() => []); } finally { loadingCustomRef.current = false; setIsStarting(false); }
+		}
 		const send = resolveSlashSend(userMessage, { hasSelection: !!contextService.currentSelection() }, customRef.current ?? []);
 		let sendSelections = selections;
 		if (send.isCommand) {

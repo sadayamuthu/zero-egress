@@ -5,7 +5,7 @@
 
 import { VSBuffer } from '../../../../base/common/buffer.js';
 import { CancellationTokenSource } from '../../../../base/common/cancellation.js';
-import { basename, joinPath } from '../../../../base/common/resources.js';
+import { basename, extUri, joinPath } from '../../../../base/common/resources.js';
 import { URI } from '../../../../base/common/uri.js';
 import { ProxyChannel } from '../../../../base/parts/ipc/common/ipc.js';
 import { ICodeEditorService } from '../../../../editor/browser/services/codeEditorService.js';
@@ -25,7 +25,7 @@ import { TerminalCapability } from '../../../../platform/terminal/common/capabil
 import { ITerminalService } from '../../terminal/browser/terminal.js';
 import { ISCMService } from '../../scm/common/scm.js';
 import { getWorkspaceSymbols } from '../../search/common/search.js';
-import { CustomCommand, parseCommandFile } from '../common/slashCommands.js';
+import { COMMAND_FILE_MAX_BYTES, COMMAND_FILES_MAX, CustomCommand, isLoadableCommandEntry, parseCommandFile } from '../common/slashCommands.js';
 import { StagingSelectionItem } from '../common/chatThreadServiceTypes.js';
 import { DIFF_MAX_CHARS, IMAGE_MAX_BYTES, PROBLEMS_MAX, SavedDoc, TERMINAL_MAX_CHARS, capHead, capTail, imageExtOf, isValidBranchName } from '../common/selectionText.js';
 import { IZeroEgressSCMService } from '../common/zeroEgressSCMTypes.js';
@@ -43,8 +43,8 @@ const MIME_OF_EXT = new Map<string, Sel<'Image'>['mime']>([
 ]);
 const SYMBOL_TIMEOUT_MS = 2000;
 const COMMANDS_DIR = '.zeroegress/commands';
-const COMMANDS_MAX_FILES = 50;
-const COMMANDS_MAX_BYTES = 20 * 1024;
+const COMMANDS_MAX_FILES = COMMAND_FILES_MAX;
+const COMMANDS_MAX_BYTES = COMMAND_FILE_MAX_BYTES;
 const UNSUPPORTED_IMAGE = 'Only PNG, JPEG, WebP and GIF images are supported.';
 
 export interface IChatContextService {
@@ -270,19 +270,28 @@ class ChatContextService implements IChatContextService {
 		return { type: 'Image', uri, name, mime: mime as Sel<'Image'>['mime'], bytes: data.byteLength };
 	}
 
-	/** <folder>/.zeroegress/commands/*.md of each workspace folder in order; the first of a name wins. Prompt text only. */
+	/** <folder>/.zeroegress/commands/*.md of each workspace folder in order; the first of a name wins. Prompt text only; symlinks are never followed. */
 	async customCommands(): Promise<CustomCommand[]> {
 		const found = new Map<string, CustomCommand>();
 		for (const folder of this.workspaceService.getWorkspace().folders) {
+			if (found.size >= COMMANDS_MAX_FILES) { break; }
 			try {
-				const dir = await this.fileService.resolve(joinPath(folder.uri, '.zeroegress', 'commands'));
-				const files = (dir.children ?? []).filter(c => c.isFile && /\.md$/i.test(c.name) && (c.size ?? 0) <= COMMANDS_MAX_BYTES)
-					.sort((a, b) => a.name.localeCompare(b.name)).slice(0, COMMANDS_MAX_FILES);
+				const root = joinPath(folder.uri, '.zeroegress');
+				const rootStat = await this.fileService.resolve(root, { resolveMetadata: true });
+				if (rootStat.isSymbolicLink || !rootStat.isDirectory) { continue; }
+				const commandsDir = joinPath(root, 'commands');
+				const dir = await this.fileService.resolve(commandsDir, { resolveMetadata: true });
+				if (dir.isSymbolicLink || !dir.isDirectory) { continue; }
+				const files = (dir.children ?? []).filter(c => isLoadableCommandEntry({
+					name: c.name, isFile: c.isFile, isSymbolicLink: c.isSymbolicLink, size: c.size,
+					parentIsCommandsDir: extUri.isEqual(extUri.dirname(c.resource), commandsDir),
+				})).sort((a, b) => a.name.localeCompare(b.name));
 				for (const f of files) {
+					if (found.size >= COMMANDS_MAX_FILES) { break; }
 					try {
-						const text = (await this.fileService.readFile(f.resource)).value.toString();
-						if (text.length > COMMANDS_MAX_BYTES) { continue; }
-						const cmd = parseCommandFile(f.name, text, COMMANDS_DIR + '/' + f.name);
+						const buf = (await this.fileService.readFile(f.resource, { limits: { size: COMMANDS_MAX_BYTES } })).value;
+						if (buf.byteLength > COMMANDS_MAX_BYTES) { continue; }
+						const cmd = parseCommandFile(f.name, buf.toString(), COMMANDS_DIR + '/' + f.name);
 						if (cmd && !found.has(cmd.name)) { found.set(cmd.name, cmd); }
 					} catch { /* an unreadable file is skipped */ }
 				}

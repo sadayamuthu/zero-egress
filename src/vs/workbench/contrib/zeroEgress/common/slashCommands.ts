@@ -112,11 +112,16 @@ export function parseCommandFile(fileName: string, text: string, source: string)
 	if (!/^[a-z0-9][a-z0-9-]{0,39}$/.test(name)) { return null; }
 	let body = text.replace(/^\uFEFF/, '');
 	let description = '';
-	const fm = /^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(body);
-	if (fm) {
-		body = body.slice(fm[0].length);
-		const d = /^description:[ \t]*(.*)$/m.exec(fm[1]);
-		if (d) { description = d[1].trim().replace(/^(["'])(.*)\1$/, '$2'); }
+	if (/^---[ \t]*(?:\r?\n|$)/.test(body)) {
+		// frontmatter needs a closing marker; without one the opening line is just dropped, never sent
+		const fm = /^---[ \t]*\r?\n(?:([\s\S]*?)\r?\n)?---[ \t]*(?:\r?\n|$)/.exec(body);
+		if (fm) {
+			body = body.slice(fm[0].length);
+			const d = /^description:[ \t]*(.*)$/m.exec(fm[1] ?? '');
+			if (d) { description = d[1].trim().replace(/^(["'])(.*)\1$/, '$2'); }
+		} else {
+			body = body.replace(/^---[ \t]*\r?\n?/, '');
+		}
 	}
 	body = body.trim();
 	if (!body) { return null; }
@@ -139,4 +144,13 @@ export function withNewSelections(selections: StagingSelectionItem[], added: Sta
 		return false;
 	};
 	return [...selections, ...added.filter(n => !selections.some(s => same(s, n)))];
+}
+
+export const COMMAND_FILE_MAX_BYTES = 20 * 1024;
+export const COMMAND_FILES_MAX = 50;
+
+/** whether a directory entry of .zeroegress/commands is read: a plain .md file of known, small size, not a symlink, directly in that folder */
+export function isLoadableCommandEntry(e: { name: string; isFile: boolean; isSymbolicLink: boolean; size: number | undefined; parentIsCommandsDir: boolean }): boolean {
+	return e.parentIsCommandsDir && e.isFile && !e.isSymbolicLink && /\.md$/i.test(e.name)
+		&& e.size !== undefined && e.size <= COMMAND_FILE_MAX_BYTES;
 }
