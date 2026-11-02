@@ -13,6 +13,7 @@ import { symbolKindNames } from '../../../../editor/common/languages.js';
 import { ILanguageService } from '../../../../editor/common/languages/language.js';
 import { IEnvironmentService } from '../../../../platform/environment/common/environment.js';
 import { IFileDialogService } from '../../../../platform/dialogs/common/dialogs.js';
+import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
 import { IFileService } from '../../../../platform/files/common/files.js';
 import { InstantiationType, registerSingleton } from '../../../../platform/instantiation/common/extensions.js';
 import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
@@ -24,6 +25,7 @@ import { TerminalCapability } from '../../../../platform/terminal/common/capabil
 import { ITerminalService } from '../../terminal/browser/terminal.js';
 import { ISCMService } from '../../scm/common/scm.js';
 import { getWorkspaceSymbols } from '../../search/common/search.js';
+import { CustomCommand, parseCommandFile } from '../common/slashCommands.js';
 import { StagingSelectionItem } from '../common/chatThreadServiceTypes.js';
 import { DIFF_MAX_CHARS, IMAGE_MAX_BYTES, PROBLEMS_MAX, SavedDoc, TERMINAL_MAX_CHARS, capHead, capTail, imageExtOf, isValidBranchName } from '../common/selectionText.js';
 import { IZeroEgressSCMService } from '../common/zeroEgressSCMTypes.js';
@@ -40,6 +42,9 @@ const MIME_OF_EXT = new Map<string, Sel<'Image'>['mime']>([
 	['png', 'image/png'], ['jpg', 'image/jpeg'], ['jpeg', 'image/jpeg'], ['webp', 'image/webp'], ['gif', 'image/gif'],
 ]);
 const SYMBOL_TIMEOUT_MS = 2000;
+const COMMANDS_DIR = '.zeroegress/commands';
+const COMMANDS_MAX_FILES = 50;
+const COMMANDS_MAX_BYTES = 20 * 1024;
 const UNSUPPORTED_IMAGE = 'Only PNG, JPEG, WebP and GIF images are supported.';
 
 export interface IChatContextService {
@@ -56,6 +61,7 @@ export interface IChatContextService {
 	removeSavedDoc(path: string): void;
 	pickImage(): Promise<Sel<'Image'> | null>;
 	imageFromClipboard(data: Uint8Array, mime: string): Promise<Sel<'Image'> | null>;
+	customCommands(): Promise<CustomCommand[]>;
 }
 
 export const IChatContextService = createDecorator<IChatContextService>('zeroEgressChatContextService');
@@ -79,6 +85,7 @@ class ChatContextService implements IChatContextService {
 		@IFileService private readonly fileService: IFileService,
 		@IEnvironmentService private readonly environmentService: IEnvironmentService,
 		@INotificationService private readonly notificationService: INotificationService,
+		@IWorkspaceContextService private readonly workspaceService: IWorkspaceContextService,
 	) {
 		this.scm = ProxyChannel.toService<IZeroEgressSCMService>(mainProcessService.getChannel('zero-egress-channel-scm'));
 	}
@@ -261,6 +268,27 @@ class ChatContextService implements IChatContextService {
 			await this.fileService.writeFile(uri, VSBuffer.wrap(data));
 		}
 		return { type: 'Image', uri, name, mime: mime as Sel<'Image'>['mime'], bytes: data.byteLength };
+	}
+
+	/** <folder>/.zeroegress/commands/*.md of each workspace folder in order; the first of a name wins. Prompt text only. */
+	async customCommands(): Promise<CustomCommand[]> {
+		const found = new Map<string, CustomCommand>();
+		for (const folder of this.workspaceService.getWorkspace().folders) {
+			try {
+				const dir = await this.fileService.resolve(joinPath(folder.uri, '.zeroegress', 'commands'));
+				const files = (dir.children ?? []).filter(c => c.isFile && /\.md$/i.test(c.name) && (c.size ?? 0) <= COMMANDS_MAX_BYTES)
+					.sort((a, b) => a.name.localeCompare(b.name)).slice(0, COMMANDS_MAX_FILES);
+				for (const f of files) {
+					try {
+						const text = (await this.fileService.readFile(f.resource)).value.toString();
+						if (text.length > COMMANDS_MAX_BYTES) { continue; }
+						const cmd = parseCommandFile(f.name, text, COMMANDS_DIR + '/' + f.name);
+						if (cmd && !found.has(cmd.name)) { found.set(cmd.name, cmd); }
+					} catch { /* an unreadable file is skipped */ }
+				}
+			} catch { /* no commands folder in this workspace folder */ }
+		}
+		return [...found.values()];
 	}
 }
 

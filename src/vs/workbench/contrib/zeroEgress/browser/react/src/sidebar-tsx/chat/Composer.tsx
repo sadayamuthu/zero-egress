@@ -16,7 +16,7 @@ import { TextAreaFns, ZeroEgressInputBox2 } from '../../util/inputs.js';
 import { ButtonStop, ButtonSubmit, getRelative, SelectedFiles } from '../SidebarChat.js';
 // no runtime imports from vs/ here: the bundle flattens this folder, so a relative path one level deeper breaks
 import { builtinCommands, isFeatureNameDisabled, promptContextOfSelection, resolveSlashSend, slashEnterPicks, slashMenuQuery, withNewSelections, promptWithContext, ZERO_EGRESS_CTRL_L_ACTION_ID, ZERO_EGRESS_SHOW_AGENTS_ACTION_ID } from '../composerDeps.js';
-import type { ChatMode, PromptContextItem } from '../composerDeps.js';
+import type { ChatMode, CustomCommand, PromptContextItem } from '../composerDeps.js';
 import type { StagingSelectionItem } from '../../../../../common/chatThreadServiceTypes.js';
 import { useThreadReview } from '../useThreadReview.js';
 import { AgentSettingsMenu } from './AgentSettingsMenu.js';
@@ -120,6 +120,8 @@ export const Composer = ({ threadId, variant, inputDisabledReason, textAreaRef, 
 		textAreaFnsRef.current?.setValue('');
 		textAreaRef.current?.focus(); // focus input after submit
 	};
+	const customRef = React.useRef<CustomCommand[] | null>(null); // null: not loaded yet
+	const [custom, setCustom] = useState<CustomCommand[]>([]);
 	const onSubmit = async (_forceSubmit?: string) => {
 		if ((isDisabled && !_forceSubmit) || isFeatureNameDisabled('Chat', settingsState)) { return; }
 		if (isRunning || isStarting) { return; }
@@ -128,7 +130,9 @@ export const Composer = ({ threadId, variant, inputDisabledReason, textAreaRef, 
 		let userMessage = userMessage0;
 
 		// ----- / commands -----
-		const send = resolveSlashSend(userMessage, { hasSelection: !!contextService.currentSelection() });
+		// project commands: the list the menu loaded, or one load when the user typed a whole command without opening it
+		if (customRef.current === null && userMessage.trimStart().startsWith('/')) { customRef.current = await contextService.customCommands().catch(() => []); }
+		const send = resolveSlashSend(userMessage, { hasSelection: !!contextService.currentSelection() }, customRef.current ?? []);
 		let sendSelections = selections;
 		if (send.isCommand) {
 			// /plan and /compact act on the side panel chat's own mode and history, not on an agent's
@@ -219,10 +223,22 @@ export const Composer = ({ threadId, variant, inputDisabledReason, textAreaRef, 
 		setSlashClosed(slashPickedRef.current);
 	}, []);
 	const slashQuery = slashMenuQuery(typed);
-	// more sections (project commands) go after this one
+	// the project's commands load each time the menu opens (cached while it is open)
+	const slashIsOpen = slashQuery !== null;
+	useEffect(() => {
+		if (!slashIsOpen) { return; }
+		let live = true;
+		void contextService.customCommands().catch(() => []).then(list => { if (live) { customRef.current = list; setCustom(list); } });
+		return () => { live = false; };
+	}, [slashIsOpen, contextService]);
+	const builtinNames = new Set(builtinCommands.map(c => c.name));
 	const slashSections: SlashSection[] = [{
 		heading: 'Commands',
 		items: slashQuery === null ? [] : builtinCommands.filter(c => c.name.startsWith(slashQuery)),
+	}, {
+		heading: 'Yours',
+		items: slashQuery === null ? [] : custom.filter(c => !builtinNames.has(c.name) && c.name.startsWith(slashQuery))
+			.map(c => ({ name: c.name, detail: '.zeroegress/commands', title: c.description })),
 	}];
 	const slashItems = flattenSlashSections(slashSections);
 	const slashOpen = !slashClosed && slashQuery !== null && slashItems.length > 0 && !inputDisabledReason;

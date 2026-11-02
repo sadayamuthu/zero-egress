@@ -5,7 +5,7 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { expandBuiltin, parseSlash, resolveSlashSend, slashEnterPicks, withNewSelections } from '../slashCommands.js';
+import { expandBuiltin, expandCustom, parseCommandFile, parseSlash, resolveSlashSend, slashEnterPicks, withNewSelections } from '../slashCommands.js';
 
 suite('slashCommands', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
@@ -62,5 +62,45 @@ suite('slashCommands', () => {
 		const diff = { type: 'GitDiff' as const, against: null, text: 'x', truncated: false };
 		const out = withNewSelections([diff as never], [diff as never]);
 		assert.strictEqual(out.length, 1);
+	});
+
+	test('custom file parses', () => {
+		const c = parseCommandFile('Release-Notes.md', '---\ndescription: Draft notes\nmode: agent\n---\nWrite notes for $ARGUMENTS', '.zeroegress/commands/Release-Notes.md');
+		assert.deepStrictEqual(c, { name: 'release-notes', description: 'Draft notes', body: 'Write notes for $ARGUMENTS', source: '.zeroegress/commands/Release-Notes.md' });
+	});
+
+	test('description falls back to the first line, and empty bodies are skipped', () => {
+		assert.strictEqual(parseCommandFile('a.md', 'x'.repeat(100), 's')?.description, 'x'.repeat(60));
+		assert.strictEqual(parseCommandFile('a.md', '---\ndescription: d\n---\n  \n', 's'), null);
+	});
+
+	test('bad names are skipped', () => {
+		assert.strictEqual(parseCommandFile('../x.md', 'b', 's'), null);
+		assert.strictEqual(parseCommandFile('a b.md', 'b', 's'), null);
+	});
+
+	test('arguments', () => {
+		const c = { name: 'n', description: '', body: 'Notes for $ARGUMENTS', source: 's' };
+		assert.strictEqual(expandCustom(c, 'v2'), 'Notes for v2');
+		assert.strictEqual(expandCustom({ ...c, body: 'Do it' }, 'now'), 'Do it\n\nnow');
+		assert.strictEqual(expandCustom({ ...c, body: 'Do it' }, ''), 'Do it');
+	});
+
+	test('resolveSlashSend resolves a custom command without override', () => {
+		const c = { name: 'release-notes', description: '', body: 'Notes for $ARGUMENTS', source: 's' };
+		const r = resolveSlashSend('/release-notes v2', { hasSelection: false }, [c]);
+		assert.strictEqual(r.prompt, 'Notes for v2');
+		assert.strictEqual(r.displayMessage, '/release-notes v2');
+		assert.strictEqual(r.modeOverride, undefined);
+		assert.strictEqual(r.setMode, undefined);
+		assert.strictEqual(r.addContext, undefined);
+		assert.strictEqual(r.isCommand, true);
+	});
+
+	test('a built-in name in a project file never overrides the built-in', () => {
+		const c = { name: 'review', description: '', body: 'pwned', source: 's' };
+		const r = resolveSlashSend('/review', { hasSelection: false }, [c]);
+		assert.ok(r.prompt.startsWith('Review the pending changes'));
+		assert.strictEqual(r.modeOverride, 'gather');
 	});
 });

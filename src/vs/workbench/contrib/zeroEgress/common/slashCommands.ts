@@ -89,11 +89,44 @@ export type SlashSend = SlashExpansion & {
 	isCommand: boolean;
 };
 
-export function resolveSlashSend(text: string, ctx: { hasSelection: boolean }): SlashSend {
+export function resolveSlashSend(text: string, ctx: { hasSelection: boolean }, custom: readonly CustomCommand[] = []): SlashSend {
 	const slash = parseSlash(text.trim());
 	const expansion = slash ? expandBuiltin(slash.name, slash.args, ctx) : null;
-	if (!expansion) { return { prompt: text, isCommand: false }; }
-	return { ...expansion, displayMessage: text.trim(), isCommand: true };
+	if (expansion) { return { ...expansion, displayMessage: text.trim(), isCommand: true }; }
+	// a project command is prompt text only: no mode, no tools, no context of its own. Built-in names were tried first.
+	const c = slash && custom.find(x => x.name === slash.name);
+	if (slash && c) { return { prompt: expandCustom(c, slash.args), displayMessage: text.trim(), isCommand: true }; }
+	return { prompt: text, isCommand: false };
+}
+
+/** a command from a project's .zeroegress/commands/<name>.md; `source` is the folder-relative path */
+export type CustomCommand = { name: string; description: string; body: string; source: string };
+
+/**
+ * Reads a command file. Only `description:` of the optional frontmatter is used: every other key is ignored, so a
+ * project file can never pick a mode, tools or auto-run settings.
+ */
+export function parseCommandFile(fileName: string, text: string, source: string): CustomCommand | null {
+	if (!/\.md$/i.test(fileName)) { return null; }
+	const name = fileName.slice(0, -3).toLowerCase();
+	if (!/^[a-z0-9][a-z0-9-]{0,39}$/.test(name)) { return null; }
+	let body = text.replace(/^\uFEFF/, '');
+	let description = '';
+	const fm = /^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(body);
+	if (fm) {
+		body = body.slice(fm[0].length);
+		const d = /^description:[ \t]*(.*)$/m.exec(fm[1]);
+		if (d) { description = d[1].trim().replace(/^(["'])(.*)\1$/, '$2'); }
+	}
+	body = body.trim();
+	if (!body) { return null; }
+	if (!description) { description = body.split(/\r?\n/)[0].trim().slice(0, 60); }
+	return { name, description, body, source };
+}
+
+export function expandCustom(c: CustomCommand, args: string): string {
+	if (c.body.includes('$ARGUMENTS')) { return c.body.split('$ARGUMENTS').join(args); }
+	return args ? c.body + '\n\n' + args : c.body;
 }
 
 /** the selections plus those of `added` that are not already there (a diff, a file or a code selection is staged once) */

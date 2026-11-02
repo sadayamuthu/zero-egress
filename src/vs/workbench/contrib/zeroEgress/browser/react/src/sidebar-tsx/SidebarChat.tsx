@@ -994,7 +994,8 @@ const UserMessageComponent = ({ chatMessage, messageIdx, isCheckpointGhost, curr
 
 			// an edited / command is expanded and sent like a new one: its prompt, its context, its mode for this message
 			const contextService = accessor.get('IChatContextService')
-			const send = resolveSlashSend(textAreaRefState.value, { hasSelection: !!contextService.currentSelection() })
+			const custom = textAreaRefState.value.trimStart().startsWith('/') ? await contextService.customCommands().catch(() => []) : []
+			const send = resolveSlashSend(textAreaRefState.value, { hasSelection: !!contextService.currentSelection() }, custom)
 			if (send.isCommand && (send.compact || send.setMode)) {
 				accessor.get('INotificationService').info('/plan and /compact work from the message box at the bottom, not when editing a message.')
 				return // the edit stays open with what was typed

@@ -10,7 +10,7 @@
 import React from 'react';
 import { MenuHeading, MenuRow, Popover } from './Popover.js';
 
-export type SlashItem = { name: string; detail: string };
+export type SlashItem = { name: string; detail: string; /** shown on hover */ title?: string };
 export type SlashSection = { heading: string; items: readonly SlashItem[] };
 
 /** the rows in the order ↑/↓ walk them */
@@ -35,7 +35,7 @@ export const SlashMenu = ({ anchor, open, sections, activeIdx, onPick, onClose }
 					className={idx === activeIdx ? 'bg-[var(--vscode-list-hoverBackground)]' : ''}
 					onSelect={() => onPick(item)}
 				>
-					<span className='font-medium'>/{item.name}</span>
+					<span className='font-medium' title={item.title}>/{item.name}</span>
 					<span className='ml-auto text-xs text-ze-fg-3'>{item.detail}</span>
 				</MenuRow>;
 			})}
