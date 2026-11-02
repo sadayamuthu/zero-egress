@@ -40,7 +40,7 @@ export function resolveRunMode(gs: Pick<GlobalSettings, 'chatMode' | 'customMode
 	if (!custom) return builtInRunMode(gs.chatMode)
 	// stored data may be malformed: only a real `true` grants a tool
 	const edit = custom.tools?.edit === true, terminal = custom.tools?.terminal === true, mcp = custom.tools?.mcp === true
-	const name = String(custom.name ?? '').replace(/[\r\n”]/g, ' ').trim().slice(0, MAX_CUSTOM_MODE_NAME).trim()
+	const name = String(custom.name ?? '').replace(/[\r\n\u201D]/g, ' ').trim().slice(0, MAX_CUSTOM_MODE_NAME).trim()
 	const instructions = String(custom.instructions ?? '').slice(0, MAX_CUSTOM_MODE_INSTRUCTIONS).trim()
 	return {
 		chatMode: (edit || terminal) ? 'agent' : 'gather',
