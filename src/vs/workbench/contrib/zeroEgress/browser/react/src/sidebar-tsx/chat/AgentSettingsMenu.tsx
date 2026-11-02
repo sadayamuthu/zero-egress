@@ -76,7 +76,7 @@ export const AgentSettingsMenu = ({ threadId }: { threadId: string }) => {
 				<Settings size={13} />
 			</button>
 		</span>
-		<Popover anchor={anchor} open={open} onClose={close} placement='top-end' className='w-72' label='Agent settings' form={modesView !== null && modesView !== 'list'} initialFocus={modesView === null ? 'selected' : 'none'}>
+		<Popover anchor={anchor} open={open} onClose={close} placement='top-end' className='w-72' label='Agent settings' form={modesView !== null && modesView !== 'list'} initialFocus={modesView === null ? 'selected' : 'none'} maxHeight={640}>
 			{modesView === 'list' ? <>
 				<MenuRow onSelect={() => setModesView(null)}>
 					<ChevronLeft size={12} className='shrink-0 self-center' />

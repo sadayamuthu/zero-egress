@@ -34,7 +34,7 @@ export const useCustomModes = (): CustomMode[] => {
 	return Array.isArray(customModes) ? customModes.filter(m => !!m && typeof m.id === 'string') : [];
 };
 
-const fieldClass = 'w-full px-2 py-1 rounded-[6px] text-sm text-ze-fg-1 bg-ze-bg-2 border border-ze-border-2 outline-none focus:border-[var(--vscode-focusBorder)]';
+const fieldClass = 'w-full px-1.5 py-1 rounded text-sm bg-[var(--vscode-input-background)] text-[var(--vscode-input-foreground)] border border-[var(--vscode-input-border,transparent)] outline-none focus:border-[var(--vscode-focusBorder)]';
 const buttonClass = 'px-2 py-1 rounded-[6px] text-sm hover:bg-[var(--vscode-list-hoverBackground)] outline-none focus-visible:bg-[var(--vscode-list-hoverBackground)]';
 
 export const CustomModeForm = ({ mode, onDone }: { mode: CustomMode | null; onDone: () => void }) => {
@@ -110,7 +110,7 @@ export const CustomModeForm = ({ mode, onDone }: { mode: CustomMode | null; onDo
 		</label>
 		<div className='text-xs text-ze-fg-3'>Saved in the app settings, never in the project.</div>
 		{tried && error ? <div role='alert' className='text-xs text-[var(--vscode-errorForeground)]'>{error}</div> : null}
-		<div className='flex items-center gap-1'>
+		<div className='sticky bottom-0 -mb-2 pb-2 pt-1 flex items-center gap-1 bg-ze-bg-1'>
 			{mode ? <button type='button' className={`${buttonClass} text-[var(--vscode-errorForeground)]`} onClick={remove}>Delete mode</button> : null}
 			<span className='ml-auto' />
 			<button type='button' className={`${buttonClass} text-ze-fg-1`} onClick={onDone}>Cancel</button>

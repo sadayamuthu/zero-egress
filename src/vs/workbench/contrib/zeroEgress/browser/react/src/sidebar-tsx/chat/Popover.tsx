@@ -10,7 +10,7 @@
 // selected radio; ←/→ inside a group are the group's own. It renders in place, not in a portal, so it stays inside the
 // panel's style scope.
 
-import React, { useEffect, useRef } from 'react';
+import React, { useCallback, useEffect, useRef } from 'react';
 import { autoUpdate, flip, offset, shift, size, useFloating } from '@floating-ui/react';
 import type { Placement } from '@floating-ui/react';
 
@@ -137,6 +137,10 @@ export const Popover = ({ anchor, open, onClose, children, placement = 'top-star
 	});
 
 	const panelRef = useRef<HTMLDivElement | null>(null);
+	// a stable ref callback: an inline one is detached (null) and re-attached on every render, and a child's autoFocus
+	// firing in that window would see no panel and close the menu
+	const setFloating = refs.setFloating;
+	const setPanel = useCallback((el: HTMLDivElement | null) => { panelRef.current = el; setFloating(el); }, [setFloating]);
 	const onCloseRef = useRef(onClose);
 	onCloseRef.current = onClose;
 
@@ -156,7 +160,8 @@ export const Popover = ({ anchor, open, onClose, children, placement = 'top-star
 		// without a menu to close
 		const onFocusIn = (e: FocusEvent) => {
 			const target = e.target as Node | null;
-			if (!target || panelRef.current?.contains(target) || anchor?.contains(target)) {
+			// no panel right now (between a ref detach and attach): nothing to judge focus against
+			if (!target || !panelRef.current || panelRef.current.contains(target) || anchor?.contains(target)) {
 				return;
 			}
 			onCloseRef.current();
@@ -236,7 +241,7 @@ export const Popover = ({ anchor, open, onClose, children, placement = 'top-star
 	};
 
 	return <div
-		ref={el => { panelRef.current = el; refs.setFloating(el); }}
+		ref={setPanel}
 		role={form ? 'dialog' : 'menu'}
 		aria-label={label}
 		tabIndex={-1}

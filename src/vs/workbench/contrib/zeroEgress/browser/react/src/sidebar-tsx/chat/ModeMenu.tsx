@@ -85,7 +85,7 @@ export const ModeMenu = ({ variant, runIn }: { variant: 'docked' | 'agents'; run
 			<span className='truncate max-w-[96px]'>{current.label}</span>
 			<ChevronDown size={12} className='shrink-0 opacity-70' />
 		</MenuButton>
-		<Popover anchor={anchor} open={open} onClose={() => { setOpen(false); setEditing(null); }} placement='top-start' className='w-60' label='Mode' form={!!editing} initialFocus={editing ? 'none' : 'selected'}>
+		<Popover anchor={anchor} open={open} onClose={() => { setOpen(false); setEditing(null); }} placement='top-start' className='w-60' label='Mode' form={!!editing} initialFocus={editing ? 'none' : 'selected'} maxHeight={640}>
 			{editing ? <CustomModeForm mode={editing === 'new' ? null : editing} onDone={close} /> : <>
 			<MenuHeading>Mode</MenuHeading>
 			{modeOptions.map(o => <MenuRow
