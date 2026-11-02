@@ -62,7 +62,7 @@ import { AGENTS_MAX_CONCURRENT_DEFAULT, AGENTS_MAX_CONCURRENT_SETTING } from '..
 import { clampConcurrency, parallelRequestsOf } from '../common/zeroEgressSettingsTypes.js';
 import { nextPlan, planAfterCut, planForPrompt, PlanStep, ThreadPlan } from '../common/plan.js';
 import { runModeFor, selectBuiltInMode } from '../common/customModes.js';
-import { refusalOf, ToolPolicy } from '../common/toolPolicy.js';
+import { nextBadToolStreak, refusalOf, ToolPolicy } from '../common/toolPolicy.js';
 
 
 // related to retrying when LLM message has error
@@ -1078,6 +1078,7 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 		try {
 
 			let nMessagesSent = 0
+			let badToolStreak = 0 // refused or invalid tool calls in a row; at the limit the run ends
 			let shouldSendAnotherMessage = true
 			let isRunningWhenEnd: IsRunningType = undefined
 
@@ -1260,6 +1261,15 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 						}
 						if (awaitingUserApproval) { isRunningWhenEnd = 'awaiting_user' }
 						else { shouldSendAnotherMessage = true }
+
+						const toolMsg = findLast(this.state.allThreads[threadId]?.messages ?? [], m => m.role === 'tool' && m.id === toolCall.id)
+						const outcome = toolMsg?.role === 'tool' && toolMsg.type === 'invalid_params' ? (toolMsg.refused ? 'refused' : 'invalid') : 'ok'
+						const streak = nextBadToolStreak(badToolStreak, outcome)
+						badToolStreak = streak.streak
+						if (streak.stopMessage) {
+							this._addMessageToThread(threadId, { role: 'assistant', displayContent: streak.stopMessage, reasoning: '', anthropicReasoning: null })
+							shouldSendAnotherMessage = false
+						}
 
 						this._setStreamState(threadId, { isRunning: 'idle', interrupt: 'not_needed' }) // just decorative, for clarity
 					}

@@ -7,7 +7,7 @@ import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { availableTools, InternalToolInfo } from '../prompt/prompts.js';
 import { resolveRunMode } from '../customModes.js';
-import { refusalOf, toolGroupOf, toolPolicyOfMode } from '../toolPolicy.js';
+import { BAD_TOOL_STREAK_LIMIT, nextBadToolStreak, refusalOf, toolGroupOf, toolPolicyOfMode } from '../toolPolicy.js';
 
 suite('toolPolicy', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
@@ -68,5 +68,22 @@ suite('toolPolicy', () => {
 		for (const m of ['agent', 'gather', 'normal', 'plan'] as const) {
 			assert.deepStrictEqual(resolveRunMode({ chatMode: m, customModes: [], activeCustomModeId: null }).toolPolicy, toolPolicyOfMode(m));
 		}
+	});
+
+	test('bad tool streak: 3 refused or invalid calls in a row end the run', () => {
+		assert.strictEqual(BAD_TOOL_STREAK_LIMIT, 3);
+		let st = nextBadToolStreak(0, 'refused');
+		assert.deepStrictEqual(st, { streak: 1, stopMessage: null });
+		st = nextBadToolStreak(st.streak, 'ok');
+		assert.deepStrictEqual(st, { streak: 0, stopMessage: null });
+		st = nextBadToolStreak(st.streak, 'refused');
+		st = nextBadToolStreak(st.streak, 'invalid');
+		assert.strictEqual(st.stopMessage, null);
+		st = nextBadToolStreak(st.streak, 'refused');
+		assert.strictEqual(st.stopMessage, "Stopped: the model kept asking for tools this mode doesn't allow.");
+		let iv = nextBadToolStreak(2, 'invalid');
+		assert.strictEqual(iv.stopMessage, 'Stopped: the model kept sending invalid tool calls.');
+		iv = nextBadToolStreak(0, 'invalid');
+		assert.strictEqual(iv.stopMessage, null);
 	});
 });
