@@ -61,7 +61,7 @@ import { IConfigurationService } from '../../../../platform/configuration/common
 import { AGENTS_MAX_CONCURRENT_DEFAULT, AGENTS_MAX_CONCURRENT_SETTING } from '../common/zeroEgressConfiguration.js';
 import { clampConcurrency, parallelRequestsOf } from '../common/zeroEgressSettingsTypes.js';
 import { nextPlan, PlanStep, ThreadPlan } from '../common/plan.js';
-import { runModeFor } from '../common/customModes.js';
+import { runModeFor, selectBuiltInMode } from '../common/customModes.js';
 import { refusalOf, ToolPolicy } from '../common/toolPolicy.js';
 
 
@@ -2166,8 +2166,7 @@ We only need to do it for files that were edited since `from`, ie files between 
 		const newThreads: ChatThreads = { ...this.state.allThreads, [threadId]: { ...thread, plan } }
 		this._storeAllThreads(newThreads)
 		this._setState({ allThreads: newThreads })
-		this._settingsService.setGlobalSetting('chatMode', 'agent')
-		this._settingsService.setGlobalSetting('activeCustomModeId', null) // the approved run uses Agent, not a read-only custom mode
+		await selectBuiltInMode(this._settingsService, 'agent') // the approved run uses Agent, not a read-only custom mode
 		await this.addUserMessageAndStreamResponse({ userMessage: 'Approved. Carry out the plan.', threadId })
 	}
 

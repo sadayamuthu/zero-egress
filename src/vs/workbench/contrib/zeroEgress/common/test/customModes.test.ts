@@ -5,7 +5,7 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { CustomMode, resolveRunMode, runModeFor, validateCustomMode } from '../customModes.js';
+import { CustomMode, resolveRunMode, runModeFor, selectBuiltInMode, validateCustomMode } from '../customModes.js';
 
 const mode = (o: { name?: string; instructions?: string; tools?: Partial<CustomMode['tools']> }): CustomMode => ({
 	id: 'm1', name: o.name ?? 'Mine', icon: 'eye', instructions: o.instructions ?? '',
@@ -27,6 +27,14 @@ suite('customModes', () => {
 		assert.strictEqual(r.chatMode, 'agent');
 		assert.strictEqual(r.toolPolicy?.plan, true);
 		assert.strictEqual(r.extraInstructions, 'MODE INSTRUCTIONS (custom mode “Mine”):\nBe terse.');
+	});
+
+	test('selectBuiltInMode leaves the custom mode so the built-in pick takes effect', async () => {
+		const gs: { chatMode: 'agent' | 'plan' | 'gather' | 'normal'; customModes: CustomMode[]; activeCustomModeId: string | null } = { chatMode: 'agent', customModes: [mode({ tools: { edit: true } })], activeCustomModeId: 'm1' };
+		const settings = { setGlobalSetting: (k: 'chatMode' | 'activeCustomModeId', v: any) => { (gs as any)[k] = v; return Promise.resolve(); } };
+		await selectBuiltInMode(settings, 'plan');
+		assert.strictEqual(resolveRunMode(gs).chatMode, 'plan');
+		assert.strictEqual(gs.activeCustomModeId, null);
 	});
 
 	test('missing id falls back', () => {

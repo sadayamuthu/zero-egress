@@ -58,6 +58,11 @@ export function runModeFor({ modeOverride, isBackground, gs }: { modeOverride?: 
 	return resolveRunMode(gs)
 }
 
+/** Choosing a built-in mode (the mode menu, `/plan`, approving a plan) also leaves any custom mode, so the pick takes effect. */
+export function selectBuiltInMode(settings: { setGlobalSetting(name: 'chatMode', v: ChatMode): unknown; setGlobalSetting(name: 'activeCustomModeId', v: string | null): unknown }, mode: ChatMode): Promise<void> {
+	return Promise.all([settings.setGlobalSetting('activeCustomModeId', null), settings.setGlobalSetting('chatMode', mode)]).then(() => undefined)
+}
+
 export function validateCustomMode(m: CustomMode, others: CustomMode[]): string | null {
 	const name = m.name.trim()
 	if (!name) return 'Give the mode a name.'

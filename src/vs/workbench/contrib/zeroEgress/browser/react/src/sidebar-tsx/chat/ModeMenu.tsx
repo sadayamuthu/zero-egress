@@ -12,6 +12,7 @@ import { ChevronDown, Infinity as InfinityIcon, ListChecks, MessageCircle, Penci
 import type { LucideIcon } from 'lucide-react';
 import { useAccessor, useSettingsState } from '../../util/services.js';
 // no runtime imports from vs/ here: the bundle flattens this folder, so a relative path one level deeper breaks
+import { selectBuiltInMode } from '../composerDeps.js';
 import type { ChatMode, CustomMode } from '../composerDeps.js';
 import { CustomModeForm, iconOfCustomMode, useCustomModes } from './CustomModeForm.js';
 import { MenuHeading, MenuRow, Popover } from './Popover.js';
@@ -91,7 +92,7 @@ export const ModeMenu = ({ variant, runIn }: { variant: 'docked' | 'agents'; run
 			{modeOptions.map(o => <MenuRow
 				key={o.mode}
 				checked={!activeCustom && o.mode === chatMode}
-				onSelect={() => { settingsService.setGlobalSetting('chatMode', o.mode); settingsService.setGlobalSetting('activeCustomModeId', null); close(); }}
+				onSelect={() => { void selectBuiltInMode(settingsService, o.mode); close(); }}
 			>
 				<o.Icon size={12} className='shrink-0 self-center' />
 				<span className='font-medium'>{o.label}</span>

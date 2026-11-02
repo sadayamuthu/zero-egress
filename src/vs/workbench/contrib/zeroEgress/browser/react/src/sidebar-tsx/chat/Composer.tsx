@@ -15,7 +15,7 @@ import { useAccessor, useActiveURI, useChatThreadsState, useChatThreadsStreamSta
 import { TextAreaFns, ZeroEgressInputBox2 } from '../../util/inputs.js';
 import { ButtonStop, ButtonSubmit, getRelative, SelectedFiles } from '../SidebarChat.js';
 // no runtime imports from vs/ here: the bundle flattens this folder, so a relative path one level deeper breaks
-import { builtinCommands, isFeatureNameDisabled, promptContextOfSelection, resolveSlashSend, slashEnterPicks, slashMenuQuery, withNewSelections, promptWithContext, ZERO_EGRESS_CTRL_L_ACTION_ID, ZERO_EGRESS_SHOW_AGENTS_ACTION_ID } from '../composerDeps.js';
+import { builtinCommands, selectBuiltInMode, isFeatureNameDisabled, promptContextOfSelection, resolveSlashSend, slashEnterPicks, slashMenuQuery, withNewSelections, promptWithContext, ZERO_EGRESS_CTRL_L_ACTION_ID, ZERO_EGRESS_SHOW_AGENTS_ACTION_ID } from '../composerDeps.js';
 import type { ChatMode, CustomCommand, PromptContextItem } from '../composerDeps.js';
 import type { StagingSelectionItem } from '../../../../../common/chatThreadServiceTypes.js';
 import { useThreadReview } from '../useThreadReview.js';
@@ -151,7 +151,7 @@ export const Composer = ({ threadId, variant, inputDisabledReason, textAreaRef, 
 				return;
 			}
 			if (send.setMode) {
-				await settingsService.setGlobalSetting('chatMode', send.setMode);
+				await selectBuiltInMode(settingsService, send.setMode);
 				if (!send.prompt) { clearInput(); return; }
 			}
 			if (send.addContext?.length) {
