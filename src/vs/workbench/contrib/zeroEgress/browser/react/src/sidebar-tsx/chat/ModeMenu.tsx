@@ -83,7 +83,7 @@ export const ModeMenu = ({ variant, runIn }: { variant: 'docked' | 'agents'; run
 			{modeOptions.map(o => <MenuRow
 				key={o.mode}
 				checked={o.mode === chatMode}
-				onSelect={() => { settingsService.setGlobalSetting('chatMode', o.mode); close(); }}
+				onSelect={() => { settingsService.setGlobalSetting('chatMode', o.mode); settingsService.setGlobalSetting('activeCustomModeId', null); close(); }}
 			>
 				<o.Icon size={12} className='shrink-0 self-center' />
 				<span className='font-medium'>{o.label}</span>

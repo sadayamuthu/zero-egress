@@ -568,7 +568,7 @@ export interface IConvertToLLMMessageService {
 	readonly _serviceBrand: undefined;
 	prepareLLMSimpleMessages: (opts: { simpleMessages: SimpleLLMMessage[], systemMessage: string, modelSelection: ModelSelection | null, featureName: FeatureName }) => { messages: LLMChatMessage[], separateSystemMessage: string | undefined }
 	/** `agentRoot`: set for background agents; the system message then describes only that folder. */
-	prepareLLMChatMessages: (opts: { chatMessages: ChatMessage[], chatMode: ChatMode, toolPolicy: ToolPolicy | null, modelSelection: ModelSelection | null, agentRoot?: { folder: string, depsMayBeMissing: boolean, agentId: string }, compaction?: Compaction, plan?: PlanStep[] }) => Promise<{ messages: LLMChatMessage[], separateSystemMessage: string | undefined }>
+	prepareLLMChatMessages: (opts: { chatMessages: ChatMessage[], chatMode: ChatMode, toolPolicy: ToolPolicy | null, modelSelection: ModelSelection | null, agentRoot?: { folder: string, depsMayBeMissing: boolean, agentId: string }, compaction?: Compaction, plan?: PlanStep[], modeInstructions?: string }) => Promise<{ messages: LLMChatMessage[], separateSystemMessage: string | undefined }>
 	prepareFIMMessage(opts: { messages: LLMFIMMessage, }): { prefix: string, suffix: string, stopTokens: string[] }
 }
 
@@ -755,7 +755,7 @@ class ConvertToLLMMessageService extends Disposable implements IConvertToLLMMess
 		})
 		return { messages, separateSystemMessage };
 	}
-	prepareLLMChatMessages: IConvertToLLMMessageService['prepareLLMChatMessages'] = async ({ chatMessages, chatMode, toolPolicy, modelSelection, agentRoot, compaction, plan }) => {
+	prepareLLMChatMessages: IConvertToLLMMessageService['prepareLLMChatMessages'] = async ({ chatMessages, chatMode, toolPolicy, modelSelection, agentRoot, compaction, plan, modeInstructions }) => {
 		if (modelSelection === null) return { messages: [], separateSystemMessage: undefined }
 
 		const { overridesOfModel } = this.zeroEgressSettingsService.state
@@ -770,7 +770,9 @@ class ConvertToLLMMessageService extends Disposable implements IConvertToLLMMess
 
 		const { disableSystemMessage } = this.zeroEgressSettingsService.state.globalSettings;
 		const fullSystemMessage = await this._generateChatMessagesSystemMessage(chatMode, toolPolicy, specialToolFormat, agentRoot)
-		const systemMessage = disableSystemMessage ? '' : (plan ? `${fullSystemMessage}\n\nCURRENT PLAN (the user may have edited it; follow it):\n${formatPlan(plan)}` : fullSystemMessage);
+		const withPlan = plan ? `${fullSystemMessage}\n\nCURRENT PLAN (the user may have edited it; follow it):\n${formatPlan(plan)}` : fullSystemMessage;
+		// modeInstructions arrives already headed `MODE INSTRUCTIONS (custom mode “<name>”):`
+		const systemMessage = disableSystemMessage ? '' : (modeInstructions ? `${withPlan}\n\n${modeInstructions}` : withPlan);
 
 		const modelSelectionOptions = this.zeroEgressSettingsService.state.optionsOfModelSelection['Chat'][modelSelection.providerName]?.[modelSelection.modelName]
 

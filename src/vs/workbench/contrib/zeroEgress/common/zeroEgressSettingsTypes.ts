@@ -4,6 +4,7 @@
  *  Licensed under the Apache License, Version 2.0. See LICENSE.txt for more information.
  *--------------------------------------------------------------------------------------*/
 
+import type { CustomMode } from './customModes.js';
 import { defaultModelsOfProvider, defaultProviderSettings, ModelOverrides } from './modelCapabilities.js';
 import { ToolApprovalType } from './toolsServiceTypes.js';
 import { ZeroEgressSettingsState } from './zeroEgressSettingsService.js'
@@ -287,6 +288,9 @@ export type GlobalSettings = {
 	disableSystemMessage: boolean;
 	autoAcceptLLMChanges: boolean;
 	useCommandAllowList: boolean;
+	/** user-made modes; app settings only, never read from the project */
+	customModes: CustomMode[];
+	activeCustomModeId: string | null;
 }
 
 export const defaultGlobalSettings: GlobalSettings = {
@@ -304,6 +308,8 @@ export const defaultGlobalSettings: GlobalSettings = {
 	disableSystemMessage: false,
 	autoAcceptLLMChanges: false,
 	useCommandAllowList: true,
+	customModes: [],
+	activeCustomModeId: null,
 }
 
 export type GlobalSettingName = keyof GlobalSettings
