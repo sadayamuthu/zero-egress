@@ -14,8 +14,6 @@ import type { PlanStep } from '../composerDeps.js';
 // no runtime imports from vs/ here: the bundle flattens this folder, so a relative path one level deeper breaks
 import { ApprovalButton } from './ApprovalCard.js';
 
-const iconButton = 'w-5 h-5 flex items-center justify-center rounded-[4px] text-ze-fg-3 hover:text-ze-fg-1 hover:bg-ze-bg-2-hover cursor-pointer disabled:opacity-30 disabled:cursor-default';
-
 type DraftStep = { id: number; text: string; status: PlanStep['status'] };
 type Draft = { steps: DraftStep[]; baseUpdatedAt: string };
 type FocusTarget = { id: number; part: 'input' | 'up' | 'down' };
@@ -121,9 +119,9 @@ export const PlanCard = ({ threadId }: { threadId: string }) => {
 						value={s.text}
 						onChange={e => update(s.id, e.target.value)}
 					/>
-					<button type='button' ref={refOf(s.id, 'up')} className={iconButton} title='Move up' aria-label='Move up' disabled={i === 0} onClick={() => move(s.id, -1, 'up')}>↑</button>
-					<button type='button' ref={refOf(s.id, 'down')} className={iconButton} title='Move down' aria-label='Move down' disabled={i === draft.steps.length - 1} onClick={() => move(s.id, 1, 'down')}>↓</button>
-					<button type='button' className={iconButton} title='Remove' aria-label='Remove' onClick={() => remove(s.id)}>×</button>
+					<button type='button' ref={refOf(s.id, 'up')} className='w-5 h-5 flex items-center justify-center rounded-[4px] text-ze-fg-3 hover:text-ze-fg-1 hover:bg-ze-bg-2-hover cursor-pointer disabled:opacity-30 disabled:cursor-default' title='Move up' aria-label='Move up' disabled={i === 0} onClick={() => move(s.id, -1, 'up')}>↑</button>
+					<button type='button' ref={refOf(s.id, 'down')} className='w-5 h-5 flex items-center justify-center rounded-[4px] text-ze-fg-3 hover:text-ze-fg-1 hover:bg-ze-bg-2-hover cursor-pointer disabled:opacity-30 disabled:cursor-default' title='Move down' aria-label='Move down' disabled={i === draft.steps.length - 1} onClick={() => move(s.id, 1, 'down')}>↓</button>
+					<button type='button' className='w-5 h-5 flex items-center justify-center rounded-[4px] text-ze-fg-3 hover:text-ze-fg-1 hover:bg-ze-bg-2-hover cursor-pointer disabled:opacity-30 disabled:cursor-default' title='Remove' aria-label='Remove' onClick={() => remove(s.id)}>×</button>
 				</div>)}
 			</div>
 			<div>
