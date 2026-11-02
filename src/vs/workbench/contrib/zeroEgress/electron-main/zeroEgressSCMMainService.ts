@@ -6,7 +6,10 @@
 import { promisify } from 'util'
 import { exec as _exec, execFile as _execFile, spawn } from 'child_process'
 import { IZeroEgressSCMService } from '../common/zeroEgressSCMTypes.js'
+import { realpath } from 'fs/promises'
+import { join } from 'path'
 import { DIFF_MAX_CHARS, appendCapped, isValidBranchName } from '../common/selectionText.js'
+import { isInsideRoot, noIndexDiffOk, parseNulList } from '../common/gitUntracked.js'
 
 interface NumStat {
 	file: string
@@ -50,6 +53,36 @@ const getSampledDiff = async (file: string, path: string, useStagedChanges: bool
 	return diff.slice(0, MAX_DIFF_LENGTH)
 }
 
+// no external diff drivers or textconv filters (repo config could run programs through them)
+const DIFF_FLAGS = ['--no-color', '--no-ext-diff', '--no-textconv']
+const GIT_DIFF_TIMEOUT_MS = 15_000
+const UNTRACKED_LIST_MAX_CHARS = 1_000_000
+
+type GitRun = { text: string; truncated: boolean; timedOut: boolean; code: number | null; stderr: string }
+
+/** runs git with an args array (never a shell string); stops reading and kills git at `max` chars or at `deadline` */
+const runGit = (args: string[], cwd: string, max: number, deadline: number): Promise<GitRun> => new Promise((resolve, reject) => {
+	const remaining = deadline - Date.now()
+	if (remaining <= 0) { resolve({ text: '', truncated: true, timedOut: true, code: null, stderr: '' }); return }
+	const child = spawn('git', args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] })
+	let text = ''
+	let stderr = ''
+	let truncated = false
+	let timedOut = false
+	const timer = setTimeout(() => { timedOut = true; truncated = true; child.kill() }, remaining)
+	child.stdout.setEncoding('utf8')
+	child.stderr.setEncoding('utf8')
+	child.stdout.on('data', (chunk: string) => {
+		if (truncated) { return }
+		const r = appendCapped(text, chunk, max)
+		text = r.text
+		if (r.full) { truncated = true; child.kill() }
+	})
+	child.stderr.on('data', (chunk: string) => { if (stderr.length < 4000) { stderr += chunk } })
+	child.on('error', e => { clearTimeout(timer); reject(e) })
+	child.on('close', code => { clearTimeout(timer); resolve({ text, truncated, timedOut, code, stderr }) })
+})
+
 const hasStagedChanges = async (path: string): Promise<boolean> => {
 	const output = await git('git diff --staged --name-only', path)
 	return output.length > 0
@@ -84,27 +117,29 @@ export class ZeroEgressSCMService implements IZeroEgressSCMService {
 
 	async gitDiff(path: string, against: string | null): Promise<{ text: string; truncated: boolean }> {
 		if (against !== null && !isValidBranchName(against)) { throw new Error('Not a valid branch name.') }
-		// args array, never a shell string; stop reading and kill git once the cap is reached
-		return new Promise((resolve, reject) => {
-			const child = spawn('git', ['diff', '--no-color', against ?? 'HEAD', '--'], { cwd: path })
-			let text = ''
-			let stderr = ''
-			let truncated = false
-			child.stdout.setEncoding('utf8')
-			child.stderr.setEncoding('utf8')
-			child.stdout.on('data', (chunk: string) => {
-				if (truncated) { return }
-				const r = appendCapped(text, chunk, DIFF_MAX_CHARS)
-				text = r.text
-				if (r.full) { truncated = true; child.kill() }
-			})
-			child.stderr.on('data', (chunk: string) => { if (stderr.length < 4000) { stderr += chunk } })
-			child.on('error', e => reject(e))
-			child.on('close', code => {
-				if (truncated || code === 0) { resolve({ text, truncated }) }
-				else { reject(new Error(stderr.trim().split('\n')[0] || `git exited with code ${code}`)) }
-			})
-		})
+		const deadline = Date.now() + GIT_DIFF_TIMEOUT_MS
+		const diff = await runGit(['diff', ...DIFF_FLAGS, against ?? 'HEAD', '--'], path, DIFF_MAX_CHARS, deadline)
+		if (!diff.truncated && diff.code !== 0) { throw new Error(diff.stderr.trim().split('\n')[0] || `git exited with code ${diff.code}`) }
+		let text = diff.text
+		if (against !== null || diff.truncated) { return { text, truncated: diff.truncated } }
+
+		// working changes also cover new files git doesn't track yet (ignored files stay out)
+		const list = await runGit(['ls-files', '--others', '--exclude-standard', '-z'], path, UNTRACKED_LIST_MAX_CHARS, deadline)
+		if (list.timedOut) { return { text, truncated: true } }
+		if (!list.truncated && list.code !== 0) { return { text, truncated: false } }
+		let realRoot: string
+		try { realRoot = await realpath(path) } catch { return { text, truncated: false } }
+		for (const file of parseNulList(list.text, !list.truncated)) {
+			if (text.length >= DIFF_MAX_CHARS) { return { text, truncated: true } }
+			// never read past the repo, also not through a link
+			if (!isInsideRoot(path, file)) { continue }
+			try { if (!isInsideRoot(realRoot, await realpath(join(path, file)))) { continue } } catch { continue }
+			const r = await runGit(['diff', ...DIFF_FLAGS, '--no-index', '--', '/dev/null', file], path, DIFF_MAX_CHARS - text.length, deadline)
+			if (r.truncated) { return { text: text + r.text, truncated: true } }
+			if (!noIndexDiffOk(r.code)) { continue }
+			text += r.text
+		}
+		return { text, truncated: false }
 	}
 
 	async gitBranches(path: string): Promise<string[]> {

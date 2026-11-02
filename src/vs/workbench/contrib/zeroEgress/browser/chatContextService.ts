@@ -32,6 +32,7 @@ import { COMMAND_FILE_MAX_BYTES, COMMAND_FILES_MAX, CustomCommand, isLoadableCom
 import { StagingSelectionItem } from '../common/chatThreadServiceTypes.js';
 import { DIFF_MAX_CHARS, IMAGE_MAX_BYTES, PROBLEMS_MAX, SavedDoc, TERMINAL_MAX_CHARS, capHead, capTail, imageExtOf, isValidBranchName } from '../common/selectionText.js';
 import { IZeroEgressSCMService } from '../common/zeroEgressSCMTypes.js';
+import { hasDiffText } from '../common/gitUntracked.js';
 import { roundRangeToLines } from './sidebarActions.js';
 import { readXtermBuffer } from './terminalToolService.js';
 
@@ -210,6 +211,7 @@ class ChatContextService implements IChatContextService {
 		if (!path) { return null; }
 		try {
 			const { text, truncated } = await this.scm.gitDiff(path, against);
+			if (!hasDiffText(text)) { return null; } // no changes: callers show their own notice
 			return { type: 'GitDiff', against, text: capHead(text, DIFF_MAX_CHARS), truncated };
 		} catch (e) {
 			const first = (e instanceof Error ? e.message : String(e)).trim().split('\n')[0];
