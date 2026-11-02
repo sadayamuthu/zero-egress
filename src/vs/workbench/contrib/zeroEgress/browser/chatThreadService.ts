@@ -15,7 +15,7 @@ import { chat_userMessageContent, isABuiltinToolName } from '../common/prompt/pr
 import { AnthropicReasoning, getErrorMessage, RawToolCallObj, RawToolParamsObj } from '../common/sendLLMMessageTypes.js';
 import { TokenUsage } from '../common/tokenUsage.js';
 import { generateUuid } from '../../../../base/common/uuid.js';
-import { FeatureName, ModelSelection, ModelSelectionOptions } from '../common/zeroEgressSettingsTypes.js';
+import { ChatMode, FeatureName, ModelSelection, ModelSelectionOptions } from '../common/zeroEgressSettingsTypes.js';
 import { IZeroEgressSettingsService } from '../common/zeroEgressSettingsService.js';
 import { approvalTypeOfBuiltinToolName, BuiltinToolCallParams, ToolCallParams, ToolName, ToolResult } from '../common/toolsServiceTypes.js';
 import { IToolsService } from './toolsService.js';
@@ -363,7 +363,11 @@ export interface IChatThreadService {
 	editUserMessageAndStreamResponse({ userMessage, messageIdx, threadId }: { userMessage: string, messageIdx: number, threadId: string }): Promise<void>;
 
 	// call to add a message
-	addUserMessageAndStreamResponse({ userMessage, threadId }: { userMessage: string, threadId: string }): Promise<void>;
+	/**
+	 * `displayMessage` is what the user's bubble shows when it differs from the prompt (a / command: the command as typed).
+	 * `modeOverride` runs this message, and the approval re-runs that follow it, in another mode; the chosen mode is unchanged.
+	 */
+	addUserMessageAndStreamResponse({ userMessage, threadId, displayMessage, modeOverride }: { userMessage: string, threadId: string, displayMessage?: string, modeOverride?: ChatMode }): Promise<void>;
 
 	// approve/reject
 	approveLatestToolRequest(threadId: string): void;
@@ -712,6 +716,7 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 	rejectLatestToolRequest(threadId: string) {
 		const thread = this.state.allThreads[threadId]
 		if (!thread) return // should never happen
+		this._modeOverrides.delete(threadId) // nothing runs after a rejection
 
 		const lastMsg = thread.messages[thread.messages.length - 1]
 
@@ -735,6 +740,7 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 	async abortRunning(threadId: string) {
 		const thread = this.state.allThreads[threadId]
 		if (!thread) return // should never happen
+		this._modeOverrides.delete(threadId)
 
 		// add assistant message
 		if (this.streamState[threadId]?.isRunning === 'LLM') {
@@ -771,6 +777,10 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 	}
 
 
+
+	// a / command's mode for one message; read by _runChatAgent, kept while the run waits on an approval
+	private readonly _modeOverrides = new Map<string, ChatMode>()
+	private readonly _runSeqs = new Map<string, number>()
 
 	private readonly toolErrMsgs = {
 		rejected: 'Tool call was rejected by the user.',
@@ -1043,7 +1053,12 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 		// above just defines helpers, below starts the actual function
 		// should not change as we loop even if user changes it, so it goes here. Background agents always run in agent mode.
 		const backgroundAgent = this.state.allThreads[threadId]?.agent
-		const chatMode = backgroundAgent ? 'agent' : this._settingsService.state.globalSettings.chatMode
+		const modeOverride = backgroundAgent ? undefined : this._modeOverrides.get(threadId)
+		const chatMode = backgroundAgent ? 'agent' : (modeOverride ?? this._settingsService.state.globalSettings.chatMode)
+		// a newer run of this chat owns the override; an older one ending late must not delete it
+		const runSeq = (this._runSeqs.get(threadId) ?? 0) + 1
+		this._runSeqs.set(threadId, runSeq)
+		let keepModeOverride = false
 		const toolPolicy = toolPolicyOfMode(chatMode)
 		const madeInPlanMode = chatMode === 'plan'
 		const agentRoot = backgroundAgent ? { folder: agentRootOf(backgroundAgent), depsMayBeMissing: !backgroundAgent.setup?.command, agentId: backgroundAgent.agentId } : undefined
@@ -1072,6 +1087,7 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 				}
 				// the approved write hit another chat's changes (the race guard): it waits on the conflict card again
 				if (awaitingUserApproval) {
+					keepModeOverride = true
 					this._setStreamState(threadId, { isRunning: 'awaiting_user' })
 					return
 				}
@@ -1247,6 +1263,7 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 			} // end while (send message)
 
 			// if awaiting user approval, keep isRunning true, else end isRunning
+			keepModeOverride = isRunningWhenEnd === 'awaiting_user'
 			this._setStreamState(threadId, { isRunning: isRunningWhenEnd })
 
 			// add checkpoint before the next user message
@@ -1256,6 +1273,8 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 			this._metricsService.capture('Agent loop done', { nMessagesSent, chatMode })
 		} finally {
 			agentSlot?.dispose() // the loop exited for any reason
+			// the override ends with the run, unless the run waits on an approval (that re-run keeps it)
+			if (!keepModeOverride && this._runSeqs.get(threadId) === runSeq) this._modeOverrides.delete(threadId)
 		}
 	}
 
@@ -1611,7 +1630,7 @@ We only need to do it for files that were edited since `from`, ie files between 
 	}
 
 
-	private async _addUserMessageAndStreamResponse({ userMessage, _chatSelections, threadId }: { userMessage: string, _chatSelections?: StagingSelectionItem[], threadId: string }) {
+	private async _addUserMessageAndStreamResponse({ userMessage, _chatSelections, threadId, displayMessage, modeOverride }: { userMessage: string, _chatSelections?: StagingSelectionItem[], threadId: string, displayMessage?: string, modeOverride?: ChatMode }) {
 		const thread = this.state.allThreads[threadId]
 		if (!thread) return // should never happen
 
@@ -1633,8 +1652,10 @@ We only need to do it for files that were edited since `from`, ie files between 
 		const currSelns: StagingSelectionItem[] = _chatSelections ?? thread.state.stagingSelections
 
 		const userMessageContent = await chat_userMessageContent(instructions, currSelns, { directoryStrService: this._directoryStringService, fileService: this._fileService }) // user message + names of files (NOT content)
-		const userHistoryElt: ChatMessage = { role: 'user', content: userMessageContent, displayContent: instructions, selections: currSelns, state: defaultMessageState }
+		const userHistoryElt: ChatMessage = { role: 'user', content: userMessageContent, displayContent: displayMessage ?? instructions, selections: currSelns, state: defaultMessageState }
 		this._addMessageToThread(threadId, userHistoryElt)
+		// after the abort above, which clears the previous message's override
+		if (modeOverride) this._modeOverrides.set(threadId, modeOverride); else this._modeOverrides.delete(threadId)
 
 		this._setThreadState(threadId, { currCheckpointIdx: null }) // no longer at a checkpoint because started streaming
 
@@ -1650,7 +1671,7 @@ We only need to do it for files that were edited since `from`, ie files between 
 	}
 
 
-	async addUserMessageAndStreamResponse({ userMessage, _chatSelections, threadId }: { userMessage: string, _chatSelections?: StagingSelectionItem[], threadId: string }) {
+	async addUserMessageAndStreamResponse({ userMessage, _chatSelections, threadId, displayMessage, modeOverride }: { userMessage: string, _chatSelections?: StagingSelectionItem[], threadId: string, displayMessage?: string, modeOverride?: ChatMode }) {
 		const thread = this.state.allThreads[threadId];
 		if (!thread) return
 		if (this._refuseIfWorktreeRemoved(threadId)) return
@@ -1675,7 +1696,7 @@ We only need to do it for files that were edited since `from`, ie files between 
 		}
 
 		// Now call the original method to add the user message and stream the response
-		await this._addUserMessageAndStreamResponse({ userMessage, _chatSelections, threadId });
+		await this._addUserMessageAndStreamResponse({ userMessage, _chatSelections, threadId, displayMessage, modeOverride });
 
 	}
 

@@ -7,14 +7,16 @@
 // the text area (@ mentions a file), then a row with the mode and model menus, a slot for the context meter, ⚙ and
 // Send/Stop. ⏎ sends; ⌘⏎ with an empty box accepts this chat's changes only; Escape stops a running chat.
 // "Run in: Background" on an empty docked chat makes Send start a background agent with the prompt instead.
+// A / command (the menu opens on a lone "/word") expands to its prompt before anything is sent; in the background
+// path that prompt and its staged context are what the agent gets (modes do not apply there, and /compact does nothing).
 
 import React, { KeyboardEvent, useCallback, useEffect, useState } from 'react';
-import { useAccessor, useChatThreadsState, useChatThreadsStreamState, useSettingsState } from '../../util/services.js';
+import { useAccessor, useActiveURI, useChatThreadsState, useChatThreadsStreamState, useSettingsState } from '../../util/services.js';
 import { TextAreaFns, ZeroEgressInputBox2 } from '../../util/inputs.js';
 import { ButtonStop, ButtonSubmit, getRelative, SelectedFiles } from '../SidebarChat.js';
 // no runtime imports from vs/ here: the bundle flattens this folder, so a relative path one level deeper breaks
-import { isFeatureNameDisabled, promptContextOfSelection, promptWithContext, ZERO_EGRESS_CTRL_L_ACTION_ID, ZERO_EGRESS_SHOW_AGENTS_ACTION_ID } from '../composerDeps.js';
-import type { PromptContextItem } from '../composerDeps.js';
+import { builtinCommands, expandBuiltin, isFeatureNameDisabled, parseSlash, promptContextOfSelection, slashMenuQuery, promptWithContext, ZERO_EGRESS_CTRL_L_ACTION_ID, ZERO_EGRESS_SHOW_AGENTS_ACTION_ID } from '../composerDeps.js';
+import type { ChatMode, PromptContextItem } from '../composerDeps.js';
 import type { StagingSelectionItem } from '../../../../../common/chatThreadServiceTypes.js';
 import { useThreadReview } from '../useThreadReview.js';
 import { AgentSettingsMenu } from './AgentSettingsMenu.js';
@@ -22,6 +24,7 @@ import { ContextMeter } from './ContextMeter.js';
 import { ModeMenu, RunIn, RunInSection } from './ModeMenu.js';
 import { ModelMenu } from './ModelMenu.js';
 import { ReviewBar } from './ReviewBar.js';
+import { flattenSlashSections, SlashItem, SlashMenu, SlashSection } from './SlashMenu.js';
 
 /** what the chat view around the box needs from it: the suggestions on an empty chat send through it */
 export interface ComposerApi {
@@ -41,6 +44,10 @@ export const Composer = ({ threadId, variant, inputDisabledReason, textAreaRef, 
 	const commandService = accessor.get('ICommandService');
 	const chatThreadsService = accessor.get('IChatThreadService');
 	const settingsState = useSettingsState();
+	const settingsService = accessor.get('IZeroEgressSettingsService');
+	const contextService = accessor.get('IChatContextService');
+	const languageService = accessor.get('ILanguageService');
+	const { uri: activeUri } = useActiveURI();
 
 	const thread = useChatThreadsState().allThreads[threadId];
 	const messages = thread?.messages ?? [];
@@ -114,17 +121,54 @@ export const Composer = ({ threadId, variant, inputDisabledReason, textAreaRef, 
 	const onSubmit = async (_forceSubmit?: string) => {
 		if (isDisabled && !_forceSubmit) { return; }
 		if (isRunning || isStarting) { return; }
-		const userMessage = _forceSubmit || textAreaRef.current?.value || '';
+		let userMessage = _forceSubmit || textAreaRef.current?.value || '';
+
+		// ----- / commands -----
+		let displayMessage: string | undefined;
+		let modeOverride: ChatMode | undefined;
+		let sendSelections = selections;
+		const slash = parseSlash(userMessage.trim());
+		const expansion = slash ? expandBuiltin(slash.name, slash.args, { hasSelection: !!contextService.currentSelection() }) : null;
+		if (expansion) {
+			if (expansion.compact) {
+				if (!startsInBackground) { await chatThreadsService.compactThread(threadId); }
+				clearInput();
+				return;
+			}
+			if (expansion.setMode && !startsInBackground) {
+				await settingsService.setGlobalSetting('chatMode', expansion.setMode);
+				if (!expansion.prompt) { clearInput(); return; }
+			}
+			const added: StagingSelectionItem[] = [];
+			for (const kind of expansion.addContext ?? []) {
+				const sel = kind === 'workingDiff' ? await contextService.gitDiff(null)
+					: kind === 'selection' ? contextService.currentSelection()
+						: activeUri ? { type: 'File' as const, uri: activeUri, language: languageService.guessLanguageIdByFilepathOrFirstLine(activeUri) || '', state: { wasAddedAsCurrentFile: false } } : null;
+				if (!sel) {
+					accessor.get('INotificationService').info(
+						kind === 'workingDiff' ? 'There are no pending changes to send.' : 'Open a file first.');
+					return; // the box keeps what was typed
+				}
+				added.push(sel);
+			}
+			if (added.length) {
+				sendSelections = [...selections, ...added];
+				setSelections(sendSelections);
+			}
+			displayMessage = userMessage.trim();
+			modeOverride = startsInBackground ? undefined : expansion.modeOverride;
+			userMessage = expansion.prompt;
+		}
 
 		if (startsInBackground) {
 			const prompt = userMessage.trim();
 			if (!prompt) { return; }
 			// the agent's first message is plain text: the staged chips go into it as workspace-relative paths
 			// terminal output, problems and git diffs go in as text; images are not sent to background agents yet
-			if (selections.some(sel => sel.type === 'Image')) {
+			if (sendSelections.some(sel => sel.type === 'Image')) {
 				accessor.get('INotificationService').info("Images aren't sent to background agents yet.");
 			}
-			const context: PromptContextItem[] = selections.flatMap((sel): PromptContextItem[] => {
+			const context: PromptContextItem[] = sendSelections.flatMap((sel): PromptContextItem[] => {
 				const item = promptContextOfSelection(sel, uri => {
 					// getRelative gives back the fsPath itself for a file outside the workspace: that one stays absolute
 					const relative = getRelative(uri as Parameters<typeof getRelative>[0], accessor);
@@ -148,7 +192,7 @@ export const Composer = ({ threadId, variant, inputDisabledReason, textAreaRef, 
 		}
 
 		try {
-			await chatThreadsService.addUserMessageAndStreamResponse({ userMessage, threadId });
+			await chatThreadsService.addUserMessageAndStreamResponse({ userMessage, threadId, displayMessage, modeOverride });
 		} catch (e) {
 			console.error('Error while sending message in chat:', e);
 		}
@@ -161,8 +205,51 @@ export const Composer = ({ threadId, variant, inputDisabledReason, textAreaRef, 
 		apiRef.current = { submit: text => { onSubmit(text); } };
 	}
 
-	const onChangeText = useCallback((newStr: string) => { setInstructionsAreEmpty(!newStr); }, []);
+	// ----- the / menu -----
+	const [cardEl, setCardEl] = useState<HTMLDivElement | null>(null);
+	const [typed, setTyped] = useState('');
+	const [slashIdx, setSlashIdx] = useState(0);
+	const [slashClosed, setSlashClosed] = useState(false);
+	const onChangeText = useCallback((newStr: string) => {
+		setInstructionsAreEmpty(!newStr);
+		setTyped(newStr);
+		setSlashIdx(0);
+		setSlashClosed(false);
+	}, []);
+	const slashQuery = slashMenuQuery(typed);
+	// more sections (project commands) go after this one
+	const slashSections: SlashSection[] = [{
+		heading: 'Commands',
+		items: slashQuery === null ? [] : builtinCommands.filter(c => c.name.startsWith(slashQuery)),
+	}];
+	const slashItems = flattenSlashSections(slashSections);
+	const slashOpen = !slashClosed && slashQuery !== null && slashItems.length > 0 && !inputDisabledReason;
+	const runSlashItem = (item: SlashItem) => {
+		setSlashClosed(true);
+		textAreaFnsRef.current?.setValue('/' + item.name);
+		onSubmit('/' + item.name);
+	};
 	const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+		if (slashOpen && !e.nativeEvent.isComposing) {
+			const active = slashItems[Math.min(slashIdx, slashItems.length - 1)];
+			if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+				e.preventDefault();
+				setSlashIdx(i => (i + (e.key === 'ArrowDown' ? 1 : slashItems.length - 1)) % slashItems.length);
+				return;
+			} else if (e.key === 'Enter' && !e.shiftKey && !e.metaKey && !e.ctrlKey) {
+				e.preventDefault();
+				runSlashItem(active);
+				return;
+			} else if (e.key === 'Tab' && !e.shiftKey) {
+				e.preventDefault();
+				textAreaFnsRef.current?.setValue('/' + active.name + ' ');
+				return;
+			} else if (e.key === 'Escape') {
+				e.preventDefault();
+				setSlashClosed(true);
+				return;
+			}
+		}
 		if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && instructionsAreEmpty && hasPendingChanges) {
 			e.preventDefault();
 			review.acceptOrRejectMine('accept');
@@ -213,6 +300,7 @@ export const Composer = ({ threadId, variant, inputDisabledReason, textAreaRef, 
 	return <div>
 		{reviewBar}
 		<div
+			ref={setCardEl}
 			className={`flex flex-col gap-1 p-2 relative input text-left shrink-0 bg-ze-bg-2 transition-colors duration-200
 				border border-ze-border-2 focus-within:border-ze-accent hover:border-ze-border-1
 				max-h-[80vh] overflow-y-auto
@@ -237,6 +325,15 @@ export const Composer = ({ threadId, variant, inputDisabledReason, textAreaRef, 
 					multiline={true}
 				/>
 			</div>
+
+			<SlashMenu
+				anchor={cardEl}
+				open={slashOpen}
+				sections={slashSections}
+				activeIdx={slashIdx}
+				onPick={runSlashItem}
+				onClose={() => setSlashClosed(true)}
+			/>
 
 			{/* 3. mode, model, meter slot, ⚙, send */}
 			{/* a narrow panel wraps the right-hand group onto its own line rather than clipping it */}

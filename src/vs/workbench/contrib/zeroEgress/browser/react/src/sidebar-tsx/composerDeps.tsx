@@ -25,3 +25,5 @@ export const ZERO_EGRESS_OPEN_SETTINGS_ACTION_ID = 'workbench.action.openZeroEgr
 export { planProgress } from '../../../../common/plan.js';
 export type { PlanStep } from '../../../../common/plan.js';
 export { promptContextOfSelection, textOfSnapshotSelection } from '../../../../common/selectionText.js';
+export { builtinCommands, expandBuiltin, parseSlash, slashMenuQuery } from '../../../../common/slashCommands.js';
+export type { SlashExpansion } from '../../../../common/slashCommands.js';
