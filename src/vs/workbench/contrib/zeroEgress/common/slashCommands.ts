@@ -42,8 +42,9 @@ export const slashMenuQuery = (text: string): string | null => {
 export const slashEnterPicks = (query: string, userMovedHighlight: boolean): boolean => query.length > 0 || userMovedHighlight;
 
 export function parseSlash(text: string): { name: string; args: string } | null {
-	const m = /^\/([a-z0-9][a-z0-9-]*)(?:\s+([\s\S]*))?$/.exec(text);
-	return m ? { name: m[1], args: (m[2] ?? '').trim() } : null;
+	// names match case-insensitively: `/Review` is `/review` (project command names are lower case too)
+	const m = /^\/([a-z0-9][a-z0-9-]*)(?:\s+([\s\S]*))?$/i.exec(text);
+	return m ? { name: m[1].toLowerCase(), args: (m[2] ?? '').trim() } : null;
 }
 
 export function expandBuiltin(name: string, args: string, ctx: { hasSelection: boolean }): SlashExpansion | null {
@@ -143,7 +144,9 @@ export function withNewSelections(selections: StagingSelectionItem[], added: Sta
 		if (a.type === 'CodeSelection' && b.type === 'CodeSelection') { return a.uri.fsPath === b.uri.fsPath && a.range[0] === b.range[0] && a.range[1] === b.range[1]; }
 		return false;
 	};
-	return [...selections, ...added.filter(n => !selections.some(s => same(s, n)))];
+	// a command's snapshot is the newest: it takes the place of the staged one it matches
+	const replaced = selections.map(s => added.find(n => same(s, n)) ?? s);
+	return [...replaced, ...added.filter(n => !selections.some(s => same(s, n)))];
 }
 
 export const COMMAND_FILE_MAX_BYTES = 20 * 1024;

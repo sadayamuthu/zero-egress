@@ -64,6 +64,21 @@ suite('slashCommands', () => {
 		assert.strictEqual(out.length, 1);
 	});
 
+	test('a snapshot a command gathers replaces the older staged one of the same kind', () => {
+		const old = { type: 'GitDiff' as const, against: null, text: 'old', truncated: false };
+		const other = { type: 'GitDiff' as const, against: 'main', text: 'm', truncated: false };
+		const fresh = { type: 'GitDiff' as const, against: null, text: 'new', truncated: false };
+		const out = withNewSelections([old as never, other as never], [fresh as never]);
+		assert.deepStrictEqual(out, [fresh, other]);
+	});
+
+	test('command names are matched case-insensitively', () => {
+		assert.deepStrictEqual(parseSlash('/Review auth'), { name: 'review', args: 'auth' });
+		assert.strictEqual(resolveSlashSend('/PLAN', { hasSelection: false }, []).setMode, 'plan');
+		const c = { name: 'release-notes', description: 'd', body: 'Notes for $ARGUMENTS', source: 's' };
+		assert.strictEqual(resolveSlashSend('/Release-Notes v2', { hasSelection: false }, [c]).isCommand, true);
+	});
+
 	test('custom file parses', () => {
 		const c = parseCommandFile('Release-Notes.md', '---\ndescription: Draft notes\nmode: agent\n---\nWrite notes for $ARGUMENTS', '.zeroegress/commands/Release-Notes.md');
 		assert.deepStrictEqual(c, { name: 'release-notes', description: 'Draft notes', body: 'Write notes for $ARGUMENTS', source: '.zeroegress/commands/Release-Notes.md' });
