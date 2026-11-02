@@ -21,27 +21,31 @@ const effortSliderOf = (caps: ZeroEgressStaticModelInfo) => {
 	return slider?.type === 'effort_slider' ? slider : undefined;
 };
 
-export function thinkingLevelsOf(caps: ZeroEgressStaticModelInfo): ThinkingLevel[] {
+// Off is sent as reasoning_effort 'none', verified only on Ollama (see reasoningBodyOf), so only Ollama offers it
+const canTurnOff = (providerName: ProviderName, caps: ZeroEgressStaticModelInfo) => providerName === 'ollama' && !!reasoningOf(caps)?.canTurnOffReasoning;
+
+export function thinkingLevelsOf(providerName: ProviderName, caps: ZeroEgressStaticModelInfo): ThinkingLevel[] {
 	const reasoning = reasoningOf(caps);
 	if (!reasoning) {
 		return [];
 	}
-	const levels: ThinkingLevel[] = reasoning.canTurnOffReasoning ? ['off'] : [];
 	if (effortSliderOf(caps)) {
-		levels.push('low', 'med', 'high');
-	} else {
-		levels.push('high'); // no effort to choose: shown as "On"
+		return canTurnOff(providerName, caps) ? ['off', 'low', 'med', 'high'] : ['low', 'med', 'high'];
 	}
-	return levels;
+	if (reasoning.canTurnOffReasoning) {
+		// an on/off model elsewhere: off can't be sent, so there is nothing to choose
+		return canTurnOff(providerName, caps) ? ['off', 'high'] : [];
+	}
+	return ['high']; // always thinks
 }
 
 // Chat reasons by default (as getIsReasoningEnabledState does for the Chat feature)
-export function thinkingLevelOf(caps: ZeroEgressStaticModelInfo, opts: ModelSelectionOptions | undefined): ThinkingLevel | null {
+export function thinkingLevelOf(providerName: ProviderName, caps: ZeroEgressStaticModelInfo, opts: ModelSelectionOptions | undefined): ThinkingLevel | null {
 	const reasoning = reasoningOf(caps);
 	if (!reasoning) {
 		return null;
 	}
-	if (reasoning.canTurnOffReasoning && opts?.reasoningEnabled === false) {
+	if (canTurnOff(providerName, caps) && opts?.reasoningEnabled === false) {
 		return 'off';
 	}
 	const slider = effortSliderOf(caps);
@@ -62,9 +66,9 @@ export function optionsForThinkingLevel(caps: ZeroEgressStaticModelInfo, level: 
 }
 
 // "· <Level>" on the model button: the same words the Thinking row shows. Nothing for a model that can't reason or always does.
-export function thinkingButtonLabel(caps: ZeroEgressStaticModelInfo, opts: ModelSelectionOptions | undefined): string | null {
-	const levels = thinkingLevelsOf(caps);
-	const level = thinkingLevelOf(caps, opts);
+export function thinkingButtonLabel(providerName: ProviderName, caps: ZeroEgressStaticModelInfo, opts: ModelSelectionOptions | undefined): string | null {
+	const levels = thinkingLevelsOf(providerName, caps);
+	const level = thinkingLevelOf(providerName, caps, opts);
 	if (!level || levels.length < 2) {
 		return null;
 	}

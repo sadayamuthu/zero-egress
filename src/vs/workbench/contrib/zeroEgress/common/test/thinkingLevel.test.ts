@@ -16,23 +16,23 @@ suite('thinkingLevel', () => {
 	const gptOss = getModelCapabilities('ollama', 'gpt-oss:20b', undefined);
 
 	test('no reasoning, no levels', () => {
-		assert.deepStrictEqual(thinkingLevelsOf(getModelCapabilities('ollama', 'unknown-model-xyz', undefined)), []);
-		assert.deepStrictEqual(thinkingLevelsOf(defaultCaps), []);
+		assert.deepStrictEqual(thinkingLevelsOf('ollama', getModelCapabilities('ollama', 'unknown-model-xyz', undefined)), []);
+		assert.deepStrictEqual(thinkingLevelsOf('ollama', defaultCaps), []);
 	});
 
 	test('on/off model', () => {
-		assert.deepStrictEqual(thinkingLevelsOf(qwen3), ['off', 'high']);
+		assert.deepStrictEqual(thinkingLevelsOf('ollama', qwen3), ['off', 'high']);
 	});
 
 	test('effort model', () => {
-		assert.deepStrictEqual(thinkingLevelsOf(gptOss), ['low', 'med', 'high']);
+		assert.deepStrictEqual(thinkingLevelsOf('ollama', gptOss), ['low', 'med', 'high']);
 	});
 
 	test('options round-trip', () => {
-		assert.strictEqual(thinkingLevelOf(gptOss, optionsForThinkingLevel(gptOss, 'low')), 'low');
-		assert.strictEqual(thinkingLevelOf(qwen3, optionsForThinkingLevel(qwen3, 'off')), 'off');
-		assert.strictEqual(thinkingLevelOf(qwen3, optionsForThinkingLevel(qwen3, 'high')), 'high');
-		assert.strictEqual(thinkingLevelOf(defaultCaps, undefined), null);
+		assert.strictEqual(thinkingLevelOf('ollama', gptOss, optionsForThinkingLevel(gptOss, 'low')), 'low');
+		assert.strictEqual(thinkingLevelOf('ollama', qwen3, optionsForThinkingLevel(qwen3, 'off')), 'off');
+		assert.strictEqual(thinkingLevelOf('ollama', qwen3, optionsForThinkingLevel(qwen3, 'high')), 'high');
+		assert.strictEqual(thinkingLevelOf('ollama', defaultCaps, undefined), null);
 	});
 
 	test('body', () => {
@@ -50,17 +50,28 @@ suite('thinkingLevel', () => {
 	});
 
 	test('default level', () => {
-		assert.strictEqual(thinkingLevelOf(gptOss, undefined), 'med');
+		assert.strictEqual(thinkingLevelOf('ollama', gptOss, undefined), 'med');
 	});
 
 	test('button label', () => {
 		const alwaysThinks = getModelCapabilities('ollama', 'deepseek-r1', undefined);
-		assert.strictEqual(thinkingButtonLabel(gptOss, undefined), 'Med');
-		assert.strictEqual(thinkingButtonLabel(gptOss, optionsForThinkingLevel(gptOss, 'high')), 'High');
-		assert.strictEqual(thinkingButtonLabel(gptOss, optionsForThinkingLevel(gptOss, 'low')), 'Low');
-		assert.strictEqual(thinkingButtonLabel(qwen3, undefined), 'On');
-		assert.strictEqual(thinkingButtonLabel(qwen3, { reasoningEnabled: false }), 'Off');
-		assert.strictEqual(thinkingButtonLabel(alwaysThinks, undefined), null);
-		assert.strictEqual(thinkingButtonLabel(defaultCaps, undefined), null);
+		assert.strictEqual(thinkingButtonLabel('ollama', gptOss, undefined), 'Med');
+		assert.strictEqual(thinkingButtonLabel('ollama', gptOss, optionsForThinkingLevel(gptOss, 'high')), 'High');
+		assert.strictEqual(thinkingButtonLabel('ollama', gptOss, optionsForThinkingLevel(gptOss, 'low')), 'Low');
+		assert.strictEqual(thinkingButtonLabel('ollama', qwen3, undefined), 'On');
+		assert.strictEqual(thinkingButtonLabel('ollama', qwen3, { reasoningEnabled: false }), 'Off');
+		assert.strictEqual(thinkingButtonLabel('ollama', alwaysThinks, undefined), null);
+		assert.strictEqual(thinkingButtonLabel('ollama', defaultCaps, undefined), null);
+	});
+
+	test('other providers: no off (none is unverified there), and no control for an on/off model', () => {
+		assert.deepStrictEqual(thinkingLevelsOf('vLLM', qwen3), []);
+		assert.strictEqual(thinkingButtonLabel('vLLM', qwen3, { reasoningEnabled: false }), null);
+		const effortAndOff = { ...gptOss, reasoningCapabilities: { ...(gptOss.reasoningCapabilities as object), canTurnOffReasoning: true } } as typeof gptOss;
+		assert.deepStrictEqual(thinkingLevelsOf('ollama', effortAndOff), ['off', 'low', 'med', 'high']);
+		assert.deepStrictEqual(thinkingLevelsOf('lmStudio', effortAndOff), ['low', 'med', 'high']);
+		// an off stored earlier isn't shown where it isn't sent
+		assert.strictEqual(thinkingLevelOf('lmStudio', effortAndOff, { reasoningEnabled: false, reasoningEffort: 'high' }), 'high');
+		assert.strictEqual(thinkingButtonLabel('lmStudio', effortAndOff, { reasoningEnabled: false }), 'Med');
 	});
 });

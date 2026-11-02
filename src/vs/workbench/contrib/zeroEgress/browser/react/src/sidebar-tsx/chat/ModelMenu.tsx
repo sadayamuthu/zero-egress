@@ -26,10 +26,10 @@ const useThinking = (featureName: FeatureName) => {
 	if (!modelSelection) return null
 	const { providerName, modelName } = modelSelection
 	const caps = getModelCapabilities(providerName, modelName, settingsState.overridesOfModel)
-	const levels = thinkingLevelsOf(caps)
+	const levels = thinkingLevelsOf(providerName, caps)
 	if (levels.length === 0) return null
 	const options = settingsState.optionsOfModelSelection[featureName][providerName]?.[modelName]
-	const level = thinkingLevelOf(caps, options)
+	const level = thinkingLevelOf(providerName, caps, options)
 	if (!level) return null
 	return { modelSelection, caps, levels, level, options }
 }
@@ -109,7 +109,7 @@ export const ModelMenu = ({ featureName }: { featureName: FeatureName }) => {
 
 	const close = () => { setOpen(false); anchor?.focus({ preventScroll: true }); };
 	const label = (selected ?? options[0]).selection.modelName;
-	const level = thinking ? thinkingButtonLabel(thinking.caps, thinking.options) : null;
+	const level = thinking ? thinkingButtonLabel(thinking.modelSelection.providerName, thinking.caps, thinking.options) : null;
 
 	return <>
 		<MenuButton buttonRef={setAnchor} open={open} label={`Model: ${label}${level ? ` · ${level}` : ''}`} onToggle={() => setOpen(o => !o)} shrinks>
