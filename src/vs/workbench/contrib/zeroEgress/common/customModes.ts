@@ -63,7 +63,7 @@ export function validateCustomMode(m: CustomMode, others: CustomMode[]): string 
 	if (!name) return 'Give the mode a name.'
 	if (name.length > MAX_CUSTOM_MODE_NAME) return 'Names can be up to 24 characters.'
 	const lower = name.toLowerCase()
-	if (builtInLabels.some(l => l.toLowerCase() === lower) || others.some(o => o.id !== m.id && o.name.trim().toLowerCase() === lower)) return 'Another mode already has this name.'
+	if (builtInLabels.some(l => l.toLowerCase() === lower) || others.some(o => o?.id !== m.id && (typeof o?.name === 'string' ? o.name : '').trim().toLowerCase() === lower)) return 'Another mode already has this name.'
 	if (m.instructions.length > MAX_CUSTOM_MODE_INSTRUCTIONS) return 'Instructions can be up to 4,000 characters.'
 	return null
 }

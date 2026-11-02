@@ -99,7 +99,7 @@ export const MenuHeading = ({ children }: { children: React.ReactNode }) => {
 	return <div className='px-2 pt-1.5 pb-0.5 text-[10px] uppercase tracking-wider text-ze-fg-3 select-none'>{children}</div>;
 };
 
-export const Popover = ({ anchor, open, onClose, children, placement = 'top-start', className = '', label, initialFocus = 'selected', flush = false, maxHeight = 420 }: {
+export const Popover = ({ anchor, open, onClose, children, placement = 'top-start', className = '', label, initialFocus = 'selected', flush = false, maxHeight = 420, form = false }: {
 	anchor: HTMLElement | null;
 	open: boolean;
 	onClose: () => void;
@@ -114,6 +114,8 @@ export const Popover = ({ anchor, open, onClose, children, placement = 'top-star
 	flush?: boolean;
 	/** the tallest the panel gets, in px; less when the window has less room */
 	maxHeight?: number;
+	/** the content is a form: Tab and the arrow keys belong to its fields (Escape still closes) */
+	form?: boolean;
 }) => {
 	const { refs, floatingStyles } = useFloating({
 		open,
@@ -192,6 +194,9 @@ export const Popover = ({ anchor, open, onClose, children, placement = 'top-star
 			close();
 			return;
 		}
+		if (form && e.key !== 'Escape') {
+			return;
+		}
 		if (e.key === 'Tab') {
 			// out of the menu, closing it: on to what Tab reaches from the anchor (the menu's rows are not tab stops)
 			e.preventDefault();
@@ -232,7 +237,7 @@ export const Popover = ({ anchor, open, onClose, children, placement = 'top-star
 
 	return <div
 		ref={el => { panelRef.current = el; refs.setFloating(el); }}
-		role='menu'
+		role={form ? 'dialog' : 'menu'}
 		aria-label={label}
 		tabIndex={-1}
 		style={floatingStyles}

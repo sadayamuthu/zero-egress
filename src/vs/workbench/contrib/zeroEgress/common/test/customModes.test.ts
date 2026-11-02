@@ -41,6 +41,12 @@ suite('customModes', () => {
 		assert.strictEqual(validateCustomMode(mode({ name: 'Ok' }), []), null);
 	});
 
+	test('malformed other modes never make validation throw', () => {
+		const bad = [{ id: 'x' }, { id: 'y', name: 5 }] as unknown as CustomMode[]
+		assert.strictEqual(validateCustomMode(mode({ name: 'Ok' }), bad), null);
+		assert.strictEqual(validateCustomMode(mode({ name: '' }), bad), 'Give the mode a name.');
+	});
+
 	test('non-boolean tool values never grant access', () => {
 		const m = { ...mode({}), tools: { edit: 'false', terminal: 1, mcp: 'true' } } as unknown as CustomMode;
 		const r = resolveRunMode({ chatMode: 'agent', customModes: [m], activeCustomModeId: 'm1' });

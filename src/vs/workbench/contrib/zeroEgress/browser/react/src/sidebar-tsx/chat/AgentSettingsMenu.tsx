@@ -7,11 +7,12 @@
 // full Settings page shows. Allowed commands are this workspace's list.
 
 import React, { useState } from 'react';
-import { Settings, X } from 'lucide-react';
+import { ChevronLeft, Pencil, Settings, X } from 'lucide-react';
 import { useAccessor, useCommandAllowList, useSettingsState } from '../../util/services.js';
 // no runtime imports from vs/ here: the bundle flattens this folder, so a relative path one level deeper breaks
 import { contextPercent, contextWindowK, settingsForTerminalAutoRun, terminalAutoRunOf, ZERO_EGRESS_OPEN_SETTINGS_ACTION_ID } from '../composerDeps.js';
-import type { TerminalAutoRun } from '../composerDeps.js';
+import type { CustomMode, TerminalAutoRun } from '../composerDeps.js';
+import { CustomModeForm, iconOfCustomMode, useCustomModes } from './CustomModeForm.js';
 import { MenuHeading, MenuRow, Popover } from './Popover.js';
 import { useCompactBusy, useContextUse } from './ContextMeter.js';
 import { Segmented } from './Segmented.js';
@@ -43,7 +44,10 @@ export const AgentSettingsMenu = ({ threadId }: { threadId: string }) => {
 	const [anchor, setAnchor] = useState<HTMLButtonElement | null>(null);
 	const [open, setOpen] = useState(false);
 	const [showList, setShowList] = useState(false);
-	const close = () => { setOpen(false); setShowList(false); };
+	const customModes = useCustomModes();
+	// null = the settings, 'list' = the custom modes, otherwise the form (a mode, or 'new')
+	const [modesView, setModesView] = useState<null | 'list' | 'new' | CustomMode>(null);
+	const close = () => { setOpen(false); setShowList(false); setModesView(null); };
 
 	const terminal = terminalAutoRunOf(globalSettings);
 	const setApprove = (key: 'edits' | 'MCP tools', on: boolean) => {
@@ -70,7 +74,33 @@ export const AgentSettingsMenu = ({ threadId }: { threadId: string }) => {
 				<Settings size={13} />
 			</button>
 		</span>
-		<Popover anchor={anchor} open={open} onClose={close} placement='top-end' className='w-72' label='Agent settings'>
+		<Popover anchor={anchor} open={open} onClose={close} placement='top-end' className='w-72' label='Agent settings' form={modesView !== null && modesView !== 'list'} initialFocus={modesView === null ? 'selected' : 'none'}>
+			{modesView === 'list' ? <>
+				<MenuRow onSelect={() => setModesView(null)}>
+					<ChevronLeft size={12} className='shrink-0 self-center' />
+					<span>Custom modes</span>
+				</MenuRow>
+				{customModes.map(m => {
+					const Icon = iconOfCustomMode(m.icon);
+					return <div key={m.id} className='flex items-center'>
+						<div className='flex-1 min-w-0 flex items-center gap-2 px-2 py-1 text-sm text-ze-fg-1'>
+							<Icon size={12} className='shrink-0' />
+							<span className='truncate'>{m.name}</span>
+						</div>
+						<button
+							type='button'
+							role='menuitem'
+							tabIndex={-1}
+							aria-label={`Edit ${m.name}`}
+							className='shrink-0 size-5 flex items-center justify-center rounded text-ze-fg-3 hover:text-ze-fg-1 hover:bg-[var(--vscode-list-hoverBackground)] focus:bg-[var(--vscode-list-hoverBackground)] outline-none'
+							onClick={e => { e.stopPropagation(); setModesView(m); }}
+						><Pencil size={11} /></button>
+					</div>;
+				})}
+				<MenuRow onSelect={() => setModesView('new')}>
+					<span>New custom mode…</span>
+				</MenuRow>
+			</> : modesView ? <CustomModeForm mode={modesView === 'new' ? null : modesView} onDone={() => setModesView('list')} /> : <>
 			<MenuHeading>Agent settings</MenuHeading>
 			<SettingRow label='Auto-run terminal'>
 				<Segmented label='Auto-run terminal' value={terminal} options={terminalOptions} onChange={setTerminal} />
@@ -100,6 +130,10 @@ export const AgentSettingsMenu = ({ threadId }: { threadId: string }) => {
 						><X size={11} /></button>
 					</div>)}
 			</div> : null}
+			<MenuRow onSelect={() => setModesView('list')}>
+				<span>Custom modes</span>
+				<span className='ml-auto text-xs text-ze-fg-3'>{customModes.length} ›</span>
+			</MenuRow>
 			{contextUse ? <>
 				<MenuHeading>Context</MenuHeading>
 				<div className='px-2 py-1 text-sm text-ze-fg-1'>{contextUse.estimated ? '≈' : ''}{contextPercent(contextUse)}% of {contextWindowK(contextUse)}k used</div>
@@ -110,6 +144,7 @@ export const AgentSettingsMenu = ({ threadId }: { threadId: string }) => {
 			<MenuRow onSelect={() => { close(); commandService.executeCommand(ZERO_EGRESS_OPEN_SETTINGS_ACTION_ID); }}>
 				<span>All settings…</span>
 			</MenuRow>
+			</>}
 		</Popover>
 	</>;
 };

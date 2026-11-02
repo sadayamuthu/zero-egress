@@ -27,3 +27,5 @@ export type { PlanStep } from '../../../../common/plan.js';
 export { promptContextOfSelection, textOfSnapshotSelection } from '../../../../common/selectionText.js';
 export { builtinCommands, expandBuiltin, parseSlash, resolveSlashSend, slashEnterPicks, slashMenuQuery, withNewSelections } from '../../../../common/slashCommands.js';
 export type { SlashExpansion, SlashSend } from '../../../../common/slashCommands.js';
+export { validateCustomMode, MAX_CUSTOM_MODE_NAME, MAX_CUSTOM_MODE_INSTRUCTIONS } from '../../../../common/customModes.js';
+export type { CustomMode, CustomModeIcon } from '../../../../common/customModes.js';
