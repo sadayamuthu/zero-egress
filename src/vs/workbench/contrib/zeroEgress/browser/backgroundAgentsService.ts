@@ -27,6 +27,7 @@ import { acceptHunk as acceptHunkText, computeHunks, decodeReviewText, FileRevie
 import { agentStatus } from '../common/agentStatus.js';
 import { agentRootOf, BackgroundAgentInfo } from '../common/backgroundAgentTypes.js';
 import { ChatMessage } from '../common/chatThreadServiceTypes.js';
+import type { ChatMode } from '../common/zeroEgressSettingsTypes.js';
 import { ChangedFile, IZeroEgressWorktreeService, WORKTREE_CHANNEL } from '../common/worktreeTypes.js';
 import { AGENTS_SETUP_COMMAND_SETTING } from '../common/zeroEgressConfiguration.js';
 import { IChatThreadService } from './chatThreadService.js';
@@ -194,7 +195,7 @@ export class BackgroundAgentsService extends Disposable implements IBackgroundAg
 		return info ? { ok: true } : { ok: false, reason: BACKGROUND_AGENTS_UNAVAILABLE };
 	}
 
-	async startAgent(prompt: string, fromThreadId?: string): Promise<string> {
+	async startAgent(prompt: string, fromThreadId?: string, opts?: { displayMessage?: string; modeOverride?: ChatMode }): Promise<string> {
 		await this._ready;
 		const folder = this._folder();
 		const info = folder ? await this._worktree.repoInfo(folder.uri.fsPath).catch(() => null) : null;
@@ -233,7 +234,7 @@ export class BackgroundAgentsService extends Disposable implements IBackgroundAg
 			messages = (this._chatThreadService.state.allThreads[fromThreadId]?.messages ?? []).filter(m => m.role !== 'checkpoint');
 			userMessage = `Continue the task above using your tools. Your working folder is now ${agentRootOf(agent)}; paths under ${agent.userRoot} in earlier messages refer to the same files there.`;
 		}
-		const threadId = this._chatThreadService.startBackgroundThread(agent, messages, userMessage);
+		const threadId = this._chatThreadService.startBackgroundThread(agent, messages, userMessage, opts);
 		this._pending.set(threadId, 0);
 		this._recompute();
 		return threadId;

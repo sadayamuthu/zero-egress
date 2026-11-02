@@ -317,7 +317,8 @@ export interface IChatThreadService {
 
 	// background agents (never the current thread)
 	/** creates a background-agent thread with `messages` and sends `prompt` in it; returns its id */
-	startBackgroundThread(agent: BackgroundAgentInfo, messages: ChatMessage[], prompt: string): string;
+	/** `displayMessage` is what the first bubble shows; `modeOverride` can only narrow the agent's tools (e.g. 'gather') */
+	startBackgroundThread(agent: BackgroundAgentInfo, messages: ChatMessage[], prompt: string, opts?: { displayMessage?: string, modeOverride?: ChatMode }): string;
 	/** replaces a background thread's agent info (persisted) */
 	setBackgroundAgentInfo(threadId: string, agent: BackgroundAgentInfo): void;
 
@@ -360,7 +361,7 @@ export interface IChatThreadService {
 	isCompacting(threadId: string): boolean;
 
 	// call to edit a message
-	editUserMessageAndStreamResponse({ userMessage, messageIdx, threadId }: { userMessage: string, messageIdx: number, threadId: string }): Promise<void>;
+	editUserMessageAndStreamResponse({ userMessage, messageIdx, threadId, displayMessage, modeOverride }: { userMessage: string, messageIdx: number, threadId: string, displayMessage?: string, modeOverride?: ChatMode }): Promise<void>;
 
 	// call to add a message
 	/**
@@ -1053,8 +1054,9 @@ class ChatThreadService extends Disposable implements IChatThreadService {
 		// above just defines helpers, below starts the actual function
 		// should not change as we loop even if user changes it, so it goes here. Background agents always run in agent mode.
 		const backgroundAgent = this.state.allThreads[threadId]?.agent
-		const modeOverride = backgroundAgent ? undefined : this._modeOverrides.get(threadId)
-		const chatMode = backgroundAgent ? 'agent' : (modeOverride ?? this._settingsService.state.globalSettings.chatMode)
+		// a / command's mode wins, background agents included: it can only take tools away (gather, normal)
+		const modeOverride = this._modeOverrides.get(threadId)
+		const chatMode = modeOverride ?? (backgroundAgent ? 'agent' : this._settingsService.state.globalSettings.chatMode)
 		// a newer run of this chat owns the override; an older one ending late must not delete it
 		const runSeq = (this._runSeqs.get(threadId) ?? 0) + 1
 		this._runSeqs.set(threadId, runSeq)
@@ -1700,7 +1702,7 @@ We only need to do it for files that were edited since `from`, ie files between 
 
 	}
 
-	editUserMessageAndStreamResponse: IChatThreadService['editUserMessageAndStreamResponse'] = async ({ userMessage, messageIdx, threadId }) => {
+	editUserMessageAndStreamResponse: IChatThreadService['editUserMessageAndStreamResponse'] = async ({ userMessage, messageIdx, threadId, displayMessage, modeOverride }) => {
 
 		const thread = this.state.allThreads[threadId]
 		if (!thread) return // should never happen
@@ -1727,7 +1729,7 @@ We only need to do it for files that were edited since `from`, ie files between 
 		})
 
 		// re-add the message and stream it
-		this._addUserMessageAndStreamResponse({ userMessage, _chatSelections: currSelns, threadId })
+		this._addUserMessageAndStreamResponse({ userMessage, _chatSelections: currSelns, threadId, displayMessage, modeOverride })
 	}
 
 	private readonly _compacting = new Map<string, { requestId?: string, stoppedBecause?: 'user' | 'timeout' }>()
@@ -2182,6 +2184,8 @@ We only need to do it for files that were edited since `from`, ie files between 
 			await this.abortRunning(threadId)
 		}
 		if (!this.state.allThreads[threadId]) return // deleted meanwhile
+		this._modeOverrides.delete(threadId)
+		this._runSeqs.delete(threadId)
 
 		// delete the thread
 		let newThreads: ChatThreads = { ...this.state.allThreads };
@@ -2204,14 +2208,15 @@ We only need to do it for files that were edited since `from`, ie files between 
 		this._changeOwnersService.releaseThread(threadId)
 	}
 
-	startBackgroundThread(agent: BackgroundAgentInfo, messages: ChatMessage[], prompt: string): string {
+	startBackgroundThread(agent: BackgroundAgentInfo, messages: ChatMessage[], prompt: string, opts?: { displayMessage?: string, modeOverride?: ChatMode }): string {
 		// the prompt goes in synchronously (no selections, so its content is the prompt itself), and the run starts in the same tick,
 		// so the thread never shows as idle without a message, and a delete right away finds the run to abort
-		const userMessage: ChatMessage = { role: 'user', content: prompt, displayContent: prompt, selections: [], state: defaultMessageState }
+		const userMessage: ChatMessage = { role: 'user', content: prompt, displayContent: opts?.displayMessage ?? prompt, selections: [], state: defaultMessageState }
 		const newThread: ThreadType = { ...newThreadObject(), agent, messages: [...messages, userMessage] }
 		const newThreads: ChatThreads = { ...this.state.allThreads, [newThread.id]: newThread }
 		this._storeAllThreads(newThreads)
 		this._setState({ allThreads: newThreads }) // the current (docked) thread stays as it is
+		if (opts?.modeOverride) this._modeOverrides.set(newThread.id, opts.modeOverride)
 		this._wrapRunAgentToNotify(this._runChatAgent({ threadId: newThread.id, ...this._currentModelSelectionProps() }), newThread.id)
 		return newThread.id
 	}

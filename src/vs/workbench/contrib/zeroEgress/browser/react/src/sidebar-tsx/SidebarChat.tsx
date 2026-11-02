@@ -7,7 +7,8 @@ import React, { createContext, useContext, ButtonHTMLAttributes, FormEvent, Form
 
 
 import { useAccessor, useChatThreadsState, useChatThreadsStreamState, useSettingsState, useActiveURI, useFullChatThreadsStreamState } from '../util/services.js';
-import { getModelCapabilities } from './composerDeps.js';
+import { getModelCapabilities, resolveSlashSend, withNewSelections } from './composerDeps.js';
+import { gatherSlashContext } from './chat/slashContext.js';
 import { ScrollType } from '../../../../../../../editor/common/editorCommon.js';
 
 import { ChatMarkdownRender, ChatMessageLocation, getApplyBoxId } from '../markdown/ChatMarkdownRender.js';
@@ -554,7 +555,7 @@ export const SelectedFiles = (
 				)
 				const selUri = selectionUri(selection)
 				const chipLabel = selection.type === 'Terminal' ? selection.title || 'Terminal'
-					: selection.type === 'Problems' ? `Problems (${selection.items.length})`
+					: selection.type === 'Problems' ? (selection.uri ? `Problems · ${getBasename(selection.uri.fsPath)} (${selection.items.length})` : `Problems (${selection.items.length})`)
 						: selection.type === 'GitDiff' ? (selection.against === null ? 'Git diff' : `Git diff (${selection.against})`)
 							: selection.type === 'Symbol' ? selection.name
 								: selection.type === 'Doc' || selection.type === 'Image' ? selection.name
@@ -909,6 +910,7 @@ const UserMessageComponent = ({ chatMessage, messageIdx, isCheckpointGhost, curr
 	const accessor = useAccessor()
 	const chatThreadsService = accessor.get('IChatThreadService')
 	const threadId = useThreadId()
+	const { uri: activeUri } = useActiveURI()
 
 	// global state
 	let isBeingEdited = false
@@ -990,6 +992,22 @@ const UserMessageComponent = ({ chatMessage, messageIdx, isCheckpointGhost, curr
 			if (!textAreaRefState) return;
 			if (messageIdx === undefined) return;
 
+			// an edited / command is expanded and sent like a new one: its prompt, its context, its mode for this message
+			const contextService = accessor.get('IChatContextService')
+			const send = resolveSlashSend(textAreaRefState.value, { hasSelection: !!contextService.currentSelection() })
+			if (send.isCommand && (send.compact || send.setMode)) {
+				accessor.get('INotificationService').info('/plan and /compact work from the message box at the bottom, not when editing a message.')
+				return // the edit stays open with what was typed
+			}
+			if (send.addContext?.length) {
+				const added = await gatherSlashContext(send.addContext, {
+					contextService, activeUri, languageOf: uri => accessor.get('ILanguageService').guessLanguageIdByFilepathOrFirstLine(uri) || '',
+					notify: m => accessor.get('INotificationService').info(m),
+				})
+				if (!added) return
+				setStagingSelections(withNewSelections(stagingSelections, added))
+			}
+
 			// cancel any streams on this thread
 			await chatThreadsService.abortRunning(threadId)
 
@@ -998,9 +1016,9 @@ const UserMessageComponent = ({ chatMessage, messageIdx, isCheckpointGhost, curr
 			chatThreadsService.setCurrentlyFocusedMessageIdx(undefined, threadId)
 
 			// stream the edit
-			const userMessage = textAreaRefState.value;
+			const userMessage = send.prompt;
 			try {
-				await chatThreadsService.editUserMessageAndStreamResponse({ userMessage, messageIdx, threadId })
+				await chatThreadsService.editUserMessageAndStreamResponse({ userMessage, messageIdx, threadId, displayMessage: send.displayMessage, modeOverride: send.modeOverride })
 			} catch (e) {
 				console.error('Error while editing message:', e)
 			}

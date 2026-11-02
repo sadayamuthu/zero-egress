@@ -15,7 +15,7 @@ import { useAccessor, useActiveURI, useChatThreadsState, useChatThreadsStreamSta
 import { TextAreaFns, ZeroEgressInputBox2 } from '../../util/inputs.js';
 import { ButtonStop, ButtonSubmit, getRelative, SelectedFiles } from '../SidebarChat.js';
 // no runtime imports from vs/ here: the bundle flattens this folder, so a relative path one level deeper breaks
-import { builtinCommands, expandBuiltin, isFeatureNameDisabled, parseSlash, promptContextOfSelection, slashMenuQuery, promptWithContext, ZERO_EGRESS_CTRL_L_ACTION_ID, ZERO_EGRESS_SHOW_AGENTS_ACTION_ID } from '../composerDeps.js';
+import { builtinCommands, isFeatureNameDisabled, promptContextOfSelection, resolveSlashSend, slashMenuQuery, withNewSelections, promptWithContext, ZERO_EGRESS_CTRL_L_ACTION_ID, ZERO_EGRESS_SHOW_AGENTS_ACTION_ID } from '../composerDeps.js';
 import type { ChatMode, PromptContextItem } from '../composerDeps.js';
 import type { StagingSelectionItem } from '../../../../../common/chatThreadServiceTypes.js';
 import { useThreadReview } from '../useThreadReview.js';
@@ -24,6 +24,7 @@ import { ContextMeter } from './ContextMeter.js';
 import { ModeMenu, RunIn, RunInSection } from './ModeMenu.js';
 import { ModelMenu } from './ModelMenu.js';
 import { ReviewBar } from './ReviewBar.js';
+import { gatherSlashContext } from './slashContext.js';
 import { flattenSlashSections, SlashItem, SlashMenu, SlashSection } from './SlashMenu.js';
 
 /** what the chat view around the box needs from it: the suggestions on an empty chat send through it */
@@ -51,6 +52,7 @@ export const Composer = ({ threadId, variant, inputDisabledReason, textAreaRef, 
 
 	const thread = useChatThreadsState().allThreads[threadId];
 	const messages = thread?.messages ?? [];
+	const isAgentThread = variant === 'agents' || !!thread?.agent;
 	const hasUserMessage = messages.some(m => m.role === 'user');
 	const selections = thread?.state.stagingSelections ?? [];
 	const setSelections = useCallback((s: StagingSelectionItem[]) => { chatThreadsService.setCurrentThreadState({ stagingSelections: s }, threadId); }, [chatThreadsService, threadId]);
@@ -119,46 +121,43 @@ export const Composer = ({ threadId, variant, inputDisabledReason, textAreaRef, 
 		textAreaRef.current?.focus(); // focus input after submit
 	};
 	const onSubmit = async (_forceSubmit?: string) => {
-		if (isDisabled && !_forceSubmit) { return; }
+		if ((isDisabled && !_forceSubmit) || isFeatureNameDisabled('Chat', settingsState)) { return; }
 		if (isRunning || isStarting) { return; }
-		let userMessage = _forceSubmit || textAreaRef.current?.value || '';
+		const userMessage0 = _forceSubmit || textAreaRef.current?.value || '';
+
+		let userMessage = userMessage0;
 
 		// ----- / commands -----
-		let displayMessage: string | undefined;
-		let modeOverride: ChatMode | undefined;
+		const send = resolveSlashSend(userMessage, { hasSelection: !!contextService.currentSelection() });
 		let sendSelections = selections;
-		const slash = parseSlash(userMessage.trim());
-		const expansion = slash ? expandBuiltin(slash.name, slash.args, { hasSelection: !!contextService.currentSelection() }) : null;
-		if (expansion) {
-			if (expansion.compact) {
-				if (!startsInBackground) { await chatThreadsService.compactThread(threadId); }
+		if (send.isCommand) {
+			// /plan and /compact act on the side panel chat's own mode and history, not on an agent's
+			if ((send.compact || send.setMode) && (startsInBackground || isAgentThread)) {
+				accessor.get('INotificationService').info('/plan and /compact work in the side panel chat.');
+				return; // the box keeps what was typed
+			}
+			if (send.compact) {
+				await chatThreadsService.compactThread(threadId);
 				clearInput();
 				return;
 			}
-			if (expansion.setMode && !startsInBackground) {
-				await settingsService.setGlobalSetting('chatMode', expansion.setMode);
-				if (!expansion.prompt) { clearInput(); return; }
+			if (send.setMode) {
+				await settingsService.setGlobalSetting('chatMode', send.setMode);
+				if (!send.prompt) { clearInput(); return; }
 			}
-			const added: StagingSelectionItem[] = [];
-			for (const kind of expansion.addContext ?? []) {
-				const sel = kind === 'workingDiff' ? await contextService.gitDiff(null)
-					: kind === 'selection' ? contextService.currentSelection()
-						: activeUri ? { type: 'File' as const, uri: activeUri, language: languageService.guessLanguageIdByFilepathOrFirstLine(activeUri) || '', state: { wasAddedAsCurrentFile: false } } : null;
-				if (!sel) {
-					accessor.get('INotificationService').info(
-						kind === 'workingDiff' ? 'There are no pending changes to send.' : 'Open a file first.');
-					return; // the box keeps what was typed
-				}
-				added.push(sel);
-			}
-			if (added.length) {
-				sendSelections = [...selections, ...added];
+			if (send.addContext?.length) {
+				const added = await gatherSlashContext(send.addContext, {
+					contextService, activeUri, languageOf: uri => languageService.guessLanguageIdByFilepathOrFirstLine(uri) || '',
+					notify: m => accessor.get('INotificationService').info(m),
+				});
+				if (!added) { return; }
+				sendSelections = withNewSelections(selections, added);
 				setSelections(sendSelections);
 			}
-			displayMessage = userMessage.trim();
-			modeOverride = startsInBackground ? undefined : expansion.modeOverride;
-			userMessage = expansion.prompt;
 		}
+		const displayMessage = send.displayMessage;
+		const modeOverride = send.modeOverride;
+		userMessage = send.prompt;
 
 		if (startsInBackground) {
 			const prompt = userMessage.trim();
@@ -179,7 +178,7 @@ export const Composer = ({ threadId, variant, inputDisabledReason, textAreaRef, 
 			});
 			setIsStarting(true);
 			try {
-				await accessor.get('IBackgroundAgentsService').startAgent(promptWithContext(prompt, context));
+				await accessor.get('IBackgroundAgentsService').startAgent(promptWithContext(prompt, context), undefined, { displayMessage, modeOverride });
 				clearInput();
 				setRunIn('folder');
 				await commandService.executeCommand(ZERO_EGRESS_SHOW_AGENTS_ACTION_ID);
@@ -210,11 +209,12 @@ export const Composer = ({ threadId, variant, inputDisabledReason, textAreaRef, 
 	const [typed, setTyped] = useState('');
 	const [slashIdx, setSlashIdx] = useState(0);
 	const [slashClosed, setSlashClosed] = useState(false);
+	const slashPickedRef = React.useRef(false); // a pick rewrites the text itself: that change must not reopen the menu
 	const onChangeText = useCallback((newStr: string) => {
 		setInstructionsAreEmpty(!newStr);
 		setTyped(newStr);
 		setSlashIdx(0);
-		setSlashClosed(false);
+		setSlashClosed(slashPickedRef.current);
 	}, []);
 	const slashQuery = slashMenuQuery(typed);
 	// more sections (project commands) go after this one
@@ -225,9 +225,12 @@ export const Composer = ({ threadId, variant, inputDisabledReason, textAreaRef, 
 	const slashItems = flattenSlashSections(slashSections);
 	const slashOpen = !slashClosed && slashQuery !== null && slashItems.length > 0 && !inputDisabledReason;
 	const runSlashItem = (item: SlashItem) => {
+		if (isFeatureNameDisabled('Chat', settingsState)) { return; }
+		slashPickedRef.current = true;
 		setSlashClosed(true);
 		textAreaFnsRef.current?.setValue('/' + item.name);
-		onSubmit('/' + item.name);
+		slashPickedRef.current = false;
+		void onSubmit('/' + item.name);
 	};
 	const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
 		if (slashOpen && !e.nativeEvent.isComposing) {

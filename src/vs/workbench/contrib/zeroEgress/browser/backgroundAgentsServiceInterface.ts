@@ -10,6 +10,7 @@ import { Event } from '../../../../base/common/event.js';
 import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
 import { FileReview, HunkState } from '../common/agentReview.js';
 import { AgentStatus } from '../common/agentStatus.js';
+import type { ChatMode } from '../common/zeroEgressSettingsTypes.js';
 
 export const BACKGROUND_AGENTS_UNAVAILABLE = 'Background agents need a single folder inside a git repository.';
 export const FILE_CONFLICT_ACCEPT_TOOLTIP = 'You changed this file too. Resolve it in the editor, then refresh.';
@@ -23,7 +24,8 @@ export interface IBackgroundAgentsService {
 	readonly onDidChange: Event<void>;
 	availability(): Promise<{ ok: true } | { ok: false; reason: string }>;
 	/** returns the new thread's id */
-	startAgent(prompt: string, fromThreadId?: string): Promise<string>;
+	/** `opts.displayMessage` is the first bubble's text (a / command as typed); `opts.modeOverride` narrows the agent's tools for that run */
+	startAgent(prompt: string, fromThreadId?: string, opts?: { displayMessage?: string; modeOverride?: ChatMode }): Promise<string>;
 	deleteAgent(threadId: string): Promise<void>;
 	/** pending files only (a file whose changes were all accepted or rejected is left out) */
 	getReview(threadId: string): Promise<FileReview[]>;
