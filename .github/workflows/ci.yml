@@ -68,6 +68,13 @@ jobs:
         env:
           NODE_OPTIONS: --max-old-space-size=8192
 
+      # The release's minify step rejects non-ASCII left in the output (a raw
+      # character in a regex, usually). Catch it here instead of at release time.
+      - name: Minified ASCII check tests
+        run: node scripts/zero-egress/test/check-minified-ascii.test.mjs
+      - name: Minified ASCII check
+        run: node scripts/zero-egress/check-minified-ascii.mjs out
+
       # The Node-layer suite, which includes the egress policy, Node hooks and
       # extension-host guard tests.
       - name: Unit tests (node)

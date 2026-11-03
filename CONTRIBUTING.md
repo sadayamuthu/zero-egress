@@ -144,6 +144,7 @@ Run these before you push. Each one is fatal in CI.
 bash scripts/zero-egress/check-brand.sh .          # BRAND CHECK PASSED
 node scripts/zero-egress/check-defaults.mjs        # DEFAULTS OK
 bash scripts/zero-egress/audit-urls.sh out         # AUDIT PASSED (after npm run compile)
+node scripts/zero-egress/check-minified-ascii.mjs out  # MINIFIED ASCII CHECK PASSED (after npm run compile)
 ```
 
 - **`check-brand.sh`** fails on names of the projects this code was
@@ -158,6 +159,11 @@ bash scripts/zero-egress/audit-urls.sh out         # AUDIT PASSED (after npm run
   [`deny-hosts.txt`](scripts/zero-egress/deny-hosts.txt) in the compiled
   code, and on egress keys in `product.json`. See
   [The static gate](EGRESS.md#the-static-gate).
+- **`check-minified-ascii.mjs`** minifies each compiled file the way the
+  release build does and fails if a character above `\xFF` is left. The
+  release rejects those, and esbuild only escapes them in strings, so a raw
+  `”` inside a regex passes compile and tests but breaks the release. Write
+  it as a `\u` escape (`\u201D`).
 
 The gates' own tests:
 
@@ -165,6 +171,7 @@ The gates' own tests:
 bash scripts/zero-egress/test/check-brand.test.sh
 node scripts/zero-egress/test/check-defaults.test.mjs
 node scripts/zero-egress/test/egress-verdict.test.mjs
+node scripts/zero-egress/test/check-minified-ascii.test.mjs
 ```
 
 ## Code layout
